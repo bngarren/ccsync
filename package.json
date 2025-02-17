@@ -1,6 +1,20 @@
 {
   "name": "ccsync",
-  "version": "0.0.4",
+  "version": "0.0.5",
+  "author": {
+    "name": "bngarren"
+  },
+  "description": "A file sync tool for ComputerCraft computers",
+  "keywords": ["computercraft", "minecraft", "sync", "file-sync", "CC:Tweaked"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git@github.com:bngarren/ccsync.git"
+  },
+  "bugs": {
+    "url": "https://github.com/bngarren/ccsync/issues"
+  },
+  "homepage": "https://github.com/bngarren/ccsync#readme",
   "module": "index.ts",
   "type": "module",
   "files": [
@@ -9,21 +23,23 @@
     "LICENSE"
   ],
   "bin": {
-    "ccsync": "./dist/ccsync"
+    "ccsync": "./dist/index.js"
   },
   "scripts": {
     "clean": "rm -rf ./dist",
     "dev": "bun run ./src/index.ts",
-    "build": "npm run clean && npm run build:all && bun build src/index.ts --outdir ./dist",
-    "build:all": "npm run build:linux && npm run build:macos && npm run build:windows",
-    "build:linux": "bun build src/index.ts --outfile ./dist/ccsync-linux --target bun-linux-x64-baseline --compile",
-    "build:macos-x64": "bun build src/index.ts --outfile ./dist/ccsync-macos-x64 --target bun-darwin-x64 --compile",
-    "build:macos-arm64": "bun build src/index.ts --outfile ./dist/ccsync-macos-arm64 --target bun-darwin-arm64 --compile",
-    "build:macos": "npm run build:macos-x64 && npm run build:macos-arm64",
-    "build:windows": "bun build src/index.ts --outfile ./dist/ccsync-windows.exe --target bun-windows-x64-baseline --compile"
+    "prepare": "npm run build",
+    "build": "bun run clean && bun build src/index.ts --outdir ./dist --target node",
+    "build-ex:all": "bun run build:linux && bun run build:macos && bun run build:windows",
+    "build-ex:linux": "bun build src/index.ts --outfile ./dist/ccsync-linux --target bun-linux-x64-baseline --compile",
+    "build-ex:macos-x64": "bun build src/index.ts --outfile ./dist/ccsync-macos-x64 --target bun-darwin-x64 --compile",
+    "build-ex:macos-arm64": "bun build src/index.ts --outfile ./dist/ccsync-macos-arm64 --target bun-darwin-arm64 --compile",
+    "build-ex:macos": "bun run build:macos-x64 && bun run build:macos-arm64",
+    "build-ex:windows": "bun build src/index.ts --outfile ./dist/ccsync-windows.exe --target bun-windows-x64-baseline --compile"
   },
   "devDependencies": {
-    "@types/bun": "^1.2.2"
+    "@types/bun": "^1.2.2",
+    "@types/node": "^22.13.4"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
@@ -31,10 +47,13 @@
   "dependencies": {
     "@clack/prompts": "^0.10.0",
     "chokidar": "^4.0.3",
-    "glob": "^11.0.1",
+    "glob": "10.3.10",
     "picocolors": "^1.1.1",
     "ts-deepmerge": "^7.0.2",
     "yaml": "^2.7.0",
     "zod": "^3.24.2"
+  },
+  "engines": {
+    "node": ">=16.0.0"
   }
 }

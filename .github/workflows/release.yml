@@ -19,7 +19,7 @@ jobs:
 
       - run: bun install
       
-      - run: bun run build:all
+      - run: bun run build-ex:all
         
       - uses: softprops/action-gh-release@v2
         with:

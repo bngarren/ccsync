@@ -146,7 +146,7 @@ export async function loadConfig(configFilePath: string): Promise<Config> {
   try {
     const resolvedPath = resolvePath(configFilePath);
     try {
-      const file = await Bun.file(resolvedPath).text();
+      const file = await fs.readFile(resolvedPath, 'utf-8');
       const config = parse(file);
       const validatedConfig = ConfigSchema.parse(config);
       // Resolve all paths in the config

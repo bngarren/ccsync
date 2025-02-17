@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // index.ts
 
 import * as p from "@clack/prompts";

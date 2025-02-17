@@ -59,8 +59,7 @@ const initConfig = async () => {
 async function main() {
   console.clear();
 
-  const version = process.env.npm_package_version ?? '0.0.0';
-  p.intro(`${color.magentaBright(`CC:Sync (v${version})`)}`);
+  p.intro(`${color.magentaBright(`CC:Sync`)}`);
 
   try {
     const config = await initConfig()

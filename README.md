@@ -4,11 +4,11 @@ CC:Sync is a command-line tool that helps you develop ComputerCraft programs by 
 
 ## Features
 
-🔄 Real-time file syncing with watch mode
-🎮 Manual sync mode for controlled updates
-👥 Computer groups for easy targeting
-🌟 Glob pattern support for file selection
-⚡ Fast and lightweight
+- 🔄 Real-time file syncing with watch mode
+- 🎮 Manual sync mode for controlled updates
+- 👥 Computer groups for easy targeting
+- 🌟 Glob pattern support for file selection
+- ⚡ Fast and lightweight
 
 ## Installation
 TODO

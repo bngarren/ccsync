@@ -1,13 +1,26 @@
 {
   "name": "ccsync",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "module": "index.ts",
   "type": "module",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "bin": {
+    "ccsync": "./dist/ccsync"
+  },
   "scripts": {
-    "start": "bun run src/index.ts",
-    "test": "bun test ./tests",
-    "build": "bun build src/index.ts --outdir ./dist --target bun",
-    "build-ex": "bun build src/index.ts --outfile ./dist/cli --target bun --compile"
+    "clean": "rm -rf ./dist",
+    "dev": "bun run ./src/index.ts",
+    "build": "npm run clean && npm run build:all && bun build src/index.ts --outdir ./dist",
+    "build:all": "npm run build:linux && npm run build:macos && npm run build:windows",
+    "build:linux": "bun build src/index.ts --outfile ./dist/ccsync-linux --target bun-linux-x64-baseline --compile",
+    "build:macos-x64": "bun build src/index.ts --outfile ./dist/ccsync-macos-x64 --target bun-darwin-x64 --compile",
+    "build:macos-arm64": "bun build src/index.ts --outfile ./dist/ccsync-macos-arm64 --target bun-darwin-arm64 --compile",
+    "build:macos": "npm run build:macos-x64 && npm run build:macos-arm64",
+    "build:windows": "bun build src/index.ts --outfile ./dist/ccsync-windows.exe --target bun-windows-x64-baseline --compile"
   },
   "devDependencies": {
     "@types/bun": "^1.2.2"

@@ -15,7 +15,7 @@ import { setTimeout } from 'node:timers/promises';
 async function main() {
   console.clear();
 
-  p.intro(`${color.magentaBright(`CC:Sync`)}`);
+  p.intro(`${color.magentaBright(`CC:Sync (v${process.env.npm_package_version})`)}`);
 
   try {
     const config = await loadConfig("./examples/test1/example.ccsync.yaml");

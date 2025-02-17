@@ -4,15 +4,11 @@ import * as p from "@clack/prompts";
 import { createDefaultConfig, findConfig, loadConfig } from "./config";
 import color from "picocolors";
 import path from "path";
-import {
-  checkConfigTrackedFiles,
-  copyFilesToComputer,
-  discoverComputers,
-  pluralize,
-  validateSaveDir,
-} from "./utils";
-import { setTimeout } from "node:timers/promises";
 import { SyncManager } from "./sync";
+import { createLogger } from "./log";
+import { theme } from "./theme";
+import { toTildePath } from "./utils";
+import type { SyncMode } from "./types";
 
 const initConfig = async () => {
   // Find all config files
@@ -63,40 +59,40 @@ const initConfig = async () => {
 async function main() {
   console.clear();
 
-  p.intro(
-    `${color.magentaBright(`CC:Sync (v${process.env.npm_package_version})`)}`
-  );
+  const version = process.env.npm_package_version ?? '0.0.0';
+  p.intro(`${color.magentaBright(`CC:Sync (v${version})`)}`);
 
   try {
     const config = await initConfig()
+    // Init log
+    const log = createLogger({verbose: config.advanced.verbose})
     const savePath = path.parse(config.minecraftSavePath);
 
     // ---- Confirm MC save location ----
 
 
     const res = await p.confirm({
-      message: `Using world save at '${
-        config.minecraftSavePath
-      }'\nContinue with ${color.bold(color.yellow(savePath.name))}?`,
+      message: `Sync with ${theme.bold(theme.warn(savePath.name))}?  ${theme.dim(toTildePath(config.minecraftSavePath))}'`,
       initialValue: true,
     });
 
-    if (!res) {
-      p.cancel("Cancelled.");
+    if (p.isCancel(res) || !res) {
+      log.info("If this save instance is incorrect, change the 'minecraftSavePath' in the .ccsync.yaml to point to the one you want.")
+      log.status("Goodbye!");
       process.exit(0);
     }
 
     // Choose mode
-    const mode = await p.select({
+    const mode: SyncMode = await p.select({
       message: "Select sync mode:",
       options: [
         { value: "manual", label: "Manual mode", hint: "Sync on command" },
         { value: "watch", label: "Watch mode", hint: "Auto-sync on file changes" },
       ],
-    });
+    }) as SyncMode;
 
-    if (!mode) {
-      p.cancel("Operation cancelled.");
+    if (p.isCancel(mode)) {
+      log.status("Goodbye!");
       process.exit(0);
     }
 
@@ -105,7 +101,7 @@ async function main() {
     if (mode === "watch") {
       await syncManager.startWatching();
     } else {
-      await syncManager.singleMode();
+      await syncManager.manualMode();
     }
   } catch (err) {
     p.log.error(`${err instanceof Error ? err.message : String(err)}`);

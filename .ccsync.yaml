@@ -1,9 +1,40 @@
-# CC:Sync Configuration
+# CC:Sync Configuration File
+# This file configures how CC:Sync copies files to your ComputerCraft computers
+
+# Where your source files are located (relative to this config file)
 sourcePath: "./examples/test1"
+
+# Path to your Minecraft world save
+# Use ~ for your home directory
+# Example Windows: "~/AppData/Roaming/.minecraft/saves/my_world"
+# Example Linux: "~/.minecraft/saves/my_world"
 minecraftSavePath: "/Users/bngarren/Documents/curseforge/minecraft/Instances/Craftoria (2)/saves/New World"
-#minecraftSavePath: "./examples/test1"
-computerGroups: {}
+
+# Define groups of computers for easier file targeting
+computerGroups: 
+  # Example group:
+  monitors:
+    name: "Monitor Network"
+    computers: ["1", "2"]
+
+# Files to sync to your computers
 files:
-  - source: "test.lua"
-    target: "/bng/test.lua"
-    computers: ["1"]
+  # Examples:
+  # Sync to a specific computer:
+  - source: "test.lua"    # File in your sourcePath
+    target: "test.lua"    # Where to put it on the computer
+    computers: ["monitors"]         # Computer IDs to sync to
+  #
+  # Sync to a group of computers:
+  # - source: "lib/*.lua"      # Glob patterns supported
+  #   target: "lib/"          # Folders will be created
+  #   computers: "monitors"    # Reference a computer group
+
+# Advanced configuration options
+advanced:
+  # Enable verbose logging
+  verbose: true
+  
+  # How long to cache validation results (milliseconds)
+  # Lower = more accurate but more CPU intensive, Higher = faster but may miss changes
+  cache_ttl: 5000

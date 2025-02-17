@@ -3,6 +3,12 @@ import * as fs from "node:fs/promises";
 import path from "path";
 import type { Config } from "./config";
 import { glob } from "glob";
+import type {
+  Computer,
+  FileSyncRule,
+  ResolvedFile,
+  SyncValidation,
+} from "./types";
 
 export const pluralize = (text: string) => {
   return (count: number) => {
@@ -19,6 +25,25 @@ export function resolvePath(filePath: string): string {
   return path.resolve(filePath);
 }
 
+export const toTildePath = (fullPath: string): string => {
+  const home = homedir();
+  return fullPath.startsWith(home) ? fullPath.replace(home, "~") : fullPath;
+};
+
+export const getFormattedDate = (): string => {
+  const now = new Date();
+  const time = now.toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+  const date = now.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "2-digit",
+  });
+  return `${time} on ${date}`;
+};
+
 // - - - - - MINECRAFT - - - - -
 
 interface SaveValidationResult {
@@ -28,13 +53,15 @@ interface SaveValidationResult {
   missingFiles: string[];
 }
 
-export const validateSaveDir = async (saveDir: string): Promise<SaveValidationResult> => {
+export const validateSaveDir = async (
+  saveDir: string
+): Promise<SaveValidationResult> => {
   const savePath = resolvePath(saveDir);
   const result: SaveValidationResult = {
     isValid: false,
     savePath,
     errors: [],
-    missingFiles: []
+    missingFiles: [],
   };
 
   // Key files that should exist in a valid Minecraft save
@@ -42,7 +69,7 @@ export const validateSaveDir = async (saveDir: string): Promise<SaveValidationRe
     "level.dat",
     "session.lock",
     "region",
-    "computercraft/computer"  // Required for ComputerCraft
+    "computercraft/computer", // Required for ComputerCraft
   ];
 
   try {
@@ -91,7 +118,9 @@ export const validateSaveDir = async (saveDir: string): Promise<SaveValidationRe
 
     return result;
   } catch (err) {
-    result.errors.push(`Validation failed: ${err instanceof Error ? err.message : String(err)}`);
+    result.errors.push(
+      `Validation failed: ${err instanceof Error ? err.message : String(err)}`
+    );
     return result;
   }
 };
@@ -100,11 +129,11 @@ export const validateSaveDir = async (saveDir: string): Promise<SaveValidationRe
 
 const EXCLUDED_DIRS = new Set([".vscode", ".git", ".DS_Store"]);
 
-export interface Computer {
-  id: string;
-  path: string;
-  shortPath: string;
-}
+export const getComputerShortPath = (saveName: string, computerId: string) => {
+  return path
+    .join(saveName, "computercraft", "computer", computerId)
+    .replace("computercraft", "..");
+};
 
 export const discoverComputers = async (savePath: string) => {
   try {
@@ -138,9 +167,7 @@ export const discoverComputers = async (savePath: string) => {
       }
 
       const computerPath = path.join(computercraftPath, entry.name);
-      const shortPath = path
-        .join(saveName, "computercraft", "computer", entry.name)
-        .replace("computercraft", "..");
+      const shortPath = getComputerShortPath(saveName, entry.name);
 
       computers.push({
         id: entry.name,
@@ -166,71 +193,140 @@ export const discoverComputers = async (savePath: string) => {
 
 // - - - - - Files - - - - -
 
-export interface FileCheck {
-  source: string;
-  target: string;
-  exists: boolean;
-  computers?: string | string[];
+/**
+ * Resolves computer IDs from a sync rule's computers field, expanding any group names
+ * @param computers Computer IDs or group names from a sync rule
+ * @param config The full config object for group lookups
+ * @returns Array of resolved computer IDs
+ * @throws Error if a computer group name is used but doesn't exist
+ */
+export function resolveComputerIds(
+  computers: string | string[] | undefined,
+  config: Config
+): string[] {
+  if (!computers) return [];
+
+  const computersList = Array.isArray(computers) ? computers : [computers];
+
+  let invalidGroups: string[] = [];
+  const resolvedIds = computersList.flatMap((entry) => {
+    const group = config.computerGroups[entry];
+    if (group) {
+      return group.computers;
+    }
+    // If not a group, it should be a computer ID
+    return [entry];
+  });
+
+  // Verify all groups existed
+  computersList.forEach((entry) => {
+    if (!config.computerGroups[entry] && !entry.match(/^\d+$/)) {
+      invalidGroups.push(entry);
+    }
+  });
+
+  if (invalidGroups.length > 0) {
+    throw new Error(`invalid computer groups → "${invalidGroups.join(", ")}"`);
+  }
+
+  return resolvedIds;
 }
 
-export async function checkConfigTrackedFiles(
-  config: Config
-): Promise<FileCheck[]> {
-  const results: FileCheck[] = [];
+/**
+ * Resolves file sync rules into actual files and validates the configuration
+ */
+export async function validateFileSync(
+  config: Config,
+  computers: Computer[],
+  changedFiles?: Set<string>
+): Promise<SyncValidation> {
+  const validation: SyncValidation = {
+    resolvedFiles: [],
+    targetComputers: [],
+    missingComputerIds: [],
+    errors: [],
+  };
 
-  for (const file of config.files) {
+  // Process each sync rule
+  for (const rule of config.files) {
     try {
-      // Use glob to find all matching source files
-      const matches = await glob(file.source, {
+      // Find all matching source files
+      const sourceFiles = await glob(rule.source, {
         cwd: config.sourcePath,
         absolute: true,
       });
 
-      // Check if any matches were found
-      const exists = matches.length > 0;
+      // Filter by changed files if in watch mode
+      const relevantFiles = changedFiles
+        ? sourceFiles.filter((file) =>
+            changedFiles.has(path.relative(config.sourcePath, file))
+          )
+        : sourceFiles;
 
-      results.push({
-        source: file.source,
-        target: file.target,
-        exists,
-        computers: file.computers,
-      });
+      if (relevantFiles.length === 0) {
+        validation.errors.push(`No matching files found for: '${rule.source}'`);
+        continue;
+      }
+
+      // Resolve computer IDs for this rule
+      const computerIds = resolveComputerIds(rule.computers, config);
+      if (computerIds.length === 0) {
+        validation.errors.push(
+          `No target computers specified for: '${rule.source}'`
+        );
+        continue;
+      }
+
+      const missingIds = computerIds.filter(id => 
+        !computers.some(c => c.id === id)
+      );
+      validation.missingComputerIds.push(...missingIds);
+    
+
+      // Create resolved file entries
+      for (const sourcePath of relevantFiles) {
+        validation.resolvedFiles.push({
+          sourcePath,
+          targetPath: rule.target,
+          computers: computerIds,
+        });
+      }
+
+      // Track target computers
+      const matchingComputers = computers.filter((c) =>
+        computerIds.includes(c.id)
+      );
+      validation.targetComputers.push(...matchingComputers);
     } catch (err) {
-      results.push({
-        source: file.source,
-        target: file.target,
-        exists: false,
-        computers: file.computers,
-      });
+      validation.errors.push(
+        `Error processing config for '${rule.source}'\n ⮑  ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
     }
   }
 
-  return results;
+  // Deduplicate target computers
+  validation.targetComputers = [...new Set(validation.targetComputers)];
+
+  return validation;
 }
 
+/**
+ * Copies resolved files to a specific computer
+ */
 export async function copyFilesToComputer(
-  fileChecks: FileCheck[],
-  config: Config,
+  resolvedFiles: ResolvedFile[],
   computerPath: string
 ): Promise<void> {
-  for (const file of fileChecks) {
-    if (!file.exists) continue;
+  for (const file of resolvedFiles) {
+    // Determine target path
+    const targetPath = path.join(computerPath, file.targetPath);
 
-    // Find all matching source files
-    const sourceFiles = await glob(file.source, {
-      cwd: config.sourcePath,
-      absolute: true,
-    });
+    // Create target directory if it doesn't exist
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
 
-    for (const sourcePath of sourceFiles) {
-      // Determine target path
-      const targetPath = path.join(computerPath, file.target);
-
-      // Create target directory if it doesn't exist
-      await fs.mkdir(path.dirname(targetPath), { recursive: true });
-
-      // Copy the file
-      await fs.copyFile(sourcePath, targetPath);
-    }
+    // Copy the file
+    await fs.copyFile(file.sourcePath, targetPath);
   }
 }

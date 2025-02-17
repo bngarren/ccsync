@@ -1,11 +1,11 @@
 {
   "name": "ccsync",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "module": "index.ts",
   "type": "module",
   "scripts": {
     "start": "bun run src/index.ts",
-    "build": "bun build src/index.ts --outdir ./dist --target bun --compile",
+    "build": "bun build src/index.ts --outdir ./dist --target bun",
     "build-ex": "bun build src/index.ts --outfile ./dist/cli --target bun --compile"
   },
   "devDependencies": {
@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@clack/prompts": "^0.10.0",
+    "chokidar": "^4.0.3",
     "glob": "^11.0.1",
     "picocolors": "^1.1.1",
     "yaml": "^2.7.0",

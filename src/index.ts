@@ -1,7 +1,7 @@
 // index.ts
 
 import * as p from "@clack/prompts";
-import { loadConfig } from "./config";
+import { createDefaultConfig, findConfig, loadConfig } from "./config";
 import color from "picocolors";
 import path from "path";
 import {
@@ -9,17 +9,70 @@ import {
   copyFilesToComputer,
   discoverComputers,
   pluralize,
+  validateSaveDir,
 } from "./utils";
-import { setTimeout } from 'node:timers/promises';
+import { setTimeout } from "node:timers/promises";
+import { SyncManager } from "./sync";
+
+const initConfig = async () => {
+  // Find all config files
+  const configs = await findConfig();
+
+  let configPath: string;
+
+  if (configs.length === 0) {
+    const createDefault = await p.confirm({
+      message: "No configuration file found. Create a default configuration?",
+      initialValue: true,
+    });
+
+    if (!createDefault) {
+      p.cancel("Cannot proceed without configuration.");
+      process.exit(0);
+    }
+
+    await createDefaultConfig(process.cwd());
+    p.log.success(`Created default config at ${process.cwd()}/.ccsync.yaml`);
+    p.log.info("Please edit the configuration file and run the program again.");
+    process.exit(0);
+  } else if (configs.length === 1) {
+    configPath = configs[0].path;
+    p.log.info(`Using config: ${color.gray(configs[0].relativePath)}`);
+  } else {
+    // Multiple configs found - let user choose
+    const selection = (await p.select({
+      message: "Multiple config files found. Select one to use:",
+      options: configs.map((config, index) => ({
+        value: config.path,
+        label: config.relativePath,
+        hint: index === 0 ? "closest to current directory" : undefined,
+      })),
+    })) as string;
+
+    if (!selection) {
+      p.cancel("No config selected.");
+      process.exit(0);
+    }
+
+    configPath = selection;
+  }
+
+  return await loadConfig(configPath);
+};
 
 async function main() {
   console.clear();
 
-  p.intro(`${color.magentaBright(`CC:Sync (v${process.env.npm_package_version})`)}`);
+  p.intro(
+    `${color.magentaBright(`CC:Sync (v${process.env.npm_package_version})`)}`
+  );
 
   try {
-    const config = await loadConfig("./examples/test1/example.ccsync.yaml");
+    const config = await initConfig()
     const savePath = path.parse(config.minecraftSavePath);
+
+    // ---- Confirm MC save location ----
+
 
     const res = await p.confirm({
       message: `Using world save at '${
@@ -33,136 +86,29 @@ async function main() {
       process.exit(0);
     }
 
-    // Check config files
-    p.log.info("📂 Checking tracked files...");
-    const fileChecks = await checkConfigTrackedFiles(config);
-
-    // Display file check results
-    fileChecks.forEach((check) => {
-      const status = check.exists ? color.green("✓") : color.red("✗");
-      p.log.info(`${status} ${check.source} ${color.dim(`→ ${check.target}`)}`);
+    // Choose mode
+    const mode = await p.select({
+      message: "Select sync mode:",
+      options: [
+        { value: "manual", label: "Manual mode", hint: "Sync on command" },
+        { value: "watch", label: "Watch mode", hint: "Auto-sync on file changes" },
+      ],
     });
 
-    // If any files are missing, ask to continue
-    if (fileChecks.some((check) => !check.exists)) {
-      const continueWithMissing = await p.confirm({
-        message: "Some files are missing. Continue anyway?",
-        initialValue: false,
-      });
-
-      if (!continueWithMissing) {
-        p.cancel("Cancelled due to missing files.");
-        process.exit(0);
-      }
-    }
-
-    p.log.success("Found all tracked files.");
-
-    // Discover available computers
-    p.log.info(
-      `🖥️ Scanning for computers in ${color.bold(
-        color.yellow(savePath.name)
-      )}...`
-    );
-    const availableComputers = await discoverComputers(
-      config.minecraftSavePath
-    );
-
-    if (availableComputers.length === 0) {
-      p.log.error("No computers found in the save directory.");
-      process.exit(1);
-    }
-
-    const availableComputerIds = availableComputers.map((c) => c.id);
-    const requiredComputerIds = [
-      ...new Set(config.files.flatMap((f) => f.computers || [])),
-    ];
-    const matchedComputers = availableComputers.filter((c) =>
-      requiredComputerIds.includes(c.id)
-    );
-
-    const pl_computer = pluralize("computer");
-
-    p.log.info(`The configured sync requires ${
-      requiredComputerIds.length
-    } ${pl_computer(requiredComputerIds.length)}:  ${requiredComputerIds.map(
-      (i) => `"${i}"`
-    )}
-      `);
-    if (matchedComputers.length === requiredComputerIds.length) {
-      p.log.success(`Found all required computers.`);
-    } else {
-      const missingComputers = requiredComputerIds.filter(
-        (id) => !availableComputerIds.includes(id)
-      );
-      p.log.warn(
-        `Did not find all required computers. Found ${matchedComputers.length} of ${requiredComputerIds.length}.` +
-          `\nMissing computers: ${missingComputers
-            .map((id) => `"${id}"`)
-            .join(", ")}`
-      );
-    }
-
-    if (matchedComputers.length === 0) {
-      p.log.error("No matching computers found to sync files to.");
-      process.exit(1);
-    }
-
-    const continueWithSync = await p.confirm({
-      message: `${color.cyan(
-        `Continue with syncing files to ${
-          matchedComputers.length
-        } ${pl_computer(matchedComputers.length)}?`
-      )}`,
-      initialValue: true,
-    });
-
-    if (!continueWithSync) {
-      p.cancel("Sync cancelled.");
+    if (!mode) {
+      p.cancel("Operation cancelled.");
       process.exit(0);
     }
 
-    // Start copying files
-    const spinner = p.spinner();
-    let successCount = 0;
-    let errorCount = 0;
+    const syncManager = new SyncManager(config);
 
-    for (const computer of matchedComputers) {
-      spinner.start(`Copying files to computer ${computer.id}`);
-
-      try {
-        const relevantFiles = fileChecks.filter(
-          (check) => check.exists && check.computers?.includes(computer.id)
-        );
-
-        if (relevantFiles.length === 0) {
-          spinner.stop(`No files configured for computer ${computer.id}`);
-          continue;
-        }
-
-        await copyFilesToComputer(relevantFiles, config, computer.path);
-        await setTimeout(500)
-        spinner.stop(
-          `${color.green("✓")} Files copied to computer ${computer.id}`
-        );
-        successCount++;
-      } catch (err) {
-        spinner.stop(
-          `${color.red("✗")} Error copying files to computer ${
-            computer.id
-          }: ${err}`
-        );
-        errorCount++;
-      }
+    if (mode === "watch") {
+      await syncManager.startWatching();
+    } else {
+      await syncManager.singleMode();
     }
-
-    p.outro(
-      `❇️ Sync completed with ${successCount} successful and ${errorCount} failed ${pl_computer(
-        errorCount
-      )}.`
-    );
   } catch (err) {
-    p.log.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+    p.log.error(`${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
 }

@@ -19,6 +19,85 @@ export function resolvePath(filePath: string): string {
   return path.resolve(filePath);
 }
 
+// - - - - - MINECRAFT - - - - -
+
+interface SaveValidationResult {
+  isValid: boolean;
+  savePath: string;
+  errors: string[];
+  missingFiles: string[];
+}
+
+export const validateSaveDir = async (saveDir: string): Promise<SaveValidationResult> => {
+  const savePath = resolvePath(saveDir);
+  const result: SaveValidationResult = {
+    isValid: false,
+    savePath,
+    errors: [],
+    missingFiles: []
+  };
+
+  // Key files that should exist in a valid Minecraft save
+  const keyFiles = [
+    "level.dat",
+    "session.lock",
+    "region",
+    "computercraft/computer"  // Required for ComputerCraft
+  ];
+
+  try {
+    // First check if the directory exists
+    try {
+      await fs.access(savePath);
+    } catch (err) {
+      result.errors.push(`Save directory not found: ${savePath}`);
+      return result;
+    }
+
+    // Check each key file/directory
+    await Promise.all(
+      keyFiles.map(async (kf) => {
+        try {
+          await fs.access(path.join(savePath, kf));
+        } catch (err) {
+          result.missingFiles.push(kf);
+        }
+      })
+    );
+
+    // If we have any missing files, add an error
+    if (result.missingFiles.length > 0) {
+      result.errors.push(
+        `The folder at ${savePath} doesn't appear to be a Minecraft save.`
+      );
+    }
+
+    // Specific check for computercraft directory
+    if (!result.missingFiles.includes("computercraft/computer")) {
+      try {
+        const computercraftStats = await fs.stat(
+          path.join(savePath, "computercraft/computer")
+        );
+        if (!computercraftStats.isDirectory()) {
+          result.errors.push("computercraft/computer is not a directory");
+        }
+      } catch (err) {
+        result.errors.push("Failed to check computercraft directory structure");
+      }
+    }
+
+    // Set isValid if we have no errors
+    result.isValid = result.errors.length === 0;
+
+    return result;
+  } catch (err) {
+    result.errors.push(`Validation failed: ${err instanceof Error ? err.message : String(err)}`);
+    return result;
+  }
+};
+
+// - - - - - COMPUTERS - - - - -
+
 const EXCLUDED_DIRS = new Set([".vscode", ".git", ".DS_Store"]);
 
 export interface Computer {

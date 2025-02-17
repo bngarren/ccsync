@@ -1,0 +1,9 @@
+# CC:Sync Configuration
+sourcePath: "./examples/test1"
+minecraftSavePath: "/Users/bngarren/Documents/curseforge/minecraft/Instances/Craftoria (2)/saves/New World"
+#minecraftSavePath: "./examples/test1"
+computerGroups: {}
+files:
+  - source: "test.lua"
+    target: "/bng/test.lua"
+    computers: ["1"]

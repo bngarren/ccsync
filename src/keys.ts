@@ -9,6 +9,8 @@ interface KeyHandlerOptions {
 export class KeyHandler {
   private isActive = false;
   private keyCallbacks: KeyHandlerOptions;
+  private currentHandler: ((data: Buffer) => void) | null = null;
+  private keepAliveInterval: Timer | null = null;
 
   constructor(options: KeyHandlerOptions = {}) {
     this.keyCallbacks = options;
@@ -16,7 +18,7 @@ export class KeyHandler {
     // Default Ctrl+C handler if none provided
     if (!this.keyCallbacks.onCtrlC) {
       this.keyCallbacks.onCtrlC = () => {
-        console.log("Terminated")
+        console.log("Terminated");
         process.exit(0);
       };
     }
@@ -24,53 +26,97 @@ export class KeyHandler {
 
   start() {
     if (this.isActive) return;
-    
-    this.isActive = true;
-    process.stdin.setRawMode(true);
-    process.stdin.resume();
-    process.stdin.setEncoding('utf8');
 
-    // Bind the handler to maintain correct 'this' context
-    const handler = this.handleKeypress.bind(this);
-    process.stdin.on('data', handler);
+    try {
+      this.isActive = true;
+      
+      // Ensure clean state
+      if (process.stdin.isTTY) {
+        process.stdin.setRawMode(false);
+      }
+      process.stdin.pause();
+      
+      // Setup stdin
+      process.stdin.setEncoding("utf8");
+      if (process.stdin.isTTY) {
+        process.stdin.setRawMode(true);
+      }
+      process.stdin.resume();
 
-    // Store the handler for cleanup
-    (this as any).currentHandler = handler;
+      // Bind the handler
+      this.currentHandler = this.handleKeypress.bind(this);
+      process.stdin.removeAllListeners('data');  // Remove any existing listeners
+      process.stdin.on("data", this.currentHandler);
+
+      // Keep-alive interval
+      if (this.keepAliveInterval) {
+        clearInterval(this.keepAliveInterval);
+      }
+      this.keepAliveInterval = setInterval(() => {
+        if (this.isActive && process.stdin.isTTY) {
+          process.stdin.resume();
+          process.stdin.setRawMode(true);
+        } else {
+          this.stop();
+        }
+      }, 100);
+    } catch (err) {
+      console.error('Error starting key handler:', err);
+      this.stop();
+    }
   }
 
   stop() {
     if (!this.isActive) return;
 
-    const handler = (this as any).currentHandler;
-    if (handler) {
-      process.stdin.removeListener('data', handler);
-      delete (this as any).currentHandler;
-    }
+    try {
+      this.isActive = false;
 
-    process.stdin.setRawMode(false);
-    process.stdin.pause();
-    this.isActive = false;
+      if (this.keepAliveInterval) {
+        clearInterval(this.keepAliveInterval);
+        this.keepAliveInterval = null;
+      }
+
+      if (this.currentHandler) {
+        process.stdin.removeListener("data", this.currentHandler);
+        this.currentHandler = null;
+      }
+
+      if (process.stdin.isTTY) {
+        process.stdin.setRawMode(false);
+      }
+      process.stdin.pause();
+
+    } catch (err) {
+      console.error('Error stopping key handler:', err);
+    }
   }
 
   private async handleKeypress(data: Buffer) {
+    if (!this.isActive) return;
+
     const key = data.toString();
 
     // Handle Ctrl+C (End of Text character)
-    if (key === '\u0003' && this.keyCallbacks.onCtrlC) {
+    if (key === "\u0003" && this.keyCallbacks.onCtrlC) {
       await this.keyCallbacks.onCtrlC();
       return;
     }
 
     // Handle ESC
-    if (key === '\u001b' && this.keyCallbacks.onEsc) {
+    if (key === "\u001b" && this.keyCallbacks.onEsc) {
       await this.keyCallbacks.onEsc();
       return;
     }
 
     // Handle Space
-    if (key === ' ' && this.keyCallbacks.onSpace) {
+    if (key === " " && this.keyCallbacks.onSpace) {
       await this.keyCallbacks.onSpace();
       return;
     }
+  }
+
+  isListening() {
+    return this.isActive;
   }
 }

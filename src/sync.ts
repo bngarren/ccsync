@@ -29,6 +29,9 @@ export class SyncManager {
   private isWatching = false;
   private keyHandler: KeyHandler | null = null;
 
+  // watch mode only
+  private changedFiles: Set<string> = new Set();
+
   // language
   private pl_computer = pluralize("computer");
 
@@ -88,11 +91,24 @@ export class SyncManager {
     return { fileChecks, matchedComputers, requiredComputerIds };
   }
 
-  private async performSync(validation: ValidatedSync) {
+  private async performSync(validation: ValidatedSync, files?: Set<string>) {
     const { fileChecks, matchedComputers } = validation;
     const spinner = p.spinner();
     let successCount = 0;
     let errorCount = 0;
+
+    console.log(fileChecks);
+    console.log(files);
+
+    // Filter file checks if we have 'files' passed, i.e. only sync changed files from watch mode
+    const relevantChecks = files
+      ? fileChecks.filter((check) => check.exists && files.has(check.source))
+      : fileChecks.filter((check) => check.exists);
+
+    if (relevantChecks.length === 0) {
+      p.log.info("No relevant files to sync");
+      return { successCount: 0, errorCount: 0 };
+    }
 
     for (const computer of matchedComputers) {
       spinner.start(`Copying files to computer ${computer.id}`);
@@ -150,16 +166,8 @@ export class SyncManager {
       } ${this.pl_computer(successCount)} updated.`
     );
 
-    this.watcher = watch(patterns, {
-      ignoreInitial: true,
-      awaitWriteFinish: {
-        stabilityThreshold: 300,
-        pollInterval: 100,
-      },
-    });
-
-    // Setup key handler
-    this.keyHandler = new KeyHandler({
+    // Store the callbacks we want to use throughout watch mode
+    const watchModeCallbacks = {
       onEsc: async () => {
         await this.stopWatching();
         p.outro("Watch mode stopped.");
@@ -170,30 +178,64 @@ export class SyncManager {
         p.outro("Program terminated.");
         process.exit(0);
       },
-    });
+    };
 
+    // Initial key handler setup
+    this.keyHandler = new KeyHandler(watchModeCallbacks);
     this.keyHandler.start();
+
+    this.watcher = watch(patterns, {
+      ignoreInitial: true,
+      awaitWriteFinish: {
+        stabilityThreshold: 300,
+        pollInterval: 100,
+      },
+    });
 
     // Handle file changes
     this.watcher.on("change", async (changedPath) => {
       if (!this.isWatching) return; // Skip if we're stopping
 
+      const relativePath = path.relative(this.config.sourcePath, changedPath);
+      this.changedFiles.add(relativePath);
+
       p.log.info(`\nFile changed: ${changedPath}`);
       try {
+        // ensure keyhandler is still listening
+        if (!this.keyHandler?.isListening()) {
+          if (this.keyHandler) {
+            this.keyHandler.stop();
+            this.keyHandler = null;
+          }
+          // Create new handler with same callbacks
+          this.keyHandler = new KeyHandler(watchModeCallbacks);
+          this.keyHandler.start();
+        }
+
         const validation = await this.validateSync();
-        const { successCount, errorCount } = await this.performSync(validation);
+        const { successCount, errorCount } = await this.performSync(
+          validation,
+          this.changedFiles
+        );
         p.log.info(
           `Sync completed with ${successCount}/${
             successCount + errorCount
           } ${this.pl_computer(successCount)} updated.`
         );
 
-        // Re-display watch mode message
-        this.logWatchModeMessage();
+        // Clear changed files after successful sync
+        this.changedFiles.clear();
+
+        // Re-display watch mode message only if still watching
+        if (this.isWatching) {
+          this.logWatchModeMessage();
+        }
       } catch (err) {
         p.log.error(`Sync failed: ${err}`);
         // Re-display watch mode message even after error
-        this.logWatchModeMessage();
+        if (this.isWatching) {
+          this.logWatchModeMessage();
+        }
       }
     });
 
@@ -259,6 +301,8 @@ export class SyncManager {
   }
 
   async stopWatching() {
+    this.isWatching = false;
+
     // Clean up key handler
     if (this.keyHandler) {
       this.keyHandler.stop();

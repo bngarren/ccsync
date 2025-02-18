@@ -54,7 +54,7 @@
 
 # About The Project
 
-CC:Sync is a command-line tool that helps you develop ComputerCraft programs by automatically syncing files from your development environment to computers in your Minecraft world.
+CC: Sync is a command-line tool that helps you develop ComputerCraft (i.e. [CC: Tweaked](https://tweaked.cc/)) software by automatically syncing files from your development environment to computers in your Minecraft world.
 
 # Features
 
@@ -67,6 +67,11 @@ CC:Sync is a command-line tool that helps you develop ComputerCraft programs by 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 # Getting Started
+
+## Prerequisites
+- Node.js 16.0.0+
+- Minecraft with ComputerCraft/CC:Tweaked mod installed
+- A Minecraft world with CC:Tweaked computers
 
 ## Installation
 
@@ -165,6 +170,7 @@ npx @bngarren/ccsync
 
 ### 3. Edit the generated `.ccsync.yaml` configuration file:
 
+#### Example
 ```yaml
 sourcePath: "./src"
 minecraftSavePath: "~/minecraft/saves/my_world"
@@ -213,7 +219,8 @@ These are defined in the `.ccsync.yaml` file in your project root.
 - **verbose**: Enable detailed logging
 - **cache_ttl**: Cache duration in milliseconds
 
-### Common Minecraft Save Locations
+### Where is my Minecraft save?
+Below are some common places to look based on your operating system. However, if you use a custom launcher, then you will need to check where it stores the saves.
 
 - **Windows**: ~/AppData/Roaming/.minecraft/saves/world_name
 - **Linux**: ~/.minecraft/saves/world_name

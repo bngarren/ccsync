@@ -1,4 +1,4 @@
-import { expect, test, describe, beforeEach, mock, afterEach } from "bun:test";
+import { expect, test, describe, beforeEach, mock, afterEach, beforeAll } from "bun:test";
 import * as fs from "node:fs/promises";
 import {
   validateSaveDir,
@@ -13,25 +13,8 @@ import os from "os";
 import crypto from "crypto";
 import { tmpdir } from "node:os";
 import { withDefaultConfig, type Config } from "../src/config";
+import { cleanupTempDir, createTestComputer, createTestFiles, createTestSave, createUniqueTempDir, TempCleaner } from "./test-helpers";
 
-// Helper to create a unique test directory
-function createUniqueTempDir() {
-  const uniqueId = crypto.randomBytes(16).toString("hex");
-  return path.join(os.tmpdir(), `ccsync-test-${uniqueId}`);
-}
-
-// Helper to create test directory structure
-async function createTestSave(saveDir: string) {
-  // Create main directories
-  await mkdir(path.join(saveDir, "region"), { recursive: true });
-  await mkdir(path.join(saveDir, "computercraft", "computer"), {
-    recursive: true,
-  });
-
-  // Create required files
-  await writeFile(path.join(saveDir, "level.dat"), "");
-  await writeFile(path.join(saveDir, "session.lock"), "");
-}
 
 
 // ---- MC SAVE OPERATIONS ----
@@ -39,39 +22,21 @@ describe("Save Directory Validation", () => {
   let tempDir: string;
   let testSaveDir: string;
 
+  const cleanup = TempCleaner.getInstance();
+
   beforeEach(async () => {
     // Create new unique temp directory for this test
     tempDir = createUniqueTempDir();
-    //console.log(tempDir)
+    cleanup.add(tempDir)
+
     testSaveDir = path.join(tempDir, "save");
     await createTestSave(testSaveDir);
   });
 
   afterEach(async () => {
-    try {
-      await rm(tempDir, { recursive: true, force: true });
-    } catch (err) {
-      // Log error but don't fail the test
-      console.warn(
-        `Warning: Failed to clean up test directory ${tempDir}:`,
-        err
-      );
-    }
+    await cleanup.cleanDir(tempDir)
   });
 
-  // Just to be safe™️ -> Register cleanup handler for unexpected termination
-  process.on("exit", () => {
-    if (tempDir) {
-      // Use sync operations since we're in exit handler
-      try {
-        require("fs").rmSync(tempDir, { recursive: true, force: true });
-      } catch (err) {
-        console.warn(
-          `Warning: Failed to clean up test directory ${tempDir} during exit`
-        );
-      }
-    }
-  });
 
   test("validates a correct save directory", async () => {
     const result = await validateSaveDir(testSaveDir);
@@ -115,22 +80,19 @@ describe("Computer Discovery", () => {
   let testSaveDir: string;
   let computersDir: string;
 
-  async function createTestComputer(id: string) {
-    const computerDir = path.join(computersDir, id);
-    await mkdir(computerDir, { recursive: true });
-    // Add a dummy file to simulate computer data
-    await writeFile(path.join(computerDir, "startup.lua"), "");
-  }
+  const cleanup = TempCleaner.getInstance();
 
   beforeEach(async () => {
+    // Create new unique temp directory for this test
     tempDir = createUniqueTempDir();
+    cleanup.add(tempDir)
     testSaveDir = path.join(tempDir, "save");
     computersDir = path.join(testSaveDir, "computercraft", "computer");
     await createTestSave(testSaveDir);
   });
 
   afterEach(async () => {
-    await rm(tempDir, { recursive: true, force: true });
+    await cleanup.cleanDir(tempDir)
   });
 
   // Just to be safe™️ -> Register cleanup handler for unexpected termination
@@ -148,9 +110,9 @@ describe("Computer Discovery", () => {
   });
 
   test("discovers computers in save directory", async () => {
-    await createTestComputer("0");
-    await createTestComputer("1");
-    await createTestComputer("2");
+    await createTestComputer(computersDir, "0");
+    await createTestComputer(computersDir, "1");
+    await createTestComputer(computersDir, "2");
 
     const computers = await discoverComputers(testSaveDir);
     expect(computers).toHaveLength(3);
@@ -158,26 +120,26 @@ describe("Computer Discovery", () => {
   });
 
   test("sorts computers numerically", async () => {
-    await createTestComputer("2");
-    await createTestComputer("10");
-    await createTestComputer("1");
+    await createTestComputer(computersDir, "2");
+    await createTestComputer(computersDir, "10");
+    await createTestComputer(computersDir, "1");
 
     const computers = await discoverComputers(testSaveDir);
     expect(computers.map((c) => c.id)).toEqual(["1", "2", "10"]);
   });
 
   test("includes non-numeric computer IDs", async () => {
-    await createTestComputer("1");
-    await createTestComputer("turtle");
-    await createTestComputer("pocket");
+    await createTestComputer(computersDir, "1");
+    await createTestComputer(computersDir, "turtle");
+    await createTestComputer(computersDir, "pocket");
 
     const computers = await discoverComputers(testSaveDir);
     expect(computers.map((c) => c.id)).toEqual(["1", "pocket", "turtle"]);
   });
 
   test("excludes system directories", async () => {
-    await createTestComputer("0");
-    await createTestComputer("1");
+    await createTestComputer(computersDir, "0");
+    await createTestComputer(computersDir, "1");
     // Create some system directories that should be excluded
     await mkdir(path.join(computersDir, ".git"), { recursive: true });
     await mkdir(path.join(computersDir, ".vscode"), { recursive: true });
@@ -189,7 +151,7 @@ describe("Computer Discovery", () => {
   });
 
   test("sets correct paths for computers", async () => {
-    await createTestComputer("1");
+    await createTestComputer(computersDir, "1");
 
     const computers = await discoverComputers(testSaveDir);
     expect(computers).toHaveLength(1);
@@ -215,23 +177,24 @@ describe("File Operations", () => {
   let sourceDir: string;
   let computersDir: string;
 
+  const cleanup = TempCleaner.getInstance();
+
   beforeEach(async () => {
+    // Create new unique temp directory for this test
     tempDir = createUniqueTempDir();
+    cleanup.add(tempDir)
+    sourceDir = path.join(tempDir, "source");
     testSaveName = "world";
     testSaveDir = path.join(tempDir, testSaveName);
-    sourceDir = path.join(tempDir, "source");
     computersDir = path.join(testSaveDir, "computercraft", "computer");
 
-    // Create source directory with some test files
+    await createTestSave(testSaveDir);
     await mkdir(sourceDir, { recursive: true });
-    await writeFile(path.join(sourceDir, "program.lua"), "print('Hello')");
-    await writeFile(path.join(sourceDir, "startup.lua"), "print('Startup')");
-    await mkdir(path.join(sourceDir, "lib"), { recursive: true });
-    await writeFile(path.join(sourceDir, "lib/utils.lua"), "-- Utils");
+    await createTestFiles(sourceDir)
   });
 
   afterEach(async () => {
-    await rm(tempDir, { recursive: true, force: true });
+    await cleanup.cleanDir(tempDir)
   });
 
   // Just to be safe™️ -> Register cleanup handler for unexpected termination

@@ -1,11 +1,17 @@
 {
   "name": "ccsync",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "author": {
     "name": "bngarren"
   },
   "description": "A file sync tool for ComputerCraft computers",
-  "keywords": ["computercraft", "minecraft", "sync", "file-sync", "CC:Tweaked"],
+  "keywords": [
+    "computercraft",
+    "minecraft",
+    "sync",
+    "file-sync",
+    "CC:Tweaked"
+  ],
   "license": "MIT",
   "repository": {
     "type": "git",

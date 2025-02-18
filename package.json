@@ -30,12 +30,14 @@
     "dev": "bun run ./src/index.ts",
     "prepare": "npm run build",
     "build": "bun run clean && bun build src/index.ts --outdir ./dist --target node",
-    "build-ex:all": "bun run build:linux && bun run build:macos && bun run build:windows",
+    "build-ex:all": "bun run build-ex:linux && bun run build-ex:macos && bun run build-ex:windows",
     "build-ex:linux": "bun build src/index.ts --outfile ./dist/ccsync-linux --target bun-linux-x64-baseline --compile",
     "build-ex:macos-x64": "bun build src/index.ts --outfile ./dist/ccsync-macos-x64 --target bun-darwin-x64 --compile",
     "build-ex:macos-arm64": "bun build src/index.ts --outfile ./dist/ccsync-macos-arm64 --target bun-darwin-arm64 --compile",
-    "build-ex:macos": "bun run build:macos-x64 && bun run build:macos-arm64",
-    "build-ex:windows": "bun build src/index.ts --outfile ./dist/ccsync-windows.exe --target bun-windows-x64-baseline --compile"
+    "build-ex:macos": "bun run build-ex:macos-x64 && bun run build-ex:macos-arm64",
+    "build-ex:windows": "bun build src/index.ts --outfile ./dist/ccsync-windows.exe --target bun-windows-x64-baseline --compile",
+    "preversion": "bun test",
+    "commit:bump": "NEW_VERSION=$(npm --no-git-tag-version version from-git) && git commit -am 'Bump version to $NEW_VERSION'"
   },
   "devDependencies": {
     "@types/bun": "^1.2.2",

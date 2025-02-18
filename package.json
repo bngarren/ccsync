@@ -37,7 +37,7 @@
     "build-ex:macos": "bun run build-ex:macos-x64 && bun run build-ex:macos-arm64",
     "build-ex:windows": "bun build src/index.ts --outfile ./dist/ccsync-windows.exe --target bun-windows-x64-baseline --compile",
     "preversion": "bun test",
-    "commit:bump": "NEW_VERSION=$(npm --no-git-tag-version version from-git) && git commit -am 'Bump version to $NEW_VERSION'"
+    "commit:bump": "npm version patch -m \"Upgrade to %s\""
   },
   "devDependencies": {
     "@types/bun": "^1.2.2",

@@ -1,5 +1,5 @@
 {
-  "name": "ccsync",
+  "name": "@bngarren/ccsync",
   "version": "0.0.6",
   "author": {
     "name": "bngarren"
@@ -12,6 +12,9 @@
     "file-sync",
     "CC:Tweaked"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -43,7 +46,7 @@
     "build-ex:macos": "bun run build-ex:macos-x64 && bun run build-ex:macos-arm64",
     "build-ex:windows": "bun build src/index.ts --outfile ./dist/ccsync-windows.exe --target bun-windows-x64-baseline --compile",
     "preversion": "bun test",
-    "commit:bump": "npm version patch -m \"Upgrade to %s\""
+    "commit:bump": "npm version patch -m \"bump to %s\""
   },
   "devDependencies": {
     "@types/bun": "^1.2.2",

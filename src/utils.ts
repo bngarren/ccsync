@@ -5,9 +5,9 @@ import type { Config } from "./config";
 import { glob } from "glob";
 import type {
   Computer,
-  FileSyncRule,
-  ResolvedFile,
-  SyncValidation,
+  SyncRule,
+  ResolvedFileRule,
+  ValidationResult,
 } from "./types";
 
 export const pluralize = (text: string) => {
@@ -233,22 +233,22 @@ export function resolveComputerIds(
 }
 
 /**
- * Resolves file sync rules into actual files and validates the configuration
+ * Using the config file, will resolve sync rules into viable files ({@link ResolvedFileRule}) and validates the configuration
  */
 export async function validateFileSync(
   config: Config,
   computers: Computer[],
   changedFiles?: Set<string>
-): Promise<SyncValidation> {
-  const validation: SyncValidation = {
-    resolvedFiles: [],
-    targetComputers: [],
+): Promise<ValidationResult> {
+  const validation: ValidationResult = {
+    resolvedFileRules: [],
+    availableComputers: [],
     missingComputerIds: [],
     errors: [],
   };
 
   // Process each sync rule
-  for (const rule of config.files) {
+  for (const rule of config.rules) {
     try {
       // Find all matching source files
       const sourceFiles = await glob(rule.source, {
@@ -285,7 +285,7 @@ export async function validateFileSync(
 
       // Create resolved file entries
       for (const sourcePath of relevantFiles) {
-        validation.resolvedFiles.push({
+        validation.resolvedFileRules.push({
           sourcePath,
           targetPath: rule.target,
           computers: computerIds,
@@ -296,7 +296,7 @@ export async function validateFileSync(
       const matchingComputers = computers.filter((c) =>
         computerIds.includes(c.id)
       );
-      validation.targetComputers.push(...matchingComputers);
+      validation.availableComputers.push(...matchingComputers);
     } catch (err) {
       validation.errors.push(
         `Error processing config file sync rule for '${rule.source}'\n ⮑  ${
@@ -307,7 +307,7 @@ export async function validateFileSync(
   }
 
   // Deduplicate target computers
-  validation.targetComputers = [...new Set(validation.targetComputers)];
+  validation.availableComputers = [...new Set(validation.availableComputers)];
 
   return validation;
 }
@@ -316,7 +316,7 @@ export async function validateFileSync(
  * Copies files to a specific computer
  */
 export async function copyFilesToComputer(
-  resolvedFiles: ResolvedFile[],
+  resolvedFiles: ResolvedFileRule[],
   computerPath: string
 ): Promise<void> {
   // Normalize the computer path

@@ -17,7 +17,7 @@ mock.module("../src/log", () => ({
 }));
 
 beforeAll(() => {
-   // console.log = mock(() => {}); 
+   console.log = mock(() => {}); 
 });
 
 afterAll(() => {

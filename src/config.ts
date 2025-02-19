@@ -13,7 +13,7 @@ const DEFAULT_CONFIG: Config = {
   sourcePath: "./src",
   minecraftSavePath: "~/minecraft/saves/world",
   computerGroups: {},
-  files: [],
+  rules: [],
   advanced: {
     verbose: false,
     cache_ttl: 5000,
@@ -49,8 +49,8 @@ const ComputerGroupSchema = z.object({
   }),
 });
 
-// File sync rule schema
-const FileSyncRuleSchema = z.object({
+// Sync rule schema
+const SyncRuleSchema = z.object({
   source: z.string({
     required_error: "Source file path is required",
     invalid_type_error: "Source must be a file path",
@@ -98,7 +98,7 @@ export const ConfigSchema = z.object({
     invalid_type_error: "Save path must be text",
   }),
   computerGroups: z.record(z.string(), ComputerGroupSchema).optional(),
-  files: z.array(FileSyncRuleSchema),
+  rules: z.array(SyncRuleSchema),
   advanced: AdvancedOptionsSchema.default({
     verbose: false,
     cache_ttl: 5000,
@@ -107,7 +107,7 @@ export const ConfigSchema = z.object({
 
 export type Config = z.infer<typeof ConfigSchema>;
 export type ComputerGroup = z.infer<typeof ComputerGroupSchema>;
-export type FileSyncRule = z.infer<typeof FileSyncRuleSchema>;
+export type FileSyncRule = z.infer<typeof SyncRuleSchema>;
 
 // ---- CONFIG METHODS ----
 
@@ -193,8 +193,8 @@ computerGroups: {}
   #   name: "Monitor Network"
   #   computers: ["1", "2", "3"]
 
-# Files to sync to your computers
-files: []
+# Rules that specify which files should sync to which computers
+rules: []
   # Examples:
   # Sync to a specific computer:
   # - source: "startup.lua"    # File in your sourcePath

@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 
 export enum SyncMode {
     MANUAL = "manual",
@@ -5,14 +6,18 @@ export enum SyncMode {
 } 
 
 // Base interface for file sync configuration in .ccsync.yaml
-export interface FileSyncRule {
+export interface SyncRule {
   source: string; // Glob pattern relative to sourcePath
   target: string; // Target path on computer
   computers?: string[]; // Array of computer IDs or group names
 }
 
-// Represents a resolved file that matches a sync rule
-export interface ResolvedFile {
+/**
+ * Represents a viable file resolved from a config sync rule.
+ * 
+ * A resolved file rule has been validated such that a file exists at the source path.
+ */
+export interface ResolvedFileRule {
   sourcePath: string; // Absolute path to source file
   targetPath: string; // Relative path on computer
   computers: string[]; // Resolved list of computer IDs (not group names)
@@ -25,10 +30,71 @@ export interface Computer {
   shortPath: string;
 }
 
-// New validation result type
-export interface SyncValidation {
-  resolvedFiles: ResolvedFile[];
-  targetComputers: Computer[];
+/**
+ * A SyncValidation is the result returned when the rules in the config files are validated against what's actually present in the file system.
+ */
+export interface ValidationResult {
+  /**
+   * An array of {@link ResolvedFileRule}'s
+   */
+  resolvedFileRules: ResolvedFileRule[];
+  availableComputers: Computer[];
   missingComputerIds: string[];
   errors: string[];
+}
+
+export interface SyncResult {
+  successCount: number;
+  errorCount: number;
+  missingCount: number;
+}
+
+// Event maps for each loop type
+export type ManualSyncEvents = {
+  'syncValidation': ValidationResult;
+  'syncComplete': SyncResult;
+  'syncError': unknown;
+  'stopped': void;
+}
+
+export type WatchSyncEvents = {
+  'started': void;
+  'syncValidation': ValidationResult;
+  'initialSyncComplete': SyncResult;
+  'initialSyncError': unknown;
+  'fileSync': { path: string } & SyncResult;
+  'fileSyncError': { path: string; error: unknown };
+  'watcherError': unknown;
+  'stopped': void;
+}
+
+// Type-safe event emitter factory
+export function createTypedEmitter<T extends Record<string, any>>() {
+  const emitter = new EventEmitter();
+  return {
+    emit<K extends keyof T>(
+      event: K,
+      data?: T[K] extends void ? void : T[K]
+    ): boolean {
+      return emitter.emit(event as string, data);
+    },
+    on<K extends keyof T>(
+      event: K,
+      listener: T[K] extends void ? () => void : (data: T[K]) => void
+    ): void {
+      emitter.on(event as string, listener);
+    },
+    once<K extends keyof T>(
+      event: K,
+      listener: T[K] extends void ? () => void : (data: T[K]) => void
+    ): void {
+      emitter.once(event as string, listener);
+    },
+    off<K extends keyof T>(
+      event: K,
+      listener: T[K] extends void ? () => void : (data: T[K]) => void
+    ): void {
+      emitter.off(event as string, listener);
+    }
+  };
 }

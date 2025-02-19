@@ -30,7 +30,7 @@ import {
   TempCleaner,
 } from "./test-helpers";
 import { testLog } from "./setup";
-import type { ResolvedFile } from "../src/types";
+import type { ResolvedFileRule } from "../src/types";
 
 // ---- MC SAVE OPERATIONS ----
 describe("Save Directory Validation", () => {
@@ -202,7 +202,7 @@ describe("File Operations", () => {
       const config: Config = withDefaultConfig({
         sourcePath: sourceDir,
         minecraftSavePath: testSaveDir,
-        files: [
+        rules: [
           { source: "program.lua", target: "/program.lua", computers: ["1"] },
           { source: "startup.lua", target: "/startup.lua", computers: ["1"] },
         ],
@@ -217,8 +217,8 @@ describe("File Operations", () => {
       ];
       const validation = await validateFileSync(config, computers);
 
-      expect(validation.resolvedFiles).toHaveLength(2);
-      expect(validation.targetComputers).toHaveLength(1);
+      expect(validation.resolvedFileRules).toHaveLength(2);
+      expect(validation.availableComputers).toHaveLength(1);
       expect(validation.errors).toHaveLength(0);
     });
 
@@ -226,7 +226,7 @@ describe("File Operations", () => {
       const config: Config = withDefaultConfig({
         sourcePath: sourceDir,
         minecraftSavePath: testSaveDir,
-        files: [
+        rules: [
           { source: "missing.lua", target: "/missing.lua", computers: ["1"] },
         ],
       });
@@ -240,7 +240,7 @@ describe("File Operations", () => {
       ];
       const validation = await validateFileSync(config, computers);
 
-      expect(validation.resolvedFiles).toHaveLength(0);
+      expect(validation.resolvedFileRules).toHaveLength(0);
       expect(validation.errors).toHaveLength(1);
     });
 
@@ -248,7 +248,7 @@ describe("File Operations", () => {
       const config: Config = withDefaultConfig({
         sourcePath: sourceDir,
         minecraftSavePath: testSaveDir,
-        files: [
+        rules: [
           { source: "program.lua", target: "/program.lua", computers: ["1"] },
           { source: "startup.lua", target: "/startup.lua", computers: ["1"] },
         ],
@@ -269,8 +269,8 @@ describe("File Operations", () => {
         changedFiles
       );
 
-      expect(validation.resolvedFiles).toHaveLength(1);
-      expect(validation.resolvedFiles[0].sourcePath).toContain("program.lua");
+      expect(validation.resolvedFileRules).toHaveLength(1);
+      expect(validation.resolvedFileRules[0].sourcePath).toContain("program.lua");
     });
   });
 
@@ -306,7 +306,7 @@ describe("File Operations", () => {
       await fs.writeFile(sourceProgramPath, "print('Hello')");
       await fs.writeFile(sourceStartupPath, "print('Startup')");
 
-      const resolvedFiles: ResolvedFile[] = [
+      const resolvedFiles: ResolvedFileRule[] = [
         {
           sourcePath: sourceProgramPath,
           targetPath: "program.lua",
@@ -355,7 +355,7 @@ describe("File Operations", () => {
       const computer1Dir = path.join(computerDir, "1");
       await fs.mkdir(computer1Dir, { recursive: true });
 
-      const resolvedFiles: ResolvedFile[] = [
+      const resolvedFiles: ResolvedFileRule[] = [
         {
           sourcePath: path.join(sourceDir, "program.lua"),
           targetPath: "/startup.lua", // Absolute path to computer root
@@ -388,7 +388,7 @@ describe("File Operations", () => {
       await fs.mkdir(path.join(sourceDir, "lib"), { recursive: true });
       await fs.writeFile(path.join(sourceDir, "lib/utils.lua"), "-- Utils");
 
-      const resolvedFiles: ResolvedFile[] = [
+      const resolvedFiles: ResolvedFileRule[] = [
         {
           sourcePath: path.join(sourceDir, "lib/utils.lua"),
           targetPath: "lib/",
@@ -411,7 +411,7 @@ describe("File Operations", () => {
         "-- HTTP API"
       );
 
-      const resolvedFiles: ResolvedFile[] = [
+      const resolvedFiles: ResolvedFileRule[] = [
         {
           sourcePath: path.join(sourceDir, "apis/net/http.lua"),
           targetPath: "apis/",
@@ -430,7 +430,7 @@ describe("File Operations", () => {
       // Create source file
       await fs.writeFile(path.join(sourceDir, "program.lua"), "print('Init')");
 
-      const resolvedFiles: ResolvedFile[] = [
+      const resolvedFiles: ResolvedFileRule[] = [
         {
           sourcePath: path.join(sourceDir, "program.lua"),
           targetPath: "programs/startup/init.lua",
@@ -455,7 +455,7 @@ describe("File Operations", () => {
       await fs.writeFile(path.join(sourceDir, "lib/utils.lua"), "-- Utils");
       await fs.writeFile(path.join(sourceDir, "startup.lua"), "print('Boot')");
 
-      const resolvedFiles: ResolvedFile[] = [
+      const resolvedFiles: ResolvedFileRule[] = [
         {
           sourcePath: path.join(sourceDir, "program.lua"),
           targetPath: "startup.lua",
@@ -497,7 +497,7 @@ describe("File Operations", () => {
       await fs.mkdir(path.join(sourceDir, "dir"), { recursive: true });
       await fs.writeFile(path.join(sourceDir, "dir/test3.lua"), "return true");
 
-      const resolvedFiles: ResolvedFile[] = [
+      const resolvedFiles: ResolvedFileRule[] = [
         {
           sourcePath: path.join(sourceDir, "test1.lua"),
           targetPath: "a.lua",
@@ -551,7 +551,7 @@ describe("File Operations", () => {
       for (const maliciousPath of maliciousPaths) {
         testLog(`  - Testing malicious path: ${maliciousPath}`);
 
-        const resolvedFiles: ResolvedFile[] = [
+        const resolvedFiles: ResolvedFileRule[] = [
           {
             sourcePath: path.join(sourceDir, "program.lua"),
             targetPath: maliciousPath,
@@ -576,7 +576,7 @@ describe("File Operations", () => {
       }
 
       // Also test directory traversal with trailing slash
-      const resolvedFiles: ResolvedFile[] = [
+      const resolvedFiles: ResolvedFileRule[] = [
         {
           sourcePath: path.join(sourceDir, "program.lua"),
           targetPath: "../dangerous/",
@@ -609,7 +609,7 @@ describe("File Operations", () => {
           computers: ["4", "5"],
         },
       },
-      files: [
+      rules: [
         // Test glob pattern to group
         {
           source: "apis/*.lua",
@@ -656,17 +656,17 @@ describe("File Operations", () => {
     const validation = await validateFileSync(config, computers);
 
     // Should have 3 resolved files (http.lua, json.lua, startup.lua)
-    expect(validation.resolvedFiles).toHaveLength(3);
+    expect(validation.resolvedFileRules).toHaveLength(3);
 
     // Verify glob pattern resolution
-    const apiFiles = validation.resolvedFiles.filter((f) =>
+    const apiFiles = validation.resolvedFileRules.filter((f) =>
       f.targetPath.startsWith("/apis/")
     );
     expect(apiFiles).toHaveLength(2);
     expect(apiFiles[0].computers).toEqual(["1", "2", "3"]); // network group
 
     // Verify multiple group resolution
-    const startupFile = validation.resolvedFiles.find(
+    const startupFile = validation.resolvedFileRules.find(
       (f) => f.targetPath === "/startup.lua"
     );
     expect(startupFile?.computers).toEqual(["1", "2", "3", "4", "5"]); // both groups
@@ -676,7 +676,7 @@ describe("File Operations", () => {
     const config: Config = withDefaultConfig({
       sourcePath: sourceDir,
       minecraftSavePath: testSaveDir,
-      files: [
+      rules: [
         {
           source: "program.lua",
           target: "/program.lua",
@@ -708,7 +708,7 @@ describe("File Operations", () => {
           computers: ["1", "2"],
         },
       },
-      files: [
+      rules: [
         {
           source: "program.lua",
           target: "/program.lua",
@@ -737,7 +737,7 @@ describe("File Operations", () => {
 
     const validation = await validateFileSync(config, computers);
 
-    const programFile = validation.resolvedFiles[0];
+    const programFile = validation.resolvedFileRules[0];
     expect(programFile.computers).toEqual(["1", "2", "3"]);
   });
 });

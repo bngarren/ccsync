@@ -17,8 +17,7 @@ computerGroups:
     name: "Monitor Network"
     computers: ["1", "2"]
 
-# Files to sync to your computers
-files:
+rules:
   # Examples:
   # Sync to a specific computer:
   - source: "test.lua"    # File in your sourcePath

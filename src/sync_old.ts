@@ -15,7 +15,7 @@ import {
 import { setTimeout } from "node:timers/promises";
 import path from "path";
 import { KeyHandler } from "./keys";
-import type { Computer, SyncValidation } from "./types";
+import type { Computer, ValidationResult } from "./types";
 import { createLogger, type Logger } from "./log";
 import { theme } from "./theme";
 
@@ -29,7 +29,7 @@ export class SyncManager {
   private config: Config;
   private activeLoop: SyncLoop | null = null;
   private lastValidation: Readonly<{
-    validation: Readonly<SyncValidation>;
+    validation: Readonly<ValidationResult>;
     computers: ReadonlyArray<Computer>;
     timestamp: number;
   }> | null = null;
@@ -70,7 +70,7 @@ export class SyncManager {
   /**
    * Validates sync setup and caches results for performSync
    */
-  public async runValidation(forceRefresh = false): Promise<SyncValidation> {
+  public async runValidation(forceRefresh = false): Promise<ValidationResult> {
     // Check if we can use cached validation
     if (!forceRefresh && this.isCacheValid()) {
       if (this.lastValidation?.validation) {
@@ -125,13 +125,13 @@ export class SyncManager {
         throw new Error("File sync validation failed");
       }
 
-      if (validation.resolvedFiles.length === 0) {
+      if (validation.resolvedFileRules.length === 0) {
         this.log.error("Oops!");
         this.log.error("No files found to sync!");
         throw new Error("No files to sync!");
       }
 
-      if (validation.targetComputers.length === 0) {
+      if (validation.availableComputers.length === 0) {
         this.log.error("Oops!");
         this.log.error("Could not find computers to sync files to!");
         throw new Error("No matching computers found to sync files to");
@@ -153,7 +153,7 @@ export class SyncManager {
   /**
    * Performs file synchronization using cached validation results
    */
-  public async performSync(validation: SyncValidation): Promise<SyncResult> {
+  public async performSync(validation: ValidationResult): Promise<SyncResult> {
     const spinner = p.spinner();
     const result: SyncResult = {
       successCount: 0,
@@ -166,7 +166,7 @@ export class SyncManager {
     >();
 
     // Initialize results map
-    for (const file of validation.resolvedFiles) {
+    for (const file of validation.resolvedFileRules) {
       const relativePath = path.relative(
         this.config.sourcePath,
         file.sourcePath
@@ -175,9 +175,9 @@ export class SyncManager {
     }
 
     // Process each computer
-    for (const computer of validation.targetComputers) {
+    for (const computer of validation.availableComputers) {
       spinner.start(`Copying files to computer ${computer.id}`);
-      const computerFiles = validation.resolvedFiles.filter((file) =>
+      const computerFiles = validation.resolvedFileRules.filter((file) =>
         file.computers.includes(computer.id)
       );
 
@@ -225,7 +225,7 @@ export class SyncManager {
 
     // Display final status for each file
     for (const [filePath, results] of fileResults.entries()) {
-      const file = validation.resolvedFiles.find(
+      const file = validation.resolvedFileRules.find(
         (f) => path.relative(this.config.sourcePath, f.sourcePath) === filePath
       );
       if (!file) continue;
@@ -311,7 +311,7 @@ export class SyncManager {
         this.log.success(`Initial sync successful. ${fDate}`);
       } else if (
         totalFails ===
-        validation.targetComputers.length + validation.missingComputerIds.length
+        validation.availableComputers.length + validation.missingComputerIds.length
       ) {
         this.log.error(`Initial sync failed. ${fDate}`);
       } else {
@@ -369,7 +369,7 @@ export class SyncManager {
             this.log.success(`Sync successful. ${fDate}`);
           } else if (
             totalFails ===
-            validation.targetComputers.length +
+            validation.availableComputers.length +
               validation.missingComputerIds.length
           ) {
             this.log.error(`Sync failed. ${fDate}`);
@@ -422,7 +422,7 @@ export class SyncManager {
           this.log.success(`Successful sync. ${fDate}`);
         } else if (
           totalFails ===
-          validation.targetComputers.length +
+          validation.availableComputers.length +
             validation.missingComputerIds.length
         ) {
           this.log.error(`Sync failed. ${fDate}`);
@@ -554,7 +554,7 @@ class ManualSyncLoop extends SyncLoop {
       
       if (totalFails === 0) {
           this.log.success(`Successful sync. ${fDate}`);
-      } else if (totalFails === validation.targetComputers.length + validation.missingComputerIds.length) {
+      } else if (totalFails === validation.availableComputers.length + validation.missingComputerIds.length) {
           this.log.error(`Sync failed. ${fDate}`);
       } else {
           this.log.warn(`Partial sync. ${fDate}`);
@@ -671,7 +671,7 @@ class WatchSyncLoop extends SyncLoop {
       
       if (totalFails === 0) {
           this.log.success(`Initial sync successful. ${fDate}`);
-      } else if (totalFails === validation.targetComputers.length + validation.missingComputerIds.length) {
+      } else if (totalFails === validation.availableComputers.length + validation.missingComputerIds.length) {
           this.log.error(`Initial sync failed. ${fDate}`);
       } else {
           this.log.warn(`Initial sync partial. ${fDate}`);
@@ -727,7 +727,7 @@ class WatchSyncLoop extends SyncLoop {
               
               if (totalFails === 0) {
                   this.log.success(`Sync successful. ${fDate}`);
-              } else if (totalFails === validation.targetComputers.length + validation.missingComputerIds.length) {
+              } else if (totalFails === validation.availableComputers.length + validation.missingComputerIds.length) {
                   this.log.error(`Sync failed. ${fDate}`);
               } else {
                   this.log.warn(`Partial sync. ${fDate}`);

@@ -9,9 +9,10 @@ import {
   createTestSave,
   createTestFiles,
   spyOnClackPrompts,
+  createTestComputer,
 } from "./test-helpers";
 import { testLog } from "./setup";
-import { stringify } from 'yaml';
+import { stringify } from "yaml";
 
 describe("Integration: SyncManager", () => {
   let tempDir: string;
@@ -46,14 +47,16 @@ describe("Integration: SyncManager", () => {
 
   test("performs manual sync", async () => {
     const configPath = path.join(tempDir, ".ccsync.yaml");
-    const configContent = `
-  sourcePath: "${sourceDir}"
-  minecraftSavePath: "${savePath}"
-  files:
-    - source: "program.lua"
-      target: "/program.lua"
-      computers: ["1"]
-  `;
+    const configObject = {
+      sourcePath: sourceDir,
+      minecraftSavePath: savePath,
+      rules: [
+        { source: "program.lua", target: "/program.lua", computers: ["1"] },
+      ],
+    };
+
+    const configContent = stringify(configObject);
+
     await fs.writeFile(configPath, configContent);
     await fs.mkdir(path.join(computersDir, "1"), { recursive: true });
 
@@ -90,273 +93,114 @@ describe("Integration: SyncManager", () => {
     });
   });
 
-  test.skip("watch mode syncs on file changes", async () => {
-    const configPath = path.join(tempDir, ".ccsync.yaml");
-    const configContent = `
-  sourcePath: "${sourceDir}"
-  minecraftSavePath: "${savePath}"
-  files:
-    - source: "*.lua"
-      target: "/"
-      computers: ["1", "2"]
-  `;
-    await fs.writeFile(configPath, configContent);
-    await fs.mkdir(path.join(computersDir, "1"), { recursive: true });
-    await fs.mkdir(path.join(computersDir, "2"), { recursive: true });
-
-    const config = await loadConfig(configPath);
-    const syncManager = new SyncManager(config);
-
-    // DEBUG Verify source files exist before starting
-    // const sourceFiles = await fs.readdir(sourceDir);
-    // testLog("Source files:", sourceFiles);
-
-    return new Promise<void>(async (resolve, reject) => {
-      try {
-        const watchLoop = await syncManager.startWatchMode();
-
-        // First wait for initial sync to complete
-        watchLoop.once("initialSyncComplete", async ({ successCount, errorCount, missingCount }) => {
-          try {
-            testLog(`Initial sync complete - Success: ${successCount}, Errors: ${errorCount}, Missing: ${missingCount}`)
-            // Verify initial sync - check all files were copied
-            for (const computer of ["1", "2"]) {
-                // DEBUG
-                const computerPath = path.join(computersDir, computer);
-                const files = await fs.readdir(computerPath);
-                testLog(`Files in computer ${computer}:`, files)
-              expect(
-                await fs.exists(
-                  path.join(computersDir, computer, "program.lua")
-                )
-              ).toBe(true);
-              expect(
-                await fs.exists(
-                  path.join(computersDir, computer, "startup.lua")
-                )
-              ).toBe(true);
-              expect(
-                await fs.exists(
-                  path.join(computersDir, computer, "lib/utils.lua")
-                )
-              ).toBe(true);
-            }
-            expect(successCount).toBe(2); // Both computers synced
-
-            // Listen for the file sync event
-            watchLoop.once(
-              "fileSync",
-              async ({ path: syncedPath, successCount }) => {
-                try {
-                  expect(path.basename(syncedPath)).toBe("newfile.lua");
-                  expect(successCount).toBe(2); // Both computers synced
-
-                  // Verify new file was copied to both computers
-                  expect(
-                    await fs.exists(path.join(computersDir, "1", "newfile.lua"))
-                  ).toBe(true);
-                  expect(
-                    await fs.exists(path.join(computersDir, "2", "newfile.lua"))
-                  ).toBe(true);
-
-                  // Verify file contents
-                  const computer1Content = await fs.readFile(
-                    path.join(computersDir, "1", "newfile.lua"),
-                    "utf8"
-                  );
-                  const computer2Content = await fs.readFile(
-                    path.join(computersDir, "2", "newfile.lua"),
-                    "utf8"
-                  );
-                  expect(computer1Content).toBe("print('new file')");
-                  expect(computer2Content).toBe("print('new file')");
-
-                  // Clean up
-                  await watchLoop.stop();
-                  await syncManager.stop();
-                  resolve();
-                } catch (err) {
-                  await syncManager.stop();
-                  reject(err);
-                }
-              }
-            );
-
-            // Create a new file to trigger watch sync
-            const newFilePath = path.join(sourceDir, "newfile.lua");
-            await fs.writeFile(newFilePath, "print('new file')");
-
-            // Handle any sync errors
-            watchLoop.once("fileSyncError", async (error) => {
-              await syncManager.stop();
-              reject(error);
-            });
-          } catch (err) {
-            await syncManager.stop();
-            reject(err);
-          }
-        });
-
-        // Handle initial sync errors
-        watchLoop.once("initialSyncError", async (error) => {
-          await syncManager.stop();
-          reject(error);
-        });
-      } catch (err) {
-        await syncManager.stop();
-        reject(err);
-      }
-    });
-  });
-
-  // DEBUG TEST
-
-  test.only("watch mode syncs on file changes", async () => {
+  test("handles file changes in watch mode", async () => {
     const configPath = path.join(tempDir, ".ccsync.yaml");
     const configObject = {
-        sourcePath: sourceDir,
-        minecraftSavePath: savePath,
-        files: [
-          {
-            source: "program.lua",
-            target: "program.lua",
-            computers: ["1", "2"]
-          },
-          {
-            source: "startup.lua",
-            target: "startup.lua",
-            computers: ["1", "2"]
-          },
-          {
-            source: "lib/*.lua",
-            target: "lib/",
-            computers: ["1", "2"]
-          }
-        ],
-        advanced: {
-          verbose: true
+      sourcePath: sourceDir,
+      minecraftSavePath: savePath,
+      rules: [
+        {
+          source: "program.lua",
+          target: "/program.lua",
+          computers: ["1", "2"],
         }
-      };
-    
-      const configContent = stringify(configObject);
-      await fs.writeFile(configPath, configContent);
-    
-    // Create computer directories
-    await fs.mkdir(path.join(computersDir, "1"), { recursive: true });
-    await fs.mkdir(path.join(computersDir, "2"), { recursive: true });
-  
-    // Verify source file creation
-    await createTestFiles(sourceDir);
-    
-    // Log directory structure before sync
-    const checkDir = async (dir: string, indent = ''): Promise<void> => {
-      const entries = await fs.readdir(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        testLog(`${indent}${entry.name}${entry.isDirectory() ? '/' : ''}`);
-        if (entry.isDirectory()) {
-          await checkDir(path.join(dir, entry.name), indent + '  ');
-        }
-      }
+      ],
+      advanced: {
+        verbose: true,
+      },
     };
   
-    testLog('Source directory structure:');
-    await checkDir(sourceDir);
+    const configContent = stringify(configObject);
+    await fs.writeFile(configPath, configContent);
+  
+    // Create target computers
+    await createTestComputer(computersDir, "1")
+    await createTestComputer(computersDir, "2")
   
     const config = await loadConfig(configPath);
-    testLog('Config loaded:', {
-      sourcePath: config.sourcePath,
-      minecraftSavePath: config.minecraftSavePath,
-      files: config.files
-    });
-  
-    // Validate the setup
-    testLog('Verifying computers directory exists:', await fs.exists(computersDir));
-    testLog('Verifying computer 1 directory exists:', await fs.exists(path.join(computersDir, "1")));
-    testLog('Verifying computer 2 directory exists:', await fs.exists(path.join(computersDir, "2")));
-  
     const syncManager = new SyncManager(config);
   
     return new Promise<void>(async (resolve, reject) => {
       try {
-        const watchLoop = await syncManager.startWatchMode();
+        const watchController = await syncManager.startWatchMode();
+        
+        // Track test phases
+        let initialSyncCompleted = false;
+        let fileChangeDetected = false;
+        let fileChangeSynced = false;
   
-        watchLoop.on('syncValidation', (validation) => {
-          testLog('Validation result:', {
-            resolvedFiles: validation.resolvedFiles.map(f => ({
-              sourcePath: f.sourcePath,
-              targetPath: f.targetPath,
-              computers: f.computers
-            })),
-            targetComputers: validation.targetComputers.map(c => c.id),
-            missingComputerIds: validation.missingComputerIds,
-            errors: validation.errors
-          });
-        });
-  
-        // First wait for initial sync to complete
-        watchLoop.once('initialSyncComplete', async ({ successCount, errorCount, missingCount }) => {
+        // Listen for initial sync completion
+        watchController.on("initialSyncComplete", async ({ successCount, errorCount, missingCount }) => {
           try {
-            testLog(`Initial sync complete - Success: ${successCount}, Errors: ${errorCount}, Missing: ${missingCount}`);
+            initialSyncCompleted = true;
             
-            // Check computer directories after sync
-            testLog('Computer 1 directory after sync:');
-            await checkDir(path.join(computersDir, "1"));
-            testLog('Computer 2 directory after sync:');
-            await checkDir(path.join(computersDir, "2"));
-            
-            // Verify initial sync - check all files were copied
-            for (const computer of ["1", "2"]) {
-              const computerPath = path.join(computersDir, computer);
-              testLog(`Checking files in computer ${computer}`);
-              
-              const programPath = path.join(computerPath, "program.lua");
-              const startupPath = path.join(computerPath, "startup.lua");
-              const utilsPath = path.join(computerPath, "lib", "utils.lua");
-              
-              // Check directories exist
-              await fs.mkdir(path.join(computerPath, "lib"), { recursive: true });
-              
-              testLog(`Checking paths:
-                program.lua: ${programPath} (exists: ${await fs.exists(programPath)})
-                startup.lua: ${startupPath} (exists: ${await fs.exists(startupPath)})
-                lib/utils.lua: ${utilsPath} (exists: ${await fs.exists(utilsPath)})
-              `);
-              
-              expect(await fs.exists(programPath)).toBe(true);
-              expect(await fs.exists(startupPath)).toBe(true);
-              expect(await fs.exists(utilsPath)).toBe(true);
-            }
-            
-            // ... rest of the test remains the same
+            // Verify initial sync results
+            expect(successCount).toBe(2); // Both computers synced
+            expect(errorCount).toBe(0);
+            expect(missingCount).toBe(0);
+  
+            // Verify files were copied
+            expect(await fs.exists(path.join(computersDir, "1", "program.lua"))).toBe(true);
+            expect(await fs.exists(path.join(computersDir, "2", "program.lua"))).toBe(true);
+  
+            // Modify source file to trigger watch
+            await fs.writeFile(
+              path.join(sourceDir, "program.lua"),
+              "print('Updated')"
+            );
+            fileChangeDetected = true;
           } catch (err) {
-            testLog('Error during file verification:', err);
-            await syncManager.stop();
             reject(err);
           }
         });
   
-        watchLoop.once('initialSyncError', async (error) => {
-          testLog('Initial sync error:', error);
-          await syncManager.stop();
-          reject(error);
+        // Listen for file change sync
+        watchController.on("fileSync", async ({ path: changedPath, successCount, errorCount, missingCount }) => {
+          if (!initialSyncCompleted || !fileChangeDetected || fileChangeSynced) {
+            return; // Only handle the first file change after initial sync
+          }
+  
+          try {
+            fileChangeSynced = true;
+  
+            // Verify sync results
+            expect(successCount).toBe(2);
+            expect(errorCount).toBe(0);
+            expect(missingCount).toBe(0);
+            expect(changedPath).toContain("program.lua");
+  
+            // Verify updated content was copied
+            const content1 = await fs.readFile(path.join(computersDir, "1", "program.lua"), "utf8");
+            const content2 = await fs.readFile(path.join(computersDir, "2", "program.lua"), "utf8");
+            expect(content1).toBe("print('Updated')");
+            expect(content2).toBe("print('Updated')");
+  
+            // Test complete
+            await syncManager.stop();
+            resolve();
+          } catch (err) {
+            reject(err);
+          }
         });
   
-        // Add error handlers for more specific errors
-        watchLoop.on('error', (error) => {
-          testLog('Watch loop error:', error);
+        // Handle errors
+        watchController.on("fileSyncError", ({ path, error }) => {
+          reject(new Error(`File sync error for ${path}: ${error}`));
         });
   
-        watchLoop.on('validationError', (error) => {
-          testLog('Validation error:', error);
+        watchController.on("watcherError", (error) => {
+          reject(new Error(`Watcher error: ${error}`));
         });
   
-        watchLoop.on('syncError', (error) => {
-          testLog('Sync error:', error);
-        });
+        // Set timeout for test
+        const timeout = setTimeout(() => {
+          syncManager.stop();
+          reject(new Error("Test timeout - watch events not received"));
+        }, 5000);
   
+        // Clean up timeout on success
+        process.once("beforeExit", () => clearTimeout(timeout));
       } catch (err) {
-        testLog('General error:', err);
-        await syncManager.stop();
         reject(err);
       }
     });

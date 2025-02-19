@@ -27,10 +27,7 @@ interface SyncResult {
 
 export class SyncManager {
   private config: Config;
-  private watcher: ReturnType<typeof watch> | null = null;
-  private isWatching = false;
-  private keyHandler: KeyHandler | null = null;
-  private changedFiles: Set<string> = new Set();
+  private activeLoop: SyncLoop | null = null;
   private lastValidation: Readonly<{
     validation: Readonly<SyncValidation>;
     computers: ReadonlyArray<Computer>;
@@ -66,14 +63,14 @@ export class SyncManager {
   /**
    * Forces cache invalidation in specific scenarios
    */
-  private invalidateCache(): void {
+  public invalidateCache(): void {
     this.lastValidation = null;
   }
 
   /**
    * Validates sync setup and caches results for performSync
    */
-  private async runValidation(forceRefresh = false): Promise<SyncValidation> {
+  public async runValidation(forceRefresh = false): Promise<SyncValidation> {
     // Check if we can use cached validation
     if (!forceRefresh && this.isCacheValid()) {
       if (this.lastValidation?.validation) {
@@ -156,7 +153,7 @@ export class SyncManager {
   /**
    * Performs file synchronization using cached validation results
    */
-  private async performSync(validation: SyncValidation): Promise<SyncResult> {
+  public async performSync(validation: SyncValidation): Promise<SyncResult> {
     const spinner = p.spinner();
     const result: SyncResult = {
       successCount: 0,
@@ -331,12 +328,12 @@ export class SyncManager {
       this.keyHandler = new KeyHandler({
         onEsc: async () => {
           await this.cleanup();
-          p.outro("CC:Sync watch mode stopped.");
+          p.outro("CC: Sync watch mode stopped.");
           process.exit(0);
         },
         onCtrlC: async () => {
           await this.cleanup();
-          p.outro("CC:Sync program terminated.");
+          p.outro("CC: Sync program terminated.");
           process.exit(0);
         },
       });
@@ -409,7 +406,7 @@ export class SyncManager {
    * Starts manual mode for command-triggered syncing
    */
   async manualMode(): Promise<void> {
-    this.log.status(`CC:Sync manual mode started at ${getFormattedDate()}`);
+    this.log.status(`CC: Sync manual mode started at ${getFormattedDate()}`);
 
     while (true) {
       try {
@@ -450,7 +447,7 @@ export class SyncManager {
       }
     }
   }
-  private async cleanup(): Promise<void> {
+  public async cleanup(): Promise<void> {
     if (this.keyHandler) {
       this.keyHandler.stop();
       this.keyHandler = null;
@@ -467,5 +464,311 @@ export class SyncManager {
 
     this.isWatching = false;
     this.isInitialWatchSync = true;
+  }
+}
+
+
+// ---- SyncLoop ----
+// Represents the current state of a sync loop
+enum SyncLoopState {
+  IDLE = 'IDLE',
+  RUNNING = 'RUNNING',
+  STOPPING = 'STOPPING',
+  STOPPED = 'STOPPED'
+}
+
+// Base class for sync loop implementations
+abstract class SyncLoop {
+  protected state: SyncLoopState = SyncLoopState.IDLE;
+  
+  abstract start(): Promise<void>;
+  abstract stop(): Promise<void>;
+  
+  protected isRunning(): boolean {
+      return this.state === SyncLoopState.RUNNING;
+  }
+  
+  protected isStopping(): boolean {
+      return this.state === SyncLoopState.STOPPING;
+  }
+}
+
+// Manual sync mode implementation
+class ManualSyncLoop extends SyncLoop {
+  private keyHandler: KeyHandler | null = null;
+  
+  constructor(
+      private syncManager: SyncManager,
+      private log: Logger
+  ) {
+      super();
+  }
+  
+  async start(): Promise<void> {
+      if (this.state !== SyncLoopState.IDLE) {
+          throw new Error('Manual sync loop can only be started once');
+      }
+      
+      this.state = SyncLoopState.RUNNING;
+      this.log.status(`CC: Sync manual mode started at ${getFormattedDate()}`);
+      
+      while (this.isRunning()) {
+          try {
+              await this.performSyncCycle();
+              
+              if (this.isStopping()) {
+                  break;
+              }
+              
+              console.log(theme.gray("\n\n  [Press SPACE to re-sync or ESC to exit...] "));
+              await this.waitForUserInput();
+              
+          } catch (err) {
+              await this.cleanup();
+              this.log.verbose(`Sync failed: ${err}`);
+              break;
+          }
+      }
+      
+      await this.cleanup();
+      this.state = SyncLoopState.STOPPED;
+  }
+  
+  async stop(): Promise<void> {
+      if (this.state !== SyncLoopState.RUNNING) return;
+      
+      this.state = SyncLoopState.STOPPING;
+      
+      // Wait for the current sync cycle to complete
+      while (this.state !== SyncLoopState.STOPPED) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+      }
+  }
+  
+  private async performSyncCycle(): Promise<void> {
+      const validation = await this.syncManager.runValidation();
+      const { successCount, errorCount, missingCount } = await this.syncManager.performSync(validation);
+      
+      const fDate = theme.gray(`@ ${getFormattedDate()}`);
+      const totalFails = errorCount + missingCount;
+      
+      if (totalFails === 0) {
+          this.log.success(`Successful sync. ${fDate}`);
+      } else if (totalFails === validation.targetComputers.length + validation.missingComputerIds.length) {
+          this.log.error(`Sync failed. ${fDate}`);
+      } else {
+          this.log.warn(`Partial sync. ${fDate}`);
+      }
+      
+      this.log.verbose(`Sync completed with ${successCount}/${successCount + errorCount} computers updated.`);
+  }
+  
+  private waitForUserInput(): Promise<void> {
+      return new Promise<void>((resolve) => {
+          this.keyHandler = new KeyHandler({
+              onSpace: async () => {
+                  if (this.isStopping()) return;
+                  resolve();
+                  await this.cleanupKeyHandler();
+              },
+              onEsc: async () => {
+                  await this.stop();
+                  resolve();
+              },
+              onCtrlC: async () => {
+                  await this.stop();
+                  resolve();
+                  p.outro("CC:Sync program terminated.");
+                  process.exit(0);
+              },
+          });
+          
+          this.keyHandler.start();
+      });
+  }
+  
+  private async cleanupKeyHandler(): Promise<void> {
+      if (this.keyHandler) {
+          this.keyHandler.stop();
+          this.keyHandler = null;
+      }
+  }
+  
+  private async cleanup(): Promise<void> {
+      await this.cleanupKeyHandler();
+  }
+}
+
+// Watch mode implementation
+class WatchSyncLoop extends SyncLoop {
+  private watcher: ReturnType<typeof watch> | null = null;
+  private keyHandler: KeyHandler | null = null;
+  private changedFiles: Set<string> = new Set();
+  private isInitialSync = true;
+  
+  constructor(
+      private syncManager: SyncManager,
+      private config: Config,
+      private log: Logger
+  ) {
+      super();
+  }
+  
+  async start(): Promise<void> {
+      if (this.state !== SyncLoopState.IDLE) {
+          throw new Error('Watch sync loop can only be started once');
+      }
+      
+      this.state = SyncLoopState.RUNNING;
+      
+      try {
+          // Perform initial sync
+          await this.performInitialSync();
+          
+          if (this.isStopping()) {
+              await this.cleanup();
+              this.state = SyncLoopState.STOPPED;
+              return;
+          }
+          
+          // Setup key handler
+          this.setupKeyHandler();
+          
+          // Setup file watching
+          await this.setupWatcher();
+          
+          // Keep running until stopped
+          while (this.isRunning()) {
+              await new Promise(resolve => setTimeout(resolve, 100));
+          }
+          
+          await this.cleanup();
+          this.state = SyncLoopState.STOPPED;
+          
+      } catch (err) {
+          await this.cleanup();
+          throw err;
+      }
+  }
+  
+  async stop(): Promise<void> {
+      if (this.state !== SyncLoopState.RUNNING) return;
+      
+      this.state = SyncLoopState.STOPPING;
+      
+      // Wait for cleanup to complete
+      while (this.state !== SyncLoopState.STOPPED) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+      }
+  }
+  
+  private async performInitialSync(): Promise<void> {
+      const validation = await this.syncManager.runValidation(true);
+      const { successCount, errorCount, missingCount } = await this.syncManager.performSync(validation);
+      
+      const totalFails = errorCount + missingCount;
+      const fDate = theme.gray(`@ ${getFormattedDate()}`);
+      
+      if (totalFails === 0) {
+          this.log.success(`Initial sync successful. ${fDate}`);
+      } else if (totalFails === validation.targetComputers.length + validation.missingComputerIds.length) {
+          this.log.error(`Initial sync failed. ${fDate}`);
+      } else {
+          this.log.warn(`Initial sync partial. ${fDate}`);
+      }
+      
+      this.isInitialSync = false;
+  }
+  
+  private setupKeyHandler(): void {
+      this.keyHandler = new KeyHandler({
+          onEsc: async () => {
+              await this.stop();
+              p.outro("CC: Sync watch mode stopped.");
+              process.exit(0);
+          },
+          onCtrlC: async () => {
+              await this.stop();
+              p.outro("CC: Sync program terminated.");
+              process.exit(0);
+          },
+      });
+      this.keyHandler.start();
+  }
+  
+  private async setupWatcher(): Promise<void> {
+      const patterns = this.config.files.map((f) =>
+          path.join(this.config.sourcePath, f.source)
+      );
+      
+      this.watcher = watch(patterns, {
+          ignoreInitial: true,
+          awaitWriteFinish: {
+              stabilityThreshold: 300,
+              pollInterval: 100,
+          },
+      });
+      
+      this.watcher.on("change", async (changedPath) => {
+          if (!this.isRunning()) return;
+          
+          const relativePath = path.relative(this.config.sourcePath, changedPath);
+          this.changedFiles.add(relativePath);
+          
+          this.syncManager.invalidateCache();
+          this.log.status(`\nFile changed: ${changedPath}`);
+          
+          try {
+              const validation = await this.syncManager.runValidation(true);
+              const { successCount, errorCount, missingCount } = await this.syncManager.performSync(validation);
+              
+              const totalFails = errorCount + missingCount;
+              const fDate = theme.gray(`@ ${getFormattedDate()}`);
+              
+              if (totalFails === 0) {
+                  this.log.success(`Sync successful. ${fDate}`);
+              } else if (totalFails === validation.targetComputers.length + validation.missingComputerIds.length) {
+                  this.log.error(`Sync failed. ${fDate}`);
+              } else {
+                  this.log.warn(`Partial sync. ${fDate}`);
+              }
+              
+              this.logWatchStatus();
+          } catch (err) {
+              this.log.verbose(`Sync failed: ${err}`);
+              this.logWatchStatus();
+          }
+      });
+      
+      this.watcher.on("error", (error) => {
+          p.log.error(`Watch error: ${error}`);
+          this.logWatchStatus();
+      });
+      
+      this.logWatchStatus();
+  }
+  
+  private logWatchStatus(): void {
+      if (!this.isRunning()) return;
+      p.log.info("\nWatching for file changes...");
+      p.log.info("Press ESC to exit...");
+  }
+  
+  private async cleanup(): Promise<void> {
+      if (this.keyHandler) {
+          this.keyHandler.stop();
+          this.keyHandler = null;
+      }
+      
+      if (this.watcher) {
+          try {
+              await this.watcher.close();
+          } catch (err) {
+              p.log.error(`Error closing watcher: ${err}`);
+          }
+          this.watcher = null;
+      }
+      
+      this.changedFiles.clear();
   }
 }

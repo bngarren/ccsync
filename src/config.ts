@@ -97,7 +97,7 @@ export const ConfigSchema = z.object({
     required_error: "Minecraft save path is required",
     invalid_type_error: "Save path must be text",
   }),
-  computerGroups: z.record(z.string(), ComputerGroupSchema),
+  computerGroups: z.record(z.string(), ComputerGroupSchema).optional(),
   files: z.array(FileSyncRuleSchema),
   advanced: AdvancedOptionsSchema.default({
     verbose: false,
@@ -167,7 +167,7 @@ export async function loadConfig(configFilePath: string): Promise<Config> {
         )}`
       );
     } else {
-      throw new Error("Faild to load config. Ensure that syntax is correct.");
+      throw error
     }
   }
 }

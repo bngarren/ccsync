@@ -5,7 +5,7 @@ import * as p from "@clack/prompts";
 import { createDefaultConfig, findConfig, loadConfig } from "./config";
 import color from "picocolors";
 import path from "path";
-import { SyncManager } from "./sync";
+import { SyncManager } from "./sync_new";
 import { createLogger } from "./log";
 import { theme } from "./theme";
 import { toTildePath } from "./utils";
@@ -63,33 +63,40 @@ async function main() {
   p.intro(`${color.magentaBright(`CC:Sync`)}`);
 
   try {
-    const config = await initConfig()
+    const config = await initConfig();
     // Init log
-    const log = createLogger({verbose: config.advanced.verbose})
+    const log = createLogger({ verbose: config.advanced.verbose });
     const savePath = path.parse(config.minecraftSavePath);
 
     // ---- Confirm MC save location ----
 
-
     const res = await p.confirm({
-      message: `Sync with ${theme.bold(theme.warn(savePath.name))}?  ${theme.dim(toTildePath(config.minecraftSavePath))}'`,
+      message: `Sync with ${theme.bold(
+        theme.warn(savePath.name)
+      )}?  ${theme.dim(toTildePath(config.minecraftSavePath))}'`,
       initialValue: true,
     });
 
     if (p.isCancel(res) || !res) {
-      log.info("If this save instance is incorrect, change the 'minecraftSavePath' in the .ccsync.yaml to point to the one you want.")
+      log.info(
+        "If this save instance is incorrect, change the 'minecraftSavePath' in the .ccsync.yaml to point to the one you want."
+      );
       log.status("Goodbye!");
       process.exit(0);
     }
 
     // Choose mode
-    const mode: SyncMode = await p.select({
+    const mode: SyncMode = (await p.select({
       message: "Select sync mode:",
       options: [
         { value: "manual", label: "Manual mode", hint: "Sync on command" },
-        { value: "watch", label: "Watch mode", hint: "Auto-sync on file changes" },
+        {
+          value: "watch",
+          label: "Watch mode",
+          hint: "Auto-sync on file changes",
+        },
       ],
-    }) as SyncMode;
+    })) as SyncMode;
 
     if (p.isCancel(mode)) {
       log.status("Goodbye!");
@@ -98,11 +105,98 @@ async function main() {
 
     const syncManager = new SyncManager(config);
 
-    if (mode === "watch") {
-      await syncManager.startWatching();
-    } else {
-      await syncManager.manualMode();
+    // Handle process termination signals
+    const cleanup = async () => {
+      await syncManager.stop();
+      log.status("Goodbye!");
+      process.exit(0);
+    };
+
+    process.on("SIGINT", cleanup); // Ctrl+C
+    process.on("SIGTERM", cleanup); // Termination request
+
+    try {
+      if (mode === "manual") {
+        const manualLoop = await syncManager.startManualMode();
+
+        manualLoop.on(
+          "syncComplete",
+          ({ successCount, errorCount, missingCount }) => {
+            if (config.advanced.verbose) {
+              log.verbose(
+                `Sync stats: ${successCount} successful, ${errorCount} failed, ${missingCount} missing`
+              );
+            }
+          }
+        );
+
+        manualLoop.on("syncError", (error) => {
+          log.error(`Sync error: ${error}`);
+        });
+
+        manualLoop.on("stopped", () => {
+          cleanup();
+        });
+      } else {
+        const watchLoop = await syncManager.startWatchMode();
+
+        watchLoop.on("started", () => {
+          log.verbose("Watch mode started");
+        });
+
+        watchLoop.on(
+          "initialSyncComplete",
+          ({ successCount, errorCount, missingCount }) => {
+            if (config.advanced.verbose) {
+              log.verbose(
+                `Initial sync stats: ${successCount} successful, ${errorCount} failed, ${missingCount} missing`
+              );
+            }
+          }
+        );
+
+        watchLoop.on(
+          "fileSync",
+          ({ path, successCount, errorCount, missingCount }) => {
+            if (config.advanced.verbose) {
+              log.verbose(
+                `Synced ${path}: ${successCount} successful, ${errorCount} failed, ${missingCount} missing`
+              );
+            }
+          }
+        );
+
+        watchLoop.on("fileSyncError", ({ path, error }) => {
+          log.error(`Failed to sync ${path}: ${error}`);
+        });
+
+        watchLoop.on("watcherError", (error) => {
+          log.error(`Watcher error: ${error}`);
+        });
+
+        watchLoop.on("stopped", () => {
+          cleanup();
+        });
+      }
+    } catch (err) {
+      log.error(
+        `Failed to start sync: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+      await syncManager.stop();
+      process.exit(1);
     }
+
+    // Keep the process alive until explicitly terminated
+    await new Promise<void>((resolve) => {
+      const checkInterval = setInterval(() => {
+        if (!syncManager.isRunning()) {
+          clearInterval(checkInterval);
+          resolve();
+        }
+      }, 1000);
+    });
   } catch (err) {
     p.log.error(`${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);

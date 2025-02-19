@@ -210,7 +210,7 @@ export function resolveComputerIds(
 
   let invalidGroups: string[] = [];
   const resolvedIds = computersList.flatMap((entry) => {
-    const group = config.computerGroups[entry];
+    const group = config.computerGroups?.[entry]
     if (group) {
       return group.computers;
     }
@@ -220,7 +220,7 @@ export function resolveComputerIds(
 
   // Verify all groups existed
   computersList.forEach((entry) => {
-    if (!config.computerGroups[entry] && !entry.match(/^\d+$/)) {
+    if (!config.computerGroups?.[entry] && !entry.match(/^\d+$/)) {
       invalidGroups.push(entry);
     }
   });
@@ -299,7 +299,7 @@ export async function validateFileSync(
       validation.targetComputers.push(...matchingComputers);
     } catch (err) {
       validation.errors.push(
-        `Error processing config for '${rule.source}'\n ⮑  ${
+        `Error processing config file sync rule for '${rule.source}'\n ⮑  ${
           err instanceof Error ? err.message : String(err)
         }`
       );

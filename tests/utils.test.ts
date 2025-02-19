@@ -95,20 +95,6 @@ describe("Computer Discovery", () => {
     await cleanup.cleanDir(tempDir)
   });
 
-  // Just to be safe™️ -> Register cleanup handler for unexpected termination
-  process.on("exit", () => {
-    if (tempDir) {
-      // Use sync operations since we're in exit handler
-      try {
-        require("fs").rmSync(tempDir, { recursive: true, force: true });
-      } catch (err) {
-        console.warn(
-          `Warning: Failed to clean up test directory ${tempDir} during exit`
-        );
-      }
-    }
-  });
-
   test("discovers computers in save directory", async () => {
     await createTestComputer(computersDir, "0");
     await createTestComputer(computersDir, "1");
@@ -195,20 +181,6 @@ describe("File Operations", () => {
 
   afterEach(async () => {
     await cleanup.cleanDir(tempDir)
-  });
-
-  // Just to be safe™️ -> Register cleanup handler for unexpected termination
-  process.on("exit", () => {
-    if (tempDir) {
-      // Use sync operations since we're in exit handler
-      try {
-        require("fs").rmSync(tempDir, { recursive: true, force: true });
-      } catch (err) {
-        console.warn(
-          `Warning: Failed to clean up test directory ${tempDir} during exit`
-        );
-      }
-    }
   });
 
   describe("validateFileSync", () => {

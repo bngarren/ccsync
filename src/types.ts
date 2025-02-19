@@ -7,7 +7,7 @@ export enum SyncMode {
 
 // Base interface for file sync configuration in .ccsync.yaml
 export interface SyncRule {
-  source: string; // Glob pattern relative to sourcePath
+  source: string; // Glob pattern relative to sourceRoot
   target: string; // Target path on computer
   computers?: string[]; // Array of computer IDs or group names
 }
@@ -49,23 +49,36 @@ export interface SyncResult {
   missingCount: number;
 }
 
-// Event maps for each loop type
+export enum SyncEvent {
+  STARTED,
+  STOPPED,
+  SYNC_VALIDATION,
+  SYNC_COMPLETE,
+  SYNC_ERROR,
+  INITIAL_SYNC_COMPLETE,
+  INITIAL_SYNC_ERROR,
+  FILE_SYNC,
+  FILE_SYNC_ERROR,
+  WATCHER_ERROR
+}
+
+// Event maps for each mode type
 export type ManualSyncEvents = {
-  'syncValidation': ValidationResult;
-  'syncComplete': SyncResult;
-  'syncError': unknown;
-  'stopped': void;
+  [SyncEvent.SYNC_VALIDATION]: ValidationResult;
+  [SyncEvent.SYNC_COMPLETE]: SyncResult;
+  [SyncEvent.SYNC_ERROR]: unknown;
+  [SyncEvent.STOPPED]: void;
 }
 
 export type WatchSyncEvents = {
-  'started': void;
-  'syncValidation': ValidationResult;
-  'initialSyncComplete': SyncResult;
-  'initialSyncError': unknown;
-  'fileSync': { path: string } & SyncResult;
-  'fileSyncError': { path: string; error: unknown };
-  'watcherError': unknown;
-  'stopped': void;
+  [SyncEvent.STARTED]: void;
+  [SyncEvent.SYNC_VALIDATION]: ValidationResult;
+  [SyncEvent.INITIAL_SYNC_COMPLETE]: SyncResult;
+  [SyncEvent.INITIAL_SYNC_ERROR]: unknown;
+  [SyncEvent.FILE_SYNC]: { path: string } & SyncResult;
+  [SyncEvent.FILE_SYNC_ERROR]: { path: string; error: unknown };
+  [SyncEvent.WATCHER_ERROR]: unknown;
+  [SyncEvent.STOPPED]: void;
 }
 
 // Type-safe event emitter factory

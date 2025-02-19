@@ -43,11 +43,17 @@ export async function createTestSave(saveDir: string) {
  * @param computersDir Full path to the computercraft/computers directory
  * @param id Computer ID must be a non-negative integer (string)
  */
-export async function createTestComputer(computersDir: string, id: string) {
+export async function createTestComputer(
+  computersDir: string,
+  id: string,
+  options: { createStartup?: boolean } = { createStartup: true }
+) {
   const computerDir = path.join(computersDir, id);
   await mkdir(computerDir, { recursive: true });
   // Add a dummy file to simulate computer data
-  await writeFile(path.join(computerDir, "startup.lua"), "");
+  if (options.createStartup) {
+    await writeFile(path.join(computerDir, "startup.lua"), "");
+  }
 }
 
 /**

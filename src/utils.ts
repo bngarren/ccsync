@@ -252,14 +252,14 @@ export async function validateFileSync(
     try {
       // Find all matching source files
       const sourceFiles = await glob(rule.source, {
-        cwd: config.sourcePath,
+        cwd: config.sourceRoot,
         absolute: true,
       });
 
       // Filter by changed files if in watch mode
       const relevantFiles = changedFiles
         ? sourceFiles.filter((file) =>
-            changedFiles.has(path.relative(config.sourcePath, file))
+            changedFiles.has(path.relative(config.sourceRoot, file))
           )
         : sourceFiles;
 

@@ -200,7 +200,7 @@ describe("File Operations", () => {
   describe("validateFileSync", () => {
     test("validates files and returns correct structure", async () => {
       const config: Config = withDefaultConfig({
-        sourcePath: sourceDir,
+        sourceRoot: sourceDir,
         minecraftSavePath: testSaveDir,
         rules: [
           { source: "program.lua", target: "/program.lua", computers: ["1"] },
@@ -224,7 +224,7 @@ describe("File Operations", () => {
 
     test("handles missing files", async () => {
       const config: Config = withDefaultConfig({
-        sourcePath: sourceDir,
+        sourceRoot: sourceDir,
         minecraftSavePath: testSaveDir,
         rules: [
           { source: "missing.lua", target: "/missing.lua", computers: ["1"] },
@@ -246,7 +246,7 @@ describe("File Operations", () => {
 
     test("handles changedFiles filter in watch mode", async () => {
       const config: Config = withDefaultConfig({
-        sourcePath: sourceDir,
+        sourceRoot: sourceDir,
         minecraftSavePath: testSaveDir,
         rules: [
           { source: "program.lua", target: "/program.lua", computers: ["1"] },
@@ -597,7 +597,7 @@ describe("File Operations", () => {
     await writeFile(path.join(sourceDir, "apis/json.lua"), "-- JSON API");
 
     const config: Config = withDefaultConfig({
-      sourcePath: sourceDir,
+      sourceRoot: sourceDir,
       minecraftSavePath: testSaveDir,
       computerGroups: {
         network: {
@@ -674,7 +674,7 @@ describe("File Operations", () => {
 
   test("handles invalid computer groups", async () => {
     const config: Config = withDefaultConfig({
-      sourcePath: sourceDir,
+      sourceRoot: sourceDir,
       minecraftSavePath: testSaveDir,
       rules: [
         {
@@ -700,7 +700,7 @@ describe("File Operations", () => {
 
   test("handles mixed computer IDs and groups", async () => {
     const config: Config = withDefaultConfig({
-      sourcePath: sourceDir,
+      sourceRoot: sourceDir,
       minecraftSavePath: testSaveDir,
       computerGroups: {
         network: {

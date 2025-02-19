@@ -9,6 +9,7 @@ import {
   createTypedEmitter,
   type ManualSyncEvents,
   type WatchSyncEvents,
+  SyncEvent,
 } from "./types";
 import {
   validateSaveDir as validateMinecraftSave,
@@ -24,7 +25,10 @@ import { setTimeout } from "node:timers/promises";
 
 export class SyncManager {
   private log: Logger;
-  private activeModeController: ManualModeController | WatchModeController | null = null;
+  private activeModeController:
+    | ManualModeController
+    | WatchModeController
+    | null = null;
   private lastValidation: Readonly<{
     validation: Readonly<ValidationResult>;
     computers: ReadonlyArray<Computer>;
@@ -79,7 +83,9 @@ export class SyncManager {
     }
 
     // Discover computers
-    const computers = await findMinecraftComputers(this.config.minecraftSavePath);
+    const computers = await findMinecraftComputers(
+      this.config.minecraftSavePath
+    );
     if (computers.length === 0) {
       this.log.error("No computers found in the save directory.");
       this.log.info(
@@ -88,7 +94,7 @@ export class SyncManager {
       throw new Error("No computers found in the save directory");
     }
 
-    // Get changed files from watch loop if applicable
+    // Get changed files from watch mode if applicable
     const changedFiles =
       this.activeModeController instanceof WatchModeController
         ? this.activeModeController.getChangedFiles()
@@ -137,7 +143,7 @@ export class SyncManager {
     // Initialize results map for each file
     for (const file of validation.resolvedFileRules) {
       const relativePath = path.relative(
-        this.config.sourcePath,
+        this.config.sourceRoot,
         file.sourcePath
       );
       fileResults.set(relativePath, []);
@@ -162,7 +168,7 @@ export class SyncManager {
         // Record successful copies
         computerFiles.forEach((file) => {
           const relativePath = path.relative(
-            this.config.sourcePath,
+            this.config.sourceRoot,
             file.sourcePath
           );
           const results = fileResults.get(relativePath) ?? [];
@@ -174,7 +180,7 @@ export class SyncManager {
         // Record failed copies
         computerFiles.forEach((file) => {
           const relativePath = path.relative(
-            this.config.sourcePath,
+            this.config.sourceRoot,
             file.sourcePath
           );
           const results = fileResults.get(relativePath) ?? [];
@@ -195,7 +201,7 @@ export class SyncManager {
     // Display final status for each file
     for (const [filePath, results] of fileResults.entries()) {
       const file = validation.resolvedFileRules.find(
-        (f) => path.relative(this.config.sourcePath, f.sourcePath) === filePath
+        (f) => path.relative(this.config.sourceRoot, f.sourcePath) === filePath
       );
       if (!file) continue;
 
@@ -236,29 +242,33 @@ export class SyncManager {
     return result;
   }
 
-  // Loop management
+  // Mode management
   async startManualMode(): Promise<ManualModeController> {
     if (this.activeModeController) {
-      throw new Error("A sync loop is already running");
+      throw new Error("A sync mode is already running");
     }
 
-    const manualLoop = new ManualModeController(this, this.log);
-    this.activeModeController = manualLoop;
-    // Start the loop but don't await it
-    manualLoop.start();
-    return manualLoop;
+    const manualController = new ManualModeController(this, this.log);
+    this.activeModeController = manualController;
+    // Start the mode but don't await it
+    manualController.start();
+    return manualController;
   }
 
   async startWatchMode(): Promise<WatchModeController> {
     if (this.activeModeController) {
-      throw new Error("A sync loop is already running");
+      throw new Error("A sync mode is already running");
     }
 
-    const watchLoop = new WatchModeController(this, this.config, this.log);
-    this.activeModeController = watchLoop;
-    // Start the loop but don't await it
-    watchLoop.start();
-    return watchLoop;
+    const watchController = new WatchModeController(
+      this,
+      this.config,
+      this.log
+    );
+    this.activeModeController = watchController;
+    // Start the mode but don't await it
+    watchController.start();
+    return watchController;
   }
 
   async stop(): Promise<void> {
@@ -312,7 +322,7 @@ class ManualModeController {
 
   async start(): Promise<void> {
     if (this.isRunning) {
-      throw new Error("Manual sync loop is already running");
+      throw new Error("Manual sync mode is already running");
     }
 
     this.isRunning = true;
@@ -339,14 +349,14 @@ class ManualModeController {
   async stop(): Promise<void> {
     this.isRunning = false;
     await this.cleanup();
-    this.emit("stopped");
+    this.emit(SyncEvent.STOPPED);
   }
 
   private async performSyncCycle(): Promise<void> {
     try {
       const validation = await this.syncManager.runValidation();
 
-      this.emit("syncValidation", validation);
+      this.emit(SyncEvent.SYNC_VALIDATION, validation);
 
       const { successCount, errorCount, missingCount } =
         await this.syncManager.performSync(validation);
@@ -358,7 +368,8 @@ class ManualModeController {
         this.log.success(`Successful sync. ${fDate}`);
       } else if (
         totalFails ===
-        validation.availableComputers.length + validation.missingComputerIds.length
+        validation.availableComputers.length +
+          validation.missingComputerIds.length
       ) {
         this.log.error(`Sync failed. ${fDate}`);
       } else {
@@ -371,10 +382,14 @@ class ManualModeController {
         } computers updated.`
       );
 
-      this.emit("syncComplete", { successCount, errorCount, missingCount });
+      this.emit(SyncEvent.SYNC_COMPLETE, {
+        successCount,
+        errorCount,
+        missingCount,
+      });
     } catch (err) {
       this.log.error(`Sync cycle failed: ${err}`);
-      this.emit("syncError", err);
+      this.emit(SyncEvent.SYNC_ERROR, err);
       throw err;
     }
   }
@@ -468,7 +483,7 @@ class WatchModeController {
 
   async start(): Promise<void> {
     if (this.isRunning) {
-      throw new Error("Watch sync loop is already running");
+      throw new Error("Watch sync mode is already running");
     }
 
     this.isRunning = true;
@@ -481,7 +496,7 @@ class WatchModeController {
       this.setupKeyHandler();
       await this.setupWatcher();
 
-      this.emit("started");
+      this.emit(SyncEvent.STARTED);
 
       // Keep running until stopped
       while (this.isRunning) {
@@ -497,7 +512,7 @@ class WatchModeController {
   async stop(): Promise<void> {
     this.isRunning = false;
     await this.cleanup();
-    this.emit("stopped");
+    this.emit(SyncEvent.STOPPED);
   }
 
   getChangedFiles(): Set<string> | undefined {
@@ -507,7 +522,7 @@ class WatchModeController {
   private async performInitialSync(): Promise<void> {
     try {
       const validation = await this.syncManager.runValidation(true);
-      this.emit("syncValidation", validation);
+      this.emit(SyncEvent.SYNC_VALIDATION, validation);
 
       const { successCount, errorCount, missingCount } =
         await this.syncManager.performSync(validation);
@@ -519,7 +534,8 @@ class WatchModeController {
         this.log.success(`Initial sync successful. ${fDate}`);
       } else if (
         totalFails ===
-        validation.availableComputers.length + validation.missingComputerIds.length
+        validation.availableComputers.length +
+          validation.missingComputerIds.length
       ) {
         this.log.error(`Initial sync failed. ${fDate}`);
       } else {
@@ -527,13 +543,13 @@ class WatchModeController {
       }
 
       this.isInitialSync = false;
-      this.emit("initialSyncComplete", {
+      this.emit(SyncEvent.INITIAL_SYNC_COMPLETE, {
         successCount,
         errorCount,
         missingCount,
       });
     } catch (err) {
-      this.emit("initialSyncError", err);
+      this.emit(SyncEvent.INITIAL_SYNC_ERROR, err);
       throw err;
     }
   }
@@ -561,7 +577,7 @@ class WatchModeController {
 
   private async setupWatcher(): Promise<void> {
     const patterns = this.config.rules.map((f) =>
-      path.join(this.config.sourcePath, f.source)
+      path.join(this.config.sourceRoot, f.source)
     );
 
     this.watcher = watch(patterns, {
@@ -575,7 +591,7 @@ class WatchModeController {
     this.watcher.on("change", async (changedPath) => {
       if (!this.isRunning) return;
 
-      const relativePath = path.relative(this.config.sourcePath, changedPath);
+      const relativePath = path.relative(this.config.sourceRoot, changedPath);
       this.changedFiles.add(relativePath);
 
       this.syncManager.invalidateCache();
@@ -583,7 +599,7 @@ class WatchModeController {
 
       try {
         const validation = await this.syncManager.runValidation(true);
-        this.emit("syncValidation", validation);
+        this.emit(SyncEvent.SYNC_VALIDATION, validation);
         const { successCount, errorCount, missingCount } =
           await this.syncManager.performSync(validation);
 
@@ -603,7 +619,7 @@ class WatchModeController {
         }
 
         this.logWatchStatus();
-        this.emit("fileSync", {
+        this.emit(SyncEvent.FILE_SYNC, {
           path: changedPath,
           successCount,
           errorCount,
@@ -614,14 +630,14 @@ class WatchModeController {
         this.changedFiles.clear();
       } catch (err) {
         this.log.verbose(`Sync failed: ${err}`);
-        this.emit("fileSyncError", { path: changedPath, error: err });
+        this.emit(SyncEvent.FILE_SYNC_ERROR, { path: changedPath, error: err });
         this.logWatchStatus();
       }
     });
 
     this.watcher.on("error", (error) => {
       this.log.error(`Watch error: ${error}`);
-      this.emit("watcherError", error);
+      this.emit(SyncEvent.WATCHER_ERROR, error);
       this.logWatchStatus();
     });
 

@@ -168,7 +168,7 @@ export class SyncManager {
     // Initialize results map
     for (const file of validation.resolvedFileRules) {
       const relativePath = path.relative(
-        this.config.sourcePath,
+        this.config.sourceRoot,
         file.sourcePath
       );
       fileResults.set(relativePath, []);
@@ -193,7 +193,7 @@ export class SyncManager {
         // Record successful copies
         computerFiles.forEach((file) => {
           const relativePath = path.relative(
-            this.config.sourcePath,
+            this.config.sourceRoot,
             file.sourcePath
           );
           const results = fileResults.get(relativePath) ?? [];
@@ -205,7 +205,7 @@ export class SyncManager {
         // Record failed copies
         computerFiles.forEach((file) => {
           const relativePath = path.relative(
-            this.config.sourcePath,
+            this.config.sourceRoot,
             file.sourcePath
           );
           const results = fileResults.get(relativePath) ?? [];
@@ -226,7 +226,7 @@ export class SyncManager {
     // Display final status for each file
     for (const [filePath, results] of fileResults.entries()) {
       const file = validation.resolvedFileRules.find(
-        (f) => path.relative(this.config.sourcePath, f.sourcePath) === filePath
+        (f) => path.relative(this.config.sourceRoot, f.sourcePath) === filePath
       );
       if (!file) continue;
 
@@ -322,7 +322,7 @@ export class SyncManager {
 
       // Setup file watching
       const patterns = this.config.files.map((f) =>
-        path.join(this.config.sourcePath, f.source)
+        path.join(this.config.sourceRoot, f.source)
       );
 
       this.keyHandler = new KeyHandler({
@@ -350,7 +350,7 @@ export class SyncManager {
       this.watcher.on("change", async (changedPath) => {
         if (!this.isWatching) return;
 
-        const relativePath = path.relative(this.config.sourcePath, changedPath);
+        const relativePath = path.relative(this.config.sourceRoot, changedPath);
         this.changedFiles.add(relativePath);
 
         this.invalidateCache(); // Invalidate cache when files change
@@ -698,7 +698,7 @@ class WatchSyncLoop extends SyncLoop {
   
   private async setupWatcher(): Promise<void> {
       const patterns = this.config.files.map((f) =>
-          path.join(this.config.sourcePath, f.source)
+          path.join(this.config.sourceRoot, f.source)
       );
       
       this.watcher = watch(patterns, {
@@ -712,7 +712,7 @@ class WatchSyncLoop extends SyncLoop {
       this.watcher.on("change", async (changedPath) => {
           if (!this.isRunning()) return;
           
-          const relativePath = path.relative(this.config.sourcePath, changedPath);
+          const relativePath = path.relative(this.config.sourceRoot, changedPath);
           this.changedFiles.add(relativePath);
           
           this.syncManager.invalidateCache();

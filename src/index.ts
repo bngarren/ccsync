@@ -9,7 +9,7 @@ import { SyncManager } from "./sync";
 import { createLogger } from "./log";
 import { theme } from "./theme";
 import { toTildePath } from "./utils";
-import type { SyncMode } from "./types";
+import { SyncEvent, type SyncMode } from "./types";
 
 const initConfig = async () => {
   // Find all config files
@@ -117,10 +117,10 @@ async function main() {
 
     try {
       if (mode === "manual") {
-        const manualLoop = await syncManager.startManualMode();
+        const manualController = await syncManager.startManualMode();
 
-        manualLoop.on(
-          "syncComplete",
+        manualController.on(
+          SyncEvent.SYNC_COMPLETE,
           ({ successCount, errorCount, missingCount }) => {
             log.verbose(
               `Sync stats: ${successCount} successful, ${errorCount} failed, ${missingCount} missing`
@@ -128,22 +128,22 @@ async function main() {
           }
         );
 
-        manualLoop.on("syncError", (error) => {
+        manualController.on(SyncEvent.SYNC_ERROR, (error) => {
           log.error(`Sync error: ${error}`);
         });
 
-        manualLoop.on("stopped", () => {
+        manualController.on(SyncEvent.STOPPED, () => {
           cleanup();
         });
       } else {
-        const watchLoop = await syncManager.startWatchMode();
+        const watchController = await syncManager.startWatchMode();
 
-        watchLoop.on("started", () => {
+        watchController.on(SyncEvent.STARTED, () => {
           log.verbose("Watch mode started");
         });
 
-        watchLoop.on(
-          "initialSyncComplete",
+        watchController.on(
+          SyncEvent.INITIAL_SYNC_COMPLETE,
           ({ successCount, errorCount, missingCount }) => {
             if (config.advanced.verbose) {
               log.verbose(
@@ -153,8 +153,8 @@ async function main() {
           }
         );
 
-        watchLoop.on(
-          "fileSync",
+        watchController.on(
+          SyncEvent.FILE_SYNC,
           ({ path, successCount, errorCount, missingCount }) => {
             if (config.advanced.verbose) {
               log.verbose(
@@ -164,15 +164,15 @@ async function main() {
           }
         );
 
-        watchLoop.on("fileSyncError", ({ path, error }) => {
+        watchController.on(SyncEvent.FILE_SYNC_ERROR, ({ path, error }) => {
           log.error(`Failed to sync ${path}: ${error}`);
         });
 
-        watchLoop.on("watcherError", (error) => {
+        watchController.on(SyncEvent.WATCHER_ERROR, (error) => {
           log.error(`Watcher error: ${error}`);
         });
 
-        watchLoop.on("stopped", () => {
+        watchController.on(SyncEvent.STOPPED, () => {
           cleanup();
         });
       }

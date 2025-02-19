@@ -10,10 +10,10 @@
 <br />
 <div align="center">
   <a href="https://github.com/bngarren/ccsync">
-    <img src="assets/icon.svg" alt="Logo" width="100" height="100">
+    <img src="assets/icon.svg" alt="Logo" width="150" height="150">
   </a>
 
-  <h3 align="center">CC: Sync</h3>
+  <h1 align="center">CC: Sync</h3>
 
 </div>
 
@@ -160,9 +160,9 @@ bun add -g @bngarren/ccsync
 cd my-cc-project
 ```
 
-### 2. Initialize CC:Sync:
+### 2. Initialize CC: Sync:
 
-Run CC:Sync once to automatically generate a config file
+Run CC: Sync once to automatically generate a config file
 
 ```sh
 npx @bngarren/ccsync
@@ -170,9 +170,9 @@ npx @bngarren/ccsync
 
 ### 3. Edit the generated `.ccsync.yaml` configuration file:
 
-#### Example
+#### Basic Example
 ```yaml
-sourcePath: "./src"
+sourceRoot: "./src"
 minecraftSavePath: "~/minecraft/saves/my_world"
 
 computerGroups:
@@ -180,7 +180,7 @@ computerGroups:
     name: "Monitor Network"
     computers: ["1", "2", "3"]
 
-files:
+rules:
   - source: "startup.lua"
     target: "startup.lua"
     computers: ["0"]
@@ -190,7 +190,7 @@ files:
     computers: "monitors"
 ```
 
-### 4. Run CC:Sync:
+### 4. Run CC: Sync:
 
 ```sh
 npx @bngarren/ccsync
@@ -199,22 +199,23 @@ npx @bngarren/ccsync
 ## Modes
 
 - **Manual mode**: you trigger when the files are synced (i.e. copied from project to Minecraft computers)
-- **Watch mode**: watches tracked files for changes and will automatically re-sync. Leave it running in a shell while you code 😎
+- **Watch mode**: watches all files identified by the config's `rules` for changes and will automatically re-sync. Leave it running in a shell while you code 😎
 
 ## Configuration
-These are defined in the `.ccsync.yaml` file in your project root.
+The config for CC: Sync is a `.ccsync.yaml` file in your project root. If no file is present, running the CLI will generate a default config file.
 
 ### Basic Options
 
-- **sourcePath**: Directory containing your source files
-- **minecraftSavePath**: Path to your Minecraft save directory
+- **sourceRoot**: Directory containing your source files (relative to the location of the `.ccsync.yaml` file)
+- **minecraftSavePath**: Path to your Minecraft save directory. See [Where is my Minecraft save?](#where-is-my-minecraft-save)
 - **computerGroups**: Define groups of computers for easier targeting
-- **files**: Array of file → computer(s) sync rules. Each sync rule requires:
-  - **source**: File or glob pattern to sync (relative to sourcePath)
+- **rules**: Array of file → computer(s) sync rules. Each sync rule requires:
+  - **source**: File or glob pattern to sync (relative to *sourceRoot*)
   - **target**: Destination path on the computer
   - **computers**: Computer IDs or group names to sync to
 
 ### Advanced Options
+These shouldn't need to be modified--mostly for debugging and performance.
 
 - **verbose**: Enable detailed logging
 - **cache_ttl**: Cache duration in milliseconds
@@ -232,7 +233,7 @@ Below are some common places to look based on your operating system. However, if
 
 ### Problem: No Computers Found
 
-If CC:Sync can't find your computers:
+If CC: Sync can't find your computers:
 
 - Verify the save path in .ccsync.yaml
 - Ensure computers exist in-game and are loaded

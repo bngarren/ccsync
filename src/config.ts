@@ -10,7 +10,7 @@ import { merge } from "ts-deepmerge";
 const DEFAULT_CONFIG_FILENAME = ".ccsync.yaml";
 
 const DEFAULT_CONFIG: Config = {
-  sourcePath: "./src",
+  sourceRoot: "./src",
   minecraftSavePath: "~/minecraft/saves/world",
   computerGroups: {},
   rules: [],
@@ -89,7 +89,7 @@ const AdvancedOptionsSchema = z.object({
 });
 
 export const ConfigSchema = z.object({
-  sourcePath: z.string({
+  sourceRoot: z.string({
     required_error: "Source path is required",
     invalid_type_error: "Source path must be text",
   }),
@@ -152,7 +152,7 @@ export async function loadConfig(configFilePath: string): Promise<Config> {
       // Resolve all paths in the config
       return {
         ...validatedConfig,
-        sourcePath: resolvePath(validatedConfig.sourcePath),
+        sourceRoot: resolvePath(validatedConfig.sourceRoot),
         minecraftSavePath: resolvePath(validatedConfig.minecraftSavePath),
       };
     } catch (err) {
@@ -178,10 +178,10 @@ export const createDefaultConfig = async (projectDir: string) => {
 # This file configures how CC:Sync copies files to your ComputerCraft computers
 
 # Where your source files are located (relative to this config file)
-sourcePath: "${DEFAULT_CONFIG.sourcePath}"
+sourceRoot: "${DEFAULT_CONFIG.sourceRoot}"
 
 # Path to your Minecraft world save
-# Use ~ for your home directory
+# Can use ~ for your home directory
 # Example Windows: "~/AppData/Roaming/.minecraft/saves/my_world"
 # Example Linux: "~/.minecraft/saves/my_world"
 minecraftSavePath: "${DEFAULT_CONFIG.minecraftSavePath}"
@@ -197,7 +197,7 @@ computerGroups: {}
 rules: []
   # Examples:
   # Sync to a specific computer:
-  # - source: "startup.lua"    # File in your sourcePath
+  # - source: "startup.lua"    # File in your sourceRoot
   #   target: "startup.lua"    # Where to put it on the computer
   #   computers: ["1"]         # Computer IDs to sync to
   #

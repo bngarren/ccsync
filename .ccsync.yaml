@@ -2,7 +2,7 @@
 # This file configures how CC:Sync copies files to your ComputerCraft computers
 
 # Where your source files are located (relative to this config file)
-sourcePath: "./examples/test1"
+sourceRoot: "./examples/test1"
 
 # Path to your Minecraft world save
 # Use ~ for your home directory
@@ -20,7 +20,7 @@ computerGroups:
 rules:
   # Examples:
   # Sync to a specific computer:
-  - source: "test.lua"    # File in your sourcePath
+  - source: "test.lua"    # File in your sourceRoot
     target: "test.lua"    # Where to put it on the computer
     computers: ["monitors"]         # Computer IDs to sync to
   #

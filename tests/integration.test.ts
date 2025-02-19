@@ -1,7 +1,7 @@
 import { expect, test, describe, beforeEach, afterEach, mock } from "bun:test";
 import * as fs from "node:fs/promises";
 import path from "path";
-import { loadConfig } from "../src/config";
+import { loadConfig, type Config } from "../src/config";
 import { SyncManager } from "../src/sync";
 import {
   TempCleaner,
@@ -13,6 +13,7 @@ import {
 } from "./test-helpers";
 import { testLog } from "./setup";
 import { stringify } from "yaml";
+import { SyncEvent } from "../src/types";
 
 describe("Integration: SyncManager", () => {
   let tempDir: string;
@@ -48,7 +49,7 @@ describe("Integration: SyncManager", () => {
   test("performs manual sync", async () => {
     const configPath = path.join(tempDir, ".ccsync.yaml");
     const configObject = {
-      sourcePath: sourceDir,
+      sourceRoot: sourceDir,
       minecraftSavePath: savePath,
       rules: [
         { source: "program.lua", target: "/program.lua", computers: ["1"] },
@@ -68,7 +69,7 @@ describe("Integration: SyncManager", () => {
       try {
         const manualLoop = await syncManager.startManualMode();
 
-        manualLoop.on("syncComplete", async ({ successCount }) => {
+        manualLoop.on(SyncEvent.SYNC_COMPLETE, async ({ successCount }) => {
           try {
             const targetFile = path.join(computersDir, "1", "program.lua");
             expect(await fs.exists(targetFile)).toBe(true);
@@ -82,7 +83,7 @@ describe("Integration: SyncManager", () => {
           }
         });
 
-        manualLoop.on("syncError", (error) => {
+        manualLoop.on(SyncEvent.SYNC_ERROR, (error) => {
           syncManager.stop();
           reject(error);
         });
@@ -96,111 +97,298 @@ describe("Integration: SyncManager", () => {
   test("handles file changes in watch mode", async () => {
     const configPath = path.join(tempDir, ".ccsync.yaml");
     const configObject = {
-      sourcePath: sourceDir,
+      sourceRoot: sourceDir,
       minecraftSavePath: savePath,
       rules: [
         {
           source: "program.lua",
           target: "/program.lua",
           computers: ["1", "2"],
-        }
+        },
       ],
       advanced: {
         verbose: true,
       },
     };
-  
+
     const configContent = stringify(configObject);
     await fs.writeFile(configPath, configContent);
-  
+
     // Create target computers
-    await createTestComputer(computersDir, "1")
-    await createTestComputer(computersDir, "2")
-  
+    await createTestComputer(computersDir, "1");
+    await createTestComputer(computersDir, "2");
+
     const config = await loadConfig(configPath);
     const syncManager = new SyncManager(config);
-  
+
     return new Promise<void>(async (resolve, reject) => {
       try {
         const watchController = await syncManager.startWatchMode();
-        
+
         // Track test phases
         let initialSyncCompleted = false;
         let fileChangeDetected = false;
         let fileChangeSynced = false;
-  
+
         // Listen for initial sync completion
-        watchController.on("initialSyncComplete", async ({ successCount, errorCount, missingCount }) => {
-          try {
-            initialSyncCompleted = true;
-            
-            // Verify initial sync results
-            expect(successCount).toBe(2); // Both computers synced
-            expect(errorCount).toBe(0);
-            expect(missingCount).toBe(0);
-  
-            // Verify files were copied
-            expect(await fs.exists(path.join(computersDir, "1", "program.lua"))).toBe(true);
-            expect(await fs.exists(path.join(computersDir, "2", "program.lua"))).toBe(true);
-  
-            // Modify source file to trigger watch
-            await fs.writeFile(
-              path.join(sourceDir, "program.lua"),
-              "print('Updated')"
-            );
-            fileChangeDetected = true;
-          } catch (err) {
-            reject(err);
+        watchController.on(
+          SyncEvent.INITIAL_SYNC_COMPLETE,
+          async ({ successCount, errorCount, missingCount }) => {
+            try {
+              initialSyncCompleted = true;
+
+              // Verify initial sync results
+              expect(successCount).toBe(2); // Both computers synced
+              expect(errorCount).toBe(0);
+              expect(missingCount).toBe(0);
+
+              // Verify files were copied
+              expect(
+                await fs.exists(path.join(computersDir, "1", "program.lua"))
+              ).toBe(true);
+              expect(
+                await fs.exists(path.join(computersDir, "2", "program.lua"))
+              ).toBe(true);
+
+              // Modify source file to trigger watch
+              await fs.writeFile(
+                path.join(sourceDir, "program.lua"),
+                "print('Updated')"
+              );
+              fileChangeDetected = true;
+            } catch (err) {
+              reject(err);
+            }
           }
-        });
-  
+        );
+
         // Listen for file change sync
-        watchController.on("fileSync", async ({ path: changedPath, successCount, errorCount, missingCount }) => {
-          if (!initialSyncCompleted || !fileChangeDetected || fileChangeSynced) {
-            return; // Only handle the first file change after initial sync
+        watchController.on(
+          SyncEvent.FILE_SYNC,
+          async ({
+            path: changedPath,
+            successCount,
+            errorCount,
+            missingCount,
+          }) => {
+            if (
+              !initialSyncCompleted ||
+              !fileChangeDetected ||
+              fileChangeSynced
+            ) {
+              return; // Only handle the first file change after initial sync
+            }
+
+            try {
+              fileChangeSynced = true;
+
+              // Verify sync results
+              expect(successCount).toBe(2);
+              expect(errorCount).toBe(0);
+              expect(missingCount).toBe(0);
+              expect(changedPath).toContain("program.lua");
+
+              // Verify updated content was copied
+              const content1 = await fs.readFile(
+                path.join(computersDir, "1", "program.lua"),
+                "utf8"
+              );
+              const content2 = await fs.readFile(
+                path.join(computersDir, "2", "program.lua"),
+                "utf8"
+              );
+              expect(content1).toBe("print('Updated')");
+              expect(content2).toBe("print('Updated')");
+
+              // Test complete
+              await syncManager.stop();
+              resolve();
+            } catch (err) {
+              reject(err);
+            }
           }
-  
-          try {
-            fileChangeSynced = true;
-  
-            // Verify sync results
-            expect(successCount).toBe(2);
-            expect(errorCount).toBe(0);
-            expect(missingCount).toBe(0);
-            expect(changedPath).toContain("program.lua");
-  
-            // Verify updated content was copied
-            const content1 = await fs.readFile(path.join(computersDir, "1", "program.lua"), "utf8");
-            const content2 = await fs.readFile(path.join(computersDir, "2", "program.lua"), "utf8");
-            expect(content1).toBe("print('Updated')");
-            expect(content2).toBe("print('Updated')");
-  
-            // Test complete
-            await syncManager.stop();
-            resolve();
-          } catch (err) {
-            reject(err);
-          }
-        });
-  
+        );
+
         // Handle errors
-        watchController.on("fileSyncError", ({ path, error }) => {
+        watchController.on(SyncEvent.FILE_SYNC_ERROR, ({ path, error }) => {
           reject(new Error(`File sync error for ${path}: ${error}`));
         });
-  
-        watchController.on("watcherError", (error) => {
+
+        watchController.on(SyncEvent.WATCHER_ERROR, (error) => {
           reject(new Error(`Watcher error: ${error}`));
         });
-  
+
         // Set timeout for test
         const timeout = setTimeout(() => {
           syncManager.stop();
           reject(new Error("Test timeout - watch events not received"));
         }, 5000);
-  
+
         // Clean up timeout on success
         process.once("beforeExit", () => clearTimeout(timeout));
       } catch (err) {
+        reject(err);
+      }
+    });
+  });
+
+  test("handles multiple sync rules with complex patterns", async () => {
+    const configPath = path.join(tempDir, ".ccsync.yaml");
+
+    // Create additional test files
+    await fs.mkdir(path.join(sourceDir, "programs"), { recursive: true });
+    await fs.mkdir(path.join(sourceDir, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(sourceDir, "programs/main.lua"),
+      "print('Main Program')"
+    );
+    await fs.writeFile(
+      path.join(sourceDir, "programs/util.lua"),
+      "print('Utility')"
+    );
+    await fs.writeFile(
+      path.join(sourceDir, "scripts/startup.lua"),
+      "print('Custom Startup')"
+    );
+
+    const configObject = {
+      sourceRoot: sourceDir,
+      minecraftSavePath: savePath,
+      rules: [
+        // Rule 1: Copy all program files to root directory
+        {
+          source: "programs/*.lua",
+          target: "/",
+          computers: ["1"],
+        },
+        // Rule 2: Copy the same program files to a subdirectory
+        {
+          source: "programs/*.lua",
+          target: "/backup/",
+          computers: ["1"],
+        },
+        // Rule 3: Copy specific file to multiple locations
+        {
+          source: "scripts/startup.lua",
+          target: "/startup.lua",
+          computers: ["1"],
+        },
+        {
+          source: "scripts/startup.lua",
+          target: "/system/startup.lua",
+          computers: ["1"],
+        },
+        // Rule 4: Overlapping glob pattern
+        {
+          source: "**/*.lua",
+          target: "/all/",
+          computers: ["2"],
+        },
+      ],
+      advanced: {
+        verbose: true,
+      },
+    };
+
+    const configContent = stringify(configObject);
+    await fs.writeFile(configPath, configContent);
+
+    // Create target computers
+    await createTestComputer(computersDir, "1", { createStartup: false });
+    await createTestComputer(computersDir, "2", { createStartup: false });
+
+    const config = await loadConfig(configPath);
+    const syncManager = new SyncManager(config);
+
+    // Start manual mode and wait for sync
+    return new Promise<void>(async (resolve, reject) => {
+      try {
+        const manualController = await syncManager.startManualMode();
+
+        manualController.on(
+          SyncEvent.SYNC_COMPLETE,
+          async ({ successCount, errorCount, missingCount }) => {
+            try {
+              // Verify sync statistics
+              expect(successCount).toBe(2); // Both computers synced
+              expect(errorCount).toBe(0);
+              expect(missingCount).toBe(0);
+
+              // Computer 1: Verify files in root directory
+              const computer1Dir = path.join(computersDir, "1");
+              expect(await fs.exists(path.join(computer1Dir, "main.lua"))).toBe(
+                true
+              );
+              expect(await fs.exists(path.join(computer1Dir, "util.lua"))).toBe(
+                true
+              );
+
+              // Computer 1: Verify files in backup directory
+              expect(
+                await fs.exists(path.join(computer1Dir, "backup", "main.lua"))
+              ).toBe(true);
+              expect(
+                await fs.exists(path.join(computer1Dir, "backup", "util.lua"))
+              ).toBe(true);
+
+              // Computer 1: Verify startup file in multiple locations
+              expect(
+                await fs.exists(path.join(computer1Dir, "startup.lua"))
+              ).toBe(true);
+              expect(
+                await fs.exists(
+                  path.join(computer1Dir, "system", "startup.lua")
+                )
+              ).toBe(true);
+
+              // Verify content is identical for duplicated files
+              const startupContent1 = await fs.readFile(
+                path.join(computer1Dir, "startup.lua"),
+                "utf8"
+              );
+              const startupContent2 = await fs.readFile(
+                path.join(computer1Dir, "system", "startup.lua"),
+                "utf8"
+              );
+              expect(startupContent1).toBe(startupContent2);
+              expect(startupContent1).toBe("print('Custom Startup')");
+
+              // Computer 2: Verify all Lua files are in all/ directory
+              const computer2Dir = path.join(computersDir, "2");
+              expect(
+                await fs.exists(path.join(computer2Dir, "all", "main.lua"))
+              ).toBe(true);
+              expect(
+                await fs.exists(path.join(computer2Dir, "all", "util.lua"))
+              ).toBe(true);
+              expect(
+                await fs.exists(path.join(computer2Dir, "all", "startup.lua"))
+              ).toBe(true);
+
+              // Computer 2: Verify files aren't in root
+              expect(await fs.exists(path.join(computer2Dir, "main.lua"))).toBe(
+                false
+              );
+              expect(
+                await fs.exists(path.join(computer2Dir, "startup.lua"))
+              ).toBe(false);
+
+              await manualController.stop();
+              await syncManager.stop();
+              resolve();
+            } catch (err) {
+              await syncManager.stop();
+              reject(err);
+            }
+          }
+        );
+
+        manualController.on(SyncEvent.SYNC_ERROR, (error) => {
+          syncManager.stop();
+          reject(error);
+        });
+      } catch (err) {
+        syncManager.stop();
         reject(err);
       }
     });

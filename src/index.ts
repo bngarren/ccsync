@@ -115,75 +115,22 @@ async function main() {
     process.on("SIGINT", cleanup); // Ctrl+C
     process.on("SIGTERM", cleanup); // Termination request
 
-    try {
-      if (mode === "manual") {
-        const manualController = await syncManager.startManualMode();
+    if (mode === "manual") {
+      const manualController = await syncManager.startManualMode();
 
-        manualController.on(
-          SyncEvent.SYNC_COMPLETE,
-          ({ successCount, errorCount, missingCount }) => {
-            log.verbose(
-              `Sync stats: ${successCount} successful, ${errorCount} failed, ${missingCount} missing`
-            );
-          }
-        );
-
-        manualController.on(SyncEvent.SYNC_ERROR, (error) => {
-          log.error(`Sync error: ${error}`);
-        });
-
-        manualController.on(SyncEvent.STOPPED, () => {
+      manualController.on(SyncEvent.SYNC_ERROR, ({ error, fatal }) => {
+        if (fatal) {
           cleanup();
-        });
-      } else {
-        const watchController = await syncManager.startWatchMode();
+        }
+      });
+    } else {
+      const watchController = await syncManager.startWatchMode();
 
-        watchController.on(SyncEvent.STARTED, () => {
-          log.verbose("Watch mode started");
-        });
-
-        watchController.on(
-          SyncEvent.INITIAL_SYNC_COMPLETE,
-          ({ successCount, errorCount, missingCount }) => {
-            if (config.advanced.verbose) {
-              log.verbose(
-                `Initial sync stats: ${successCount} successful, ${errorCount} failed, ${missingCount} missing`
-              );
-            }
-          }
-        );
-
-        watchController.on(
-          SyncEvent.FILE_SYNC,
-          ({ path, successCount, errorCount, missingCount }) => {
-            if (config.advanced.verbose) {
-              log.verbose(
-                `Synced ${path}: ${successCount} successful, ${errorCount} failed, ${missingCount} missing`
-              );
-            }
-          }
-        );
-
-        watchController.on(SyncEvent.FILE_SYNC_ERROR, ({ path, error }) => {
-          log.error(`Failed to sync ${path}: ${error}`);
-        });
-
-        watchController.on(SyncEvent.WATCHER_ERROR, (error) => {
-          log.error(`Watcher error: ${error}`);
-        });
-
-        watchController.on(SyncEvent.STOPPED, () => {
+      watchController.on(SyncEvent.SYNC_ERROR, ({ error, fatal }) => {
+        if (fatal) {
           cleanup();
-        });
-      }
-    } catch (err) {
-      log.error(
-        `Failed to start sync: ${
-          err instanceof Error ? err.message : String(err)
-        }`
-      );
-      await syncManager.stop();
-      process.exit(1);
+        }
+      });
     }
 
     // Keep the process alive until explicitly terminated
@@ -196,7 +143,7 @@ async function main() {
       }, 1000);
     });
   } catch (err) {
-    p.log.error(`${err instanceof Error ? err.message : String(err)}`);
+    p.log.error(`Fatal error: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);
   }
 }

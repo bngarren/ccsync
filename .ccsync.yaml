@@ -8,7 +8,7 @@ sourceRoot: "./examples/test1"
 # Use ~ for your home directory
 # Example Windows: "~/AppData/Roaming/.minecraft/saves/my_world"
 # Example Linux: "~/.minecraft/saves/my_world"
-minecraftSavePath: "/Users/bngarren/Documents/curseforge/minecraft/Instances/Craftoria (2)/saves/New World"
+minecraftSavePath: "/Users/bngarren/Documents/curseforge/minecraft/Instances/Craftoria (2)/saves/New World!"
 
 # Define groups of computers for easier file targeting
 computerGroups: 
@@ -32,7 +32,7 @@ rules:
 # Advanced configuration options
 advanced:
   # Enable verbose logging
-  verbose: true
+  verbose: false
   
   # How long to cache validation results (milliseconds)
   # Lower = more accurate but more CPU intensive, Higher = faster but may miss changes

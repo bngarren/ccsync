@@ -64,9 +64,10 @@ export enum SyncEvent {
 
 // Event maps for each mode type
 export type ManualSyncEvents = {
+  [SyncEvent.STARTED]: void;
   [SyncEvent.SYNC_VALIDATION]: ValidationResult;
   [SyncEvent.SYNC_COMPLETE]: SyncResult;
-  [SyncEvent.SYNC_ERROR]: unknown;
+  [SyncEvent.SYNC_ERROR]: {error: unknown, fatal: boolean};
   [SyncEvent.STOPPED]: void;
 }
 
@@ -74,10 +75,8 @@ export type WatchSyncEvents = {
   [SyncEvent.STARTED]: void;
   [SyncEvent.SYNC_VALIDATION]: ValidationResult;
   [SyncEvent.INITIAL_SYNC_COMPLETE]: SyncResult;
-  [SyncEvent.INITIAL_SYNC_ERROR]: unknown;
-  [SyncEvent.FILE_SYNC]: { path: string } & SyncResult;
-  [SyncEvent.FILE_SYNC_ERROR]: { path: string; error: unknown };
-  [SyncEvent.WATCHER_ERROR]: unknown;
+  [SyncEvent.SYNC_COMPLETE]: SyncResult;
+  [SyncEvent.SYNC_ERROR]: {error: unknown, fatal: boolean};
   [SyncEvent.STOPPED]: void;
 }
 

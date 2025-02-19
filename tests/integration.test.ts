@@ -164,9 +164,8 @@ describe("Integration: SyncManager", () => {
 
         // Listen for file change sync
         watchController.on(
-          SyncEvent.FILE_SYNC,
+          SyncEvent.SYNC_COMPLETE,
           async ({
-            path: changedPath,
             successCount,
             errorCount,
             missingCount,
@@ -186,7 +185,6 @@ describe("Integration: SyncManager", () => {
               expect(successCount).toBe(2);
               expect(errorCount).toBe(0);
               expect(missingCount).toBe(0);
-              expect(changedPath).toContain("program.lua");
 
               // Verify updated content was copied
               const content1 = await fs.readFile(
@@ -210,12 +208,8 @@ describe("Integration: SyncManager", () => {
         );
 
         // Handle errors
-        watchController.on(SyncEvent.FILE_SYNC_ERROR, ({ path, error }) => {
-          reject(new Error(`File sync error for ${path}: ${error}`));
-        });
-
-        watchController.on(SyncEvent.WATCHER_ERROR, (error) => {
-          reject(new Error(`Watcher error: ${error}`));
+        watchController.on(SyncEvent.SYNC_ERROR, ({ error }) => {
+          reject(new Error(`File sync error: ${error}`));
         });
 
         // Set timeout for test

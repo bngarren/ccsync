@@ -187,7 +187,7 @@ rules:
 
   - source: "lib/*.lua"
     target: "lib/"
-    computers: "monitors"
+    computers: "monitors" 
 ```
 
 ### 4. Run CC: Sync:

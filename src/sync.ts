@@ -76,10 +76,7 @@ export class SyncManager {
       this.config.minecraftSavePath
     );
     if (!saveDirValidation.isValid) {
-      this.log.error("Oops!");
-      this.log.verbose("Save directory validation failed");
-      saveDirValidation.errors.forEach((error) => this.log.error(`• ${error}`));
-      throw new Error("Invalid save directory");
+      throw new Error(saveDirValidation.errors[0]);
     }
 
     // Discover computers
@@ -388,8 +385,7 @@ class ManualModeController {
         missingCount,
       });
     } catch (err) {
-      this.log.error(`Sync cycle failed: ${err}`);
-      this.emit(SyncEvent.SYNC_ERROR, err);
+      this.emit(SyncEvent.SYNC_ERROR, {error: err, fatal: true});
       throw err;
     }
   }
@@ -503,9 +499,9 @@ class WatchModeController {
         await new Promise((resolve) => setTimeout(100, resolve));
       }
     } catch (err) {
-      this.log.error(`Watch mode error: ${err}`);
+      this.log.error(`Watch mode error: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
-      await this.cleanup();
+      this.stop()
     }
   }
 
@@ -549,7 +545,7 @@ class WatchModeController {
         missingCount,
       });
     } catch (err) {
-      this.emit(SyncEvent.INITIAL_SYNC_ERROR, err);
+      this.emit(SyncEvent.SYNC_ERROR, {error: err, fatal: true});
       throw err;
     }
   }
@@ -600,6 +596,7 @@ class WatchModeController {
       try {
         const validation = await this.syncManager.runValidation(true);
         this.emit(SyncEvent.SYNC_VALIDATION, validation);
+
         const { successCount, errorCount, missingCount } =
           await this.syncManager.performSync(validation);
 
@@ -619,8 +616,7 @@ class WatchModeController {
         }
 
         this.logWatchStatus();
-        this.emit(SyncEvent.FILE_SYNC, {
-          path: changedPath,
+        this.emit(SyncEvent.SYNC_COMPLETE, {
           successCount,
           errorCount,
           missingCount,
@@ -629,15 +625,13 @@ class WatchModeController {
         // Clear changed files after successful sync
         this.changedFiles.clear();
       } catch (err) {
-        this.log.verbose(`Sync failed: ${err}`);
-        this.emit(SyncEvent.FILE_SYNC_ERROR, { path: changedPath, error: err });
+        this.emit(SyncEvent.SYNC_ERROR, {error: err, fatal: true});
         this.logWatchStatus();
       }
     });
 
     this.watcher.on("error", (error) => {
-      this.log.error(`Watch error: ${error}`);
-      this.emit(SyncEvent.WATCHER_ERROR, error);
+      this.emit(SyncEvent.SYNC_ERROR, {error: error, fatal: true});
       this.logWatchStatus();
     });
 

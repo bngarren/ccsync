@@ -313,20 +313,57 @@ export async function validateFileSync(
 }
 
 /**
- * Copies resolved files to a specific computer
+ * Copies files to a specific computer
  */
 export async function copyFilesToComputer(
   resolvedFiles: ResolvedFile[],
   computerPath: string
 ): Promise<void> {
-  for (const file of resolvedFiles) {
-    // Determine target path
-    const targetPath = path.join(computerPath, file.targetPath);
+  // Normalize the computer path
+  const normalizedComputerPath = path.normalize(computerPath);
 
-    // Create target directory if it doesn't exist
-    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+  for (const file of resolvedFiles) {
+    // For directory targets, use source filename
+    const targetFileName = file.targetPath.endsWith('/')
+      ? path.basename(file.sourcePath)
+      : path.basename(file.targetPath);
+
+    // Handle both absolute and relative paths by removing leading slash
+    // This makes paths like "/lib" or "/startup.lua" relative to the computer root
+    const relativePath = file.targetPath.replace(/^\//, '');
+
+    // Get the target directory path
+    const targetDirPath = relativePath.endsWith('/')
+      ? path.join(computerPath, relativePath.slice(0, -1))
+      : path.join(computerPath, path.dirname(relativePath));
+
+    // Construct and normalize the full target path
+    const targetFilePath = path.normalize(path.join(targetDirPath, targetFileName));
+
+    // Security check: Ensure the target path stays within the computer directory
+    const relativeToComputer = path.relative(normalizedComputerPath, targetFilePath);
+    if (relativeToComputer.startsWith('..') || path.isAbsolute(relativeToComputer)) {
+      throw new Error(
+        `Security violation: Target path '${file.targetPath}' attempts to write outside the computer directory`
+      );
+    }
+
+    // First ensure source file exists and is a file
+    const sourceStats = await fs.stat(file.sourcePath);
+    if (!sourceStats.isFile()) {
+      throw new Error(`Source is not a file: ${file.sourcePath}`);
+    }
+
+    // Create target directory
+    await fs.mkdir(targetDirPath, { recursive: true });
 
     // Copy the file
-    await fs.copyFile(file.sourcePath, targetPath);
+    await fs.copyFile(file.sourcePath, targetFilePath);
+
+    // Verify the copy
+    const targetStats = await fs.stat(targetFilePath);
+    if (!targetStats.isFile()) {
+      throw new Error(`Failed to create target file: ${targetFilePath}`);
+    }
   }
 }

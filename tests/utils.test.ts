@@ -1,4 +1,12 @@
-import { expect, test, describe, beforeEach, mock, afterEach, beforeAll } from "bun:test";
+import {
+  expect,
+  test,
+  describe,
+  beforeEach,
+  mock,
+  afterEach,
+  beforeAll,
+} from "bun:test";
 import * as fs from "node:fs/promises";
 import {
   validateSaveDir,
@@ -13,9 +21,16 @@ import os from "os";
 import crypto from "crypto";
 import { tmpdir } from "node:os";
 import { withDefaultConfig, type Config } from "../src/config";
-import { cleanupTempDir, createTestComputer, createTestFiles, createTestSave, createUniqueTempDir, TempCleaner } from "./test-helpers";
-
-
+import {
+  cleanupTempDir,
+  createTestComputer,
+  createTestFiles,
+  createTestSave,
+  createUniqueTempDir,
+  TempCleaner,
+} from "./test-helpers";
+import { testLog } from "./setup";
+import type { ResolvedFile } from "../src/types";
 
 // ---- MC SAVE OPERATIONS ----
 describe("Save Directory Validation", () => {
@@ -27,16 +42,15 @@ describe("Save Directory Validation", () => {
   beforeEach(async () => {
     // Create new unique temp directory for this test
     tempDir = createUniqueTempDir();
-    cleanup.add(tempDir)
+    cleanup.add(tempDir);
 
     testSaveDir = path.join(tempDir, "save");
     await createTestSave(testSaveDir);
   });
 
   afterEach(async () => {
-    await cleanup.cleanDir(tempDir)
+    await cleanup.cleanDir(tempDir);
   });
-
 
   test("validates a correct save directory", async () => {
     const result = await validateSaveDir(testSaveDir);
@@ -85,14 +99,14 @@ describe("Computer Discovery", () => {
   beforeEach(async () => {
     // Create new unique temp directory for this test
     tempDir = createUniqueTempDir();
-    cleanup.add(tempDir)
+    cleanup.add(tempDir);
     testSaveDir = path.join(tempDir, "save");
     computersDir = path.join(testSaveDir, "computercraft", "computer");
     await createTestSave(testSaveDir);
   });
 
   afterEach(async () => {
-    await cleanup.cleanDir(tempDir)
+    await cleanup.cleanDir(tempDir);
   });
 
   test("discovers computers in save directory", async () => {
@@ -168,7 +182,7 @@ describe("File Operations", () => {
   beforeEach(async () => {
     // Create new unique temp directory for this test
     tempDir = createUniqueTempDir();
-    cleanup.add(tempDir)
+    cleanup.add(tempDir);
     sourceDir = path.join(tempDir, "source");
     testSaveName = "world";
     testSaveDir = path.join(tempDir, testSaveName);
@@ -176,11 +190,11 @@ describe("File Operations", () => {
 
     await createTestSave(testSaveDir);
     await mkdir(sourceDir, { recursive: true });
-    await createTestFiles(sourceDir)
+    await createTestFiles(sourceDir);
   });
 
   afterEach(async () => {
-    await cleanup.cleanDir(tempDir)
+    await cleanup.cleanDir(tempDir);
   });
 
   describe("validateFileSync", () => {
@@ -261,23 +275,318 @@ describe("File Operations", () => {
   });
 
   describe("copyFilesToComputer", () => {
-    test("copies resolved files to computer", async () => {
-      const computerPath = path.join(computersDir, "1");
-      await mkdir(computerPath, { recursive: true });
+    let tempDir: string;
+    let sourceDir: string;
+    let computerDir: string;
 
-      const resolvedFiles = [
+    const cleanup = TempCleaner.getInstance();
+
+    beforeEach(async () => {
+      // Create test directories
+      tempDir = createUniqueTempDir();
+      cleanup.add(tempDir);
+      sourceDir = path.join(tempDir, "source");
+      computerDir = path.join(tempDir, "computer");
+
+      // Create base directories
+      await fs.mkdir(sourceDir, { recursive: true });
+      await fs.mkdir(computerDir, { recursive: true });
+    });
+
+    afterEach(async () => {
+      await cleanup.cleanDir(tempDir);
+    });
+
+    test("copies files with exact target paths", async () => {
+      // Create source files with content
+      const sourceProgramPath = path.join(sourceDir, "program.lua");
+      const sourceStartupPath = path.join(sourceDir, "startup.lua");
+
+      await fs.mkdir(path.dirname(sourceProgramPath), { recursive: true });
+      await fs.writeFile(sourceProgramPath, "print('Hello')");
+      await fs.writeFile(sourceStartupPath, "print('Startup')");
+
+      const resolvedFiles: ResolvedFile[] = [
         {
-          sourcePath: path.join(sourceDir, "program.lua"),
-          targetPath: "/program.lua",
+          sourcePath: sourceProgramPath,
+          targetPath: "program.lua",
+          computers: ["1"],
+        },
+        {
+          sourcePath: sourceStartupPath,
+          targetPath: "main.lua",
           computers: ["1"],
         },
       ];
 
-      await copyFilesToComputer(resolvedFiles, computerPath);
+      await copyFilesToComputer(resolvedFiles, computerDir);
 
-      expect(await fs.exists(path.join(computerPath, "program.lua"))).toBe(
-        true
+      // Verify target paths and content
+      const targetProgramPath = path.join(computerDir, "program.lua");
+      const targetMainPath = path.join(computerDir, "main.lua");
+
+      // Verify program.lua
+      {
+        const stats = await fs.stat(targetProgramPath);
+        expect(stats.isFile()).toBe(true);
+        if (stats.isFile()) {
+          const content = await fs.readFile(targetProgramPath, "utf8");
+          expect(content).toBe("print('Hello')");
+        }
+      }
+
+      // Verify main.lua
+      {
+        const stats = await fs.stat(targetMainPath);
+        expect(stats.isFile()).toBe(true);
+        if (stats.isFile()) {
+          const content = await fs.readFile(targetMainPath, "utf8");
+          expect(content).toBe("print('Startup')");
+        }
+      }
+    });
+
+    test("handles absolute paths relative to computer root", async () => {
+      // Create source file
+      await fs.writeFile(path.join(sourceDir, "program.lua"), "print('Root')");
+      await fs.writeFile(path.join(sourceDir, "lib.lua"), "print('Lib')");
+
+      // Create computer-specific directory
+      const computer1Dir = path.join(computerDir, "1");
+      await fs.mkdir(computer1Dir, { recursive: true });
+
+      const resolvedFiles: ResolvedFile[] = [
+        {
+          sourcePath: path.join(sourceDir, "program.lua"),
+          targetPath: "/startup.lua", // Absolute path to computer root
+          computers: ["1"],
+        },
+        {
+          sourcePath: path.join(sourceDir, "lib.lua"),
+          targetPath: "/lib/", // Absolute path to lib directory
+          computers: ["1"],
+        },
+      ];
+
+      await copyFilesToComputer(resolvedFiles, computer1Dir);
+
+      // Verify files were copied to correct locations within computer directory
+      expect(
+        await fs.readFile(path.join(computer1Dir, "startup.lua"), "utf8")
+      ).toBe("print('Root')");
+      expect(
+        await fs.readFile(path.join(computer1Dir, "lib", "lib.lua"), "utf8")
+      ).toBe("print('Lib')");
+
+      // Verify files weren't created in actual root
+      expect(await fs.exists(path.join("/startup.lua"))).toBe(false);
+      expect(await fs.exists(path.join("/lib/lib.lua"))).toBe(false);
+    });
+
+    test("copies files to directory targets", async () => {
+      // Create source files
+      await fs.mkdir(path.join(sourceDir, "lib"), { recursive: true });
+      await fs.writeFile(path.join(sourceDir, "lib/utils.lua"), "-- Utils");
+
+      const resolvedFiles: ResolvedFile[] = [
+        {
+          sourcePath: path.join(sourceDir, "lib/utils.lua"),
+          targetPath: "lib/",
+          computers: ["1"],
+        },
+      ];
+
+      await copyFilesToComputer(resolvedFiles, computerDir);
+
+      // Verify file was copied to correct location
+      const targetPath = path.join(computerDir, "lib", "utils.lua");
+      expect(await fs.readFile(targetPath, "utf8")).toBe("-- Utils");
+    });
+
+    test("handles nested directory structures", async () => {
+      // Create a more complex source structure
+      await fs.mkdir(path.join(sourceDir, "apis/net"), { recursive: true });
+      await fs.writeFile(
+        path.join(sourceDir, "apis/net/http.lua"),
+        "-- HTTP API"
       );
+
+      const resolvedFiles: ResolvedFile[] = [
+        {
+          sourcePath: path.join(sourceDir, "apis/net/http.lua"),
+          targetPath: "apis/",
+          computers: ["1"],
+        },
+      ];
+
+      await copyFilesToComputer(resolvedFiles, computerDir);
+
+      // Verify file was copied correctly
+      const targetPath = path.join(computerDir, "apis", "http.lua");
+      expect(await fs.readFile(targetPath, "utf8")).toBe("-- HTTP API");
+    });
+
+    test("creates missing directories in target path", async () => {
+      // Create source file
+      await fs.writeFile(path.join(sourceDir, "program.lua"), "print('Init')");
+
+      const resolvedFiles: ResolvedFile[] = [
+        {
+          sourcePath: path.join(sourceDir, "program.lua"),
+          targetPath: "programs/startup/init.lua",
+          computers: ["1"],
+        },
+      ];
+
+      await copyFilesToComputer(resolvedFiles, computerDir);
+
+      // Verify file was copied correctly
+      const targetPath = path.join(computerDir, "programs/startup/init.lua");
+      expect(await fs.readFile(targetPath, "utf8")).toBe("print('Init')");
+    });
+
+    test("handles multiple files with mixed target types", async () => {
+      // Create source files
+      await fs.mkdir(path.join(sourceDir, "lib"), { recursive: true });
+      await fs.writeFile(
+        path.join(sourceDir, "program.lua"),
+        "print('Program')"
+      );
+      await fs.writeFile(path.join(sourceDir, "lib/utils.lua"), "-- Utils");
+      await fs.writeFile(path.join(sourceDir, "startup.lua"), "print('Boot')");
+
+      const resolvedFiles: ResolvedFile[] = [
+        {
+          sourcePath: path.join(sourceDir, "program.lua"),
+          targetPath: "startup.lua",
+          computers: ["1"],
+        },
+        {
+          sourcePath: path.join(sourceDir, "lib/utils.lua"),
+          targetPath: "apis/",
+          computers: ["1"],
+        },
+        {
+          sourcePath: path.join(sourceDir, "startup.lua"),
+          targetPath: "system/boot/startup.lua",
+          computers: ["1"],
+        },
+      ];
+
+      await copyFilesToComputer(resolvedFiles, computerDir);
+
+      // Verify all files were copied correctly
+      expect(
+        await fs.readFile(path.join(computerDir, "startup.lua"), "utf8")
+      ).toBe("print('Program')");
+      expect(
+        await fs.readFile(path.join(computerDir, "apis/utils.lua"), "utf8")
+      ).toBe("-- Utils");
+      expect(
+        await fs.readFile(
+          path.join(computerDir, "system/boot/startup.lua"),
+          "utf8"
+        )
+      ).toBe("print('Boot')");
+    });
+
+    test("maintains file contents correctly", async () => {
+      // Create source files
+      await fs.writeFile(path.join(sourceDir, "test1.lua"), "print('test1')");
+      await fs.writeFile(path.join(sourceDir, "test2.lua"), "local x = 42");
+      await fs.mkdir(path.join(sourceDir, "dir"), { recursive: true });
+      await fs.writeFile(path.join(sourceDir, "dir/test3.lua"), "return true");
+
+      const resolvedFiles: ResolvedFile[] = [
+        {
+          sourcePath: path.join(sourceDir, "test1.lua"),
+          targetPath: "a.lua",
+          computers: ["1"],
+        },
+        {
+          sourcePath: path.join(sourceDir, "test2.lua"),
+          targetPath: "lib/",
+          computers: ["1"],
+        },
+        {
+          sourcePath: path.join(sourceDir, "dir/test3.lua"),
+          targetPath: "modules/",
+          computers: ["1"],
+        },
+      ];
+
+      await copyFilesToComputer(resolvedFiles, computerDir);
+
+      // Verify contents were preserved
+      expect(await fs.readFile(path.join(computerDir, "a.lua"), "utf8")).toBe(
+        "print('test1')"
+      );
+      expect(
+        await fs.readFile(path.join(computerDir, "lib/test2.lua"), "utf8")
+      ).toBe("local x = 42");
+      expect(
+        await fs.readFile(path.join(computerDir, "modules/test3.lua"), "utf8")
+      ).toBe("return true");
+    });
+
+    test("prevents file copy outside of computer directory", async () => {
+      // Create source file
+      await fs.writeFile(path.join(sourceDir, "program.lua"), "print('Evil')");
+
+      // Create computer-specific directory
+      const computer1Dir = path.join(computerDir, "1");
+      await fs.mkdir(computer1Dir, { recursive: true });
+
+      // Array of malicious paths to test
+      const maliciousPaths = [
+        "../evil.lua", // Parent directory
+        "../../evil.lua", // Multiple parent traversal
+        "folder/../../../evil.lua", // Nested traversal
+        "folder/./../../evil.lua", // Mixed traversal
+        "folder/subdir/../../../evil.lua", // Complex traversal
+        "../2/evil.lua", // Another computer's directory
+        "../../computer/2/evil.lua", // Another computer via full path
+      ];
+
+      for (const maliciousPath of maliciousPaths) {
+        testLog(`  - Testing malicious path: ${maliciousPath}`);
+
+        const resolvedFiles: ResolvedFile[] = [
+          {
+            sourcePath: path.join(sourceDir, "program.lua"),
+            targetPath: maliciousPath,
+            computers: ["1"],
+          },
+        ];
+
+        // Expect the copy operation to fail
+        await expect(
+          copyFilesToComputer(resolvedFiles, computer1Dir)
+        ).rejects.toThrow(/security violation/i);
+
+        // Verify no files were created in parent directories
+        for (const checkPath of [
+          path.join(computer1Dir, "..", "evil.lua"),
+          path.join(computer1Dir, "..", "2", "evil.lua"),
+          path.join(computerDir, "evil.lua"),
+          path.join(computerDir, "2", "evil.lua"),
+        ]) {
+          expect(await fs.exists(checkPath)).toBe(false);
+        }
+      }
+
+      // Also test directory traversal with trailing slash
+      const resolvedFiles: ResolvedFile[] = [
+        {
+          sourcePath: path.join(sourceDir, "program.lua"),
+          targetPath: "../dangerous/",
+          computers: ["1"],
+        },
+      ];
+
+      await expect(
+        copyFilesToComputer(resolvedFiles, computer1Dir)
+      ).rejects.toThrow(/security violation/i);
     });
   });
 

@@ -5,7 +5,7 @@ import * as p from "@clack/prompts";
 import { createDefaultConfig, findConfig, loadConfig } from "./config";
 import color from "picocolors";
 import path from "path";
-import { SyncManager } from "./sync_new";
+import { SyncManager } from "./sync";
 import { createLogger } from "./log";
 import { theme } from "./theme";
 import { toTildePath } from "./utils";
@@ -122,11 +122,9 @@ async function main() {
         manualLoop.on(
           "syncComplete",
           ({ successCount, errorCount, missingCount }) => {
-            if (config.advanced.verbose) {
-              log.verbose(
-                `Sync stats: ${successCount} successful, ${errorCount} failed, ${missingCount} missing`
-              );
-            }
+            log.verbose(
+              `Sync stats: ${successCount} successful, ${errorCount} failed, ${missingCount} missing`
+            );
           }
         );
 

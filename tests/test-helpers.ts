@@ -4,6 +4,8 @@ import os from "os";
 import crypto from "crypto";
 import type { Computer } from "../src/types";
 import { getComputerShortPath } from "../src/utils";
+import * as p from "@clack/prompts";
+import { mock } from "bun:test";
 
 /**
  * Creates a new tmp directory in the operating system's default directory for temporary files.
@@ -101,7 +103,7 @@ export async function cleanupTempDir(tempDir: string) {
 
 /**
  * Manages tmp directories created and helps to destroy them.
- * 
+ *
  * Registers an on "exit" listener that will cleanup all tmp dirs if there is an unexpected termination during operation
  */
 export class TempCleaner {
@@ -113,7 +115,7 @@ export class TempCleaner {
     // Register only once
     if (!this.handlerRegistered) {
       process.on("exit", () => {
-        console.warn("Running test cleanup after unexpected termination!")
+        console.warn("Running test cleanup after unexpected termination!");
         this.cleanup();
       });
       this.handlerRegistered = true;
@@ -139,11 +141,11 @@ export class TempCleaner {
 
   async cleanDir(dir: string) {
     try {
-        await rm(dir, { recursive: true, force: true });
-        this.remove(dir)
-      } catch (err) {
-        console.warn(`Warning: Failed to clean up test directory ${dir}:`, err);
-      }
+      await rm(dir, { recursive: true, force: true });
+      this.remove(dir);
+    } catch (err) {
+      console.warn(`Warning: Failed to clean up test directory ${dir}:`, err);
+    }
   }
 
   private cleanup() {
@@ -152,4 +154,55 @@ export class TempCleaner {
     }
     this.tempDirs.clear();
   }
+}
+
+export function spyOnClackPrompts() {
+  const messages: string[] = [];
+
+  // Store original methods
+  const original = {
+    info: p.log.info,
+    success: p.log.success,
+    error: p.log.error,
+    warn: p.log.warn,
+  };
+
+  // Replace with spy versions
+  p.log.info = (msg: string) => {
+    messages.push(`info: ${msg}`);
+  };
+  p.log.success = (msg: string) => {
+    messages.push(`success: ${msg}`);
+  };
+  p.log.error = (msg: string) => {
+    messages.push(`error: ${msg}`);
+  };
+  p.log.warn = (msg: string) => {
+    messages.push(`warn: ${msg}`);
+  };
+
+  // Mock the entire @clack/prompts module for spinner
+  mock.module("@clack/prompts", () => ({
+    ...p, // Keep all other original exports
+    spinner: () => ({
+      start: (msg: string) => {
+        messages.push(`spinner: ${msg}`);
+      },
+      stop: (msg?: string) => {
+        if (msg) messages.push(`spinner stop: ${msg}`);
+      },
+    }),
+  }));
+
+  // Return cleanup function and message getter
+  return {
+    messages,
+    cleanup: () => {
+      p.log.info = original.info;
+      p.log.success = original.success;
+      p.log.error = original.error;
+      p.log.warn = original.warn;
+      mock.restore();
+    },
+  };
 }

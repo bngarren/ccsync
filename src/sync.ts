@@ -10,10 +10,11 @@ import {
   type ManualSyncEvents,
   type WatchSyncEvents,
   SyncEvent,
+  type ResolvedFileRule,
 } from "./types";
 import {
-  validateSaveDir as validateMinecraftSave,
-  discoverComputers as findMinecraftComputers,
+  validateMinecraftSave,
+  findMinecraftComputers,
   validateFileSync,
   getFormattedDate,
   copyFilesToComputer,
@@ -149,10 +150,40 @@ export class SyncManager {
     }
   }
 
-  public async performSync(validation: ValidationResult): Promise<SyncResult> {
+  private async syncToComputer(
+    computer: Computer,
+    fileRules: ResolvedFileRule[]
+  ): Promise<{
+    computerId: string;
+    copiedFiles: string[];
+    skippedFiles: string[];
+    errors: string[];
+  }> {
+    const filesToCopy = fileRules.filter((file) =>
+      file.computers.includes(computer.id)
+    );
 
+    if (filesToCopy.length === 0) {
+      return {
+        computerId: computer.id,
+        copiedFiles: [],
+        skippedFiles: [],
+        errors: [],
+      };
+    }
+
+    const copyResult = await copyFilesToComputer(filesToCopy, computer.path);
+    await setTimeout(250); // Small delay between computers
+
+    return {
+      computerId: computer.id,
+      ...copyResult,
+    };
+  }
+
+  public async performSync(validation: ValidationResult): Promise<SyncResult> {
     if (this.state !== SyncManagerState.RUNNING) {
-      throw new Error('Cannot perform sync when not in RUNNING state');
+      throw new Error("Cannot perform sync when not in RUNNING state");
     }
 
     const spinner = p.spinner();
@@ -166,7 +197,7 @@ export class SyncManager {
       Array<{ computerId: string; success: boolean }>
     >();
 
-    // Initialize results map for each file
+    // Initialize results map
     for (const file of validation.resolvedFileRules) {
       const relativePath = path.relative(
         this.config.sourceRoot,
@@ -178,47 +209,36 @@ export class SyncManager {
     // Process each computer
     for (const computer of validation.availableComputers) {
       spinner.start(`Copying files to computer ${computer.id}`);
-      const computerFiles = validation.resolvedFileRules.filter((file) =>
-        file.computers.includes(computer.id)
+
+      const syncResult = await this.syncToComputer(
+        computer,
+        validation.resolvedFileRules
       );
 
-      if (computerFiles.length === 0) {
-        spinner.stop("");
-        continue;
-      }
+      // Record results for each file
+      syncResult.copiedFiles.forEach((filePath) => {
+        const relativePath = path.relative(this.config.sourceRoot, filePath);
+        const results = fileResults.get(relativePath) ?? [];
+        results.push({ computerId: computer.id, success: true });
+        fileResults.set(relativePath, results);
+      });
 
-      try {
-        await copyFilesToComputer(computerFiles, computer.path);
-        await setTimeout(500);
+      syncResult.skippedFiles.forEach((filePath) => {
+        const relativePath = path.relative(this.config.sourceRoot, filePath);
+        const results = fileResults.get(relativePath) ?? [];
+        results.push({ computerId: computer.id, success: false });
+        fileResults.set(relativePath, results);
+      });
 
-        // Record successful copies
-        computerFiles.forEach((file) => {
-          const relativePath = path.relative(
-            this.config.sourceRoot,
-            file.sourcePath
-          );
-          const results = fileResults.get(relativePath) ?? [];
-          results.push({ computerId: computer.id, success: true });
-          fileResults.set(relativePath, results);
-        });
-        result.successCount++;
-      } catch (err) {
-        // Record failed copies
-        computerFiles.forEach((file) => {
-          const relativePath = path.relative(
-            this.config.sourceRoot,
-            file.sourcePath
-          );
-          const results = fileResults.get(relativePath) ?? [];
-          results.push({ computerId: computer.id, success: false });
-          fileResults.set(relativePath, results);
-        });
-        spinner.stop(
-          `${theme.error("✗")} Error copying files to computer ${
-            computer.id
-          }: ${err}`
-        );
+      console.log(syncResult)
+
+      // Log any errors
+      if (syncResult.errors.length > 0) {
+        spinner.stop(`Error copying files to computer ${computer.id}:`);
+        syncResult.errors.forEach((error) => this.log.warn(`  ${error}`));
         result.errorCount++;
+      } else if (syncResult.copiedFiles.length > 0) {
+        result.successCount++;
       }
     }
 
@@ -235,11 +255,11 @@ export class SyncManager {
       file.computers.forEach((computerId) => {
         if (validation.missingComputerIds.some((mc) => mc === computerId)) {
           results.push({ computerId, success: false });
-          result.missingCount++; // Track missing separately
+          result.missingCount++;
         }
       });
 
-      // Sort results by computer ID
+      // Sort and display results
       const sortedResults = results.sort((a, b) =>
         a.computerId.localeCompare(b.computerId)
       );
@@ -260,15 +280,13 @@ export class SyncManager {
       );
     }
 
-    // In watch mode, clear changed files after sync
+    // Cache invalidation for watch mode
     if (this.activeModeController instanceof WatchModeController) {
       this.invalidateCache();
     }
 
     return result;
   }
-
-  // Mode management
   async startManualMode(): Promise<ManualModeController> {
     if (this.state !== SyncManagerState.IDLE) {
       throw new Error(
@@ -311,7 +329,6 @@ export class SyncManager {
       throw error;
     }
   }
-
   async startWatchMode(): Promise<WatchModeController> {
     if (this.state !== SyncManagerState.IDLE) {
       throw new Error(
@@ -340,7 +357,7 @@ export class SyncManager {
       watchController.on(SyncEvent.SYNC_ERROR, ({ error, fatal }) => {
         if (fatal) {
           this.setState(SyncManagerState.ERROR);
-          this.stop()
+          this.stop();
         }
       });
 
@@ -359,8 +376,11 @@ export class SyncManager {
   }
 
   async stop(): Promise<void> {
-    if (this.state === SyncManagerState.STOPPED || 
-      this.state === SyncManagerState.STOPPING) return;
+    if (
+      this.state === SyncManagerState.STOPPED ||
+      this.state === SyncManagerState.STOPPING
+    )
+      return;
 
     this.setState(SyncManagerState.STOPPING);
 
@@ -425,7 +445,9 @@ class ManualModeController {
       while (this.syncManager.getState() === SyncManagerState.RUNNING) {
         await this.performSyncCycle();
 
-        this.log.step(theme.bold("[Press SPACE to re-sync or ESC to exit...] "));
+        this.log.step(
+          theme.bold("[Press SPACE to re-sync or ESC to exit...] ")
+        );
         await this.waitForUserInput();
       }
     } catch (error) {
@@ -443,7 +465,7 @@ class ManualModeController {
 
   private async performSyncCycle(): Promise<void> {
     if (this.syncManager.getState() !== SyncManagerState.RUNNING) {
-      throw new Error('Cannot perform sync when not in RUNNING state');
+      throw new Error("Cannot perform sync when not in RUNNING state");
     }
 
     try {
@@ -481,7 +503,10 @@ class ManualModeController {
         missingCount,
       });
     } catch (err) {
-      this.emit(SyncEvent.SYNC_ERROR, { error: err, fatal: true });
+      this.emit(SyncEvent.SYNC_ERROR, {
+        error: err instanceof Error ? err : new Error(String(err)),
+        fatal: true,
+      });
       throw err;
     }
   }
@@ -584,10 +609,14 @@ class WatchModeController {
 
       // Keep running until state changes
       while (this.syncManager.getState() === SyncManagerState.RUNNING) {
-        await new Promise(resolve => setTimeout(100, resolve));
+        await new Promise((resolve) => setTimeout(100, resolve));
       }
     } catch (error) {
-      this.log.error(`Watch mode error: ${error instanceof Error ? error.message : String(error)}`);
+      this.log.error(
+        `Watch mode error: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
       throw error;
     } finally {
       await this.stop();
@@ -605,7 +634,7 @@ class WatchModeController {
 
   private async performSyncCycle(changedPath?: string): Promise<void> {
     if (this.syncManager.getState() !== SyncManagerState.RUNNING) {
-      throw new Error('Cannot perform sync when not in RUNNING state');
+      throw new Error("Cannot perform sync when not in RUNNING state");
     }
 
     try {
@@ -630,14 +659,21 @@ class WatchModeController {
 
       // Log appropriate message based on sync result
       if (totalFails === 0) {
-        this.log.success(`${this.isInitialSync ? 'Initial sync' : 'Sync'} successful. ${fDate}`);
+        this.log.success(
+          `${this.isInitialSync ? "Initial sync" : "Sync"} successful. ${fDate}`
+        );
       } else if (
         totalFails ===
-        validation.availableComputers.length + validation.missingComputerIds.length
+        validation.availableComputers.length +
+          validation.missingComputerIds.length
       ) {
-        this.log.error(`${this.isInitialSync ? 'Initial sync' : 'Sync'} failed. ${fDate}`);
+        this.log.error(
+          `${this.isInitialSync ? "Initial sync" : "Sync"} failed. ${fDate}`
+        );
       } else {
-        this.log.warn(`${this.isInitialSync ? 'Initial sync' : 'Sync'} partial. ${fDate}`);
+        this.log.warn(
+          `${this.isInitialSync ? "Initial sync" : "Sync"} partial. ${fDate}`
+        );
       }
 
       // Emit appropriate event based on sync type
@@ -664,7 +700,10 @@ class WatchModeController {
       }
     } catch (err) {
       // TODO determine if sync error is FATAL or not
-      this.emit(SyncEvent.SYNC_ERROR, { error: err, fatal: true });
+      this.emit(SyncEvent.SYNC_ERROR, {
+        error: err instanceof Error ? err : new Error(String(err)),
+        fatal: true,
+      });
       if (!this.isInitialSync) {
         this.logWatchStatus();
       }
@@ -715,12 +754,15 @@ class WatchModeController {
         // Error handling is done within performSyncCycle
         // If err is FATAL emit a SyncEvent.SYNC_ERROR with fatal
         // If err is not fatal, inform user and keep watcher going...
-        this.log.warn("Problem occurred during sync")
+        this.log.warn("Problem occurred during sync");
       }
     });
 
-    this.watcher.on("error", (error) => {
-      this.emit(SyncEvent.SYNC_ERROR, { error: error, fatal: true });
+    this.watcher.on("error", (err) => {
+      this.emit(SyncEvent.SYNC_ERROR, {
+        error: err instanceof Error ? err : new Error(String(err)),
+        fatal: true,
+      });
     });
   }
 

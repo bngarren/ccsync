@@ -61,7 +61,10 @@ describe("Integration: SyncManager", () => {
     await fs.writeFile(configPath, configContent);
     await fs.mkdir(path.join(computersDir, "1"), { recursive: true });
 
-    const config = await loadConfig(configPath);
+    const {config} = await loadConfig(configPath);
+
+    if (!config) throw new Error("Failed to load config")
+
     const syncManager = new SyncManager(config);
 
     // Start manual mode and wait for first sync
@@ -118,7 +121,8 @@ describe("Integration: SyncManager", () => {
     await createTestComputer(computersDir, "1");
     await createTestComputer(computersDir, "2");
 
-    const config = await loadConfig(configPath);
+    const {config} = await loadConfig(configPath);
+    if (!config) throw new Error("Failed to load config")
     const syncManager = new SyncManager(config);
 
     return new Promise<void>(async (resolve, reject) => {
@@ -291,7 +295,8 @@ describe("Integration: SyncManager", () => {
     await createTestComputer(computersDir, "1", { createStartup: false });
     await createTestComputer(computersDir, "2", { createStartup: false });
 
-    const config = await loadConfig(configPath);
+    const {config} = await loadConfig(configPath);
+    if (!config) throw new Error("Failed to load config")
     const syncManager = new SyncManager(config);
 
     // Start manual mode and wait for sync

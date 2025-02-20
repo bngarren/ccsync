@@ -9,8 +9,8 @@ import {
 } from "bun:test";
 import * as fs from "node:fs/promises";
 import {
-  validateSaveDir,
-  discoverComputers,
+  validateMinecraftSave,
+  findMinecraftComputers,
   copyFilesToComputer,
   validateFileSync,
   getComputerShortPath,
@@ -53,7 +53,7 @@ describe("Save Directory Validation", () => {
   });
 
   test("validates a correct save directory", async () => {
-    const result = await validateSaveDir(testSaveDir);
+    const result = await validateMinecraftSave(testSaveDir);
     expect(result.isValid).toBe(true);
     expect(result.errors).toHaveLength(0);
   });
@@ -62,7 +62,7 @@ describe("Save Directory Validation", () => {
     // Remove the entire save directory
     await rm(testSaveDir, { recursive: true });
 
-    const result = await validateSaveDir(testSaveDir);
+    const result = await validateMinecraftSave(testSaveDir);
     expect(result.isValid).toBe(false);
     expect(result.errors).toContain(`Save directory not found: ${testSaveDir}`);
   });
@@ -71,7 +71,7 @@ describe("Save Directory Validation", () => {
     // Remove just the computercraft directory
     await rm(path.join(testSaveDir, "computercraft"), { recursive: true });
 
-    const result = await validateSaveDir(testSaveDir);
+    const result = await validateMinecraftSave(testSaveDir);
     expect(result.isValid).toBe(false);
     expect(result.missingFiles).toContain("computercraft/computer");
   });
@@ -81,7 +81,7 @@ describe("Save Directory Validation", () => {
     await rm(path.join(testSaveDir, "level.dat"));
     await rm(path.join(testSaveDir, "session.lock"));
 
-    const result = await validateSaveDir(testSaveDir);
+    const result = await validateMinecraftSave(testSaveDir);
     expect(result.isValid).toBe(false);
     expect(result.missingFiles).toContain("level.dat");
     expect(result.missingFiles).toContain("session.lock");
@@ -114,7 +114,7 @@ describe("Computer Discovery", () => {
     await createTestComputer(computersDir, "1");
     await createTestComputer(computersDir, "2");
 
-    const computers = await discoverComputers(testSaveDir);
+    const computers = await findMinecraftComputers(testSaveDir);
     expect(computers).toHaveLength(3);
     expect(computers.map((c) => c.id)).toEqual(["0", "1", "2"]);
   });
@@ -124,7 +124,7 @@ describe("Computer Discovery", () => {
     await createTestComputer(computersDir, "10");
     await createTestComputer(computersDir, "1");
 
-    const computers = await discoverComputers(testSaveDir);
+    const computers = await findMinecraftComputers(testSaveDir);
     expect(computers.map((c) => c.id)).toEqual(["1", "2", "10"]);
   });
 
@@ -133,7 +133,7 @@ describe("Computer Discovery", () => {
     await createTestComputer(computersDir, "turtle");
     await createTestComputer(computersDir, "pocket");
 
-    const computers = await discoverComputers(testSaveDir);
+    const computers = await findMinecraftComputers(testSaveDir);
     expect(computers.map((c) => c.id)).toEqual(["1", "pocket", "turtle"]);
   });
 
@@ -145,7 +145,7 @@ describe("Computer Discovery", () => {
     await mkdir(path.join(computersDir, ".vscode"), { recursive: true });
     await mkdir(path.join(computersDir, ".DS_Store"), { recursive: true });
 
-    const computers = await discoverComputers(testSaveDir);
+    const computers = await findMinecraftComputers(testSaveDir);
     expect(computers).toHaveLength(2);
     expect(computers.map((c) => c.id)).toEqual(["0", "1"]);
   });
@@ -153,7 +153,7 @@ describe("Computer Discovery", () => {
   test("sets correct paths for computers", async () => {
     await createTestComputer(computersDir, "1");
 
-    const computers = await discoverComputers(testSaveDir);
+    const computers = await findMinecraftComputers(testSaveDir);
     expect(computers).toHaveLength(1);
     // Match types.ts -> Computer
     expect(computers[0]).toMatchObject({
@@ -164,7 +164,7 @@ describe("Computer Discovery", () => {
   });
 
   test("returns empty array for empty computers directory", async () => {
-    const computers = await discoverComputers(testSaveDir);
+    const computers = await findMinecraftComputers(testSaveDir);
     expect(computers).toHaveLength(0);
   });
 });
@@ -270,7 +270,9 @@ describe("File Operations", () => {
       );
 
       expect(validation.resolvedFileRules).toHaveLength(1);
-      expect(validation.resolvedFileRules[0].sourcePath).toContain("program.lua");
+      expect(validation.resolvedFileRules[0].sourcePath).toContain(
+        "program.lua"
+      );
     });
   });
 
@@ -560,9 +562,13 @@ describe("File Operations", () => {
         ];
 
         // Expect the copy operation to fail
-        await expect(
-          copyFilesToComputer(resolvedFiles, computer1Dir)
-        ).rejects.toThrow(/security violation/i);
+        const { copiedFiles, skippedFiles } = await copyFilesToComputer(
+          resolvedFiles,
+          computer1Dir
+        );
+
+        expect(copiedFiles).toHaveLength(0);
+        expect(skippedFiles).toHaveLength(resolvedFiles.length);
 
         // Verify no files were created in parent directories
         for (const checkPath of [
@@ -584,9 +590,12 @@ describe("File Operations", () => {
         },
       ];
 
-      await expect(
-        copyFilesToComputer(resolvedFiles, computer1Dir)
-      ).rejects.toThrow(/security violation/i);
+      const { copiedFiles, skippedFiles } = await copyFilesToComputer(
+        resolvedFiles,
+        computer1Dir
+      );
+      expect(copiedFiles).toHaveLength(0);
+      expect(skippedFiles).toHaveLength(resolvedFiles.length);
     });
   });
 

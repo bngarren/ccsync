@@ -1,9 +1,9 @@
 import { EventEmitter } from "node:events";
 
 export enum SyncMode {
-    MANUAL = "manual",
-    WATCH = "watch"
-} 
+  MANUAL = "manual",
+  WATCH = "watch",
+}
 
 // Base interface for file sync configuration in .ccsync.yaml
 export interface SyncRule {
@@ -14,7 +14,7 @@ export interface SyncRule {
 
 /**
  * Represents a viable file resolved from a config sync rule.
- * 
+ *
  * A resolved file rule has been validated such that a file exists at the source path.
  */
 export interface ResolvedFileRule {
@@ -49,6 +49,12 @@ export interface SyncResult {
   missingCount: number;
 }
 
+export interface SyncErrorEventData {
+  error: Error; // The actual error
+  fatal: boolean; // Whether this error should stop operations
+  source?: string; // Optional: where the error occurred (e.g. 'validation', 'sync', 'watcher')
+}
+
 export enum SyncEvent {
   STARTED,
   STOPPED,
@@ -59,26 +65,23 @@ export enum SyncEvent {
   INITIAL_SYNC_ERROR,
   FILE_SYNC,
   FILE_SYNC_ERROR,
-  WATCHER_ERROR
+  WATCHER_ERROR,
 }
+
+type CommonSyncEvents = {
+  [SyncEvent.STARTED]: void;
+  [SyncEvent.SYNC_VALIDATION]: ValidationResult;
+  [SyncEvent.SYNC_COMPLETE]: SyncResult;
+  [SyncEvent.SYNC_ERROR]: SyncErrorEventData;
+  [SyncEvent.STOPPED]: void;
+};
 
 // Event maps for each mode type
-export type ManualSyncEvents = {
-  [SyncEvent.STARTED]: void;
-  [SyncEvent.SYNC_VALIDATION]: ValidationResult;
-  [SyncEvent.SYNC_COMPLETE]: SyncResult;
-  [SyncEvent.SYNC_ERROR]: {error: unknown, fatal: boolean};
-  [SyncEvent.STOPPED]: void;
-}
+export type ManualSyncEvents = CommonSyncEvents;
 
 export type WatchSyncEvents = {
-  [SyncEvent.STARTED]: void;
-  [SyncEvent.SYNC_VALIDATION]: ValidationResult;
   [SyncEvent.INITIAL_SYNC_COMPLETE]: SyncResult;
-  [SyncEvent.SYNC_COMPLETE]: SyncResult;
-  [SyncEvent.SYNC_ERROR]: {error: unknown, fatal: boolean};
-  [SyncEvent.STOPPED]: void;
-}
+} & CommonSyncEvents;
 
 // Type-safe event emitter factory
 export function createTypedEmitter<T extends Record<string, any>>() {
@@ -107,6 +110,6 @@ export function createTypedEmitter<T extends Record<string, any>>() {
       listener: T[K] extends void ? () => void : (data: T[K]) => void
     ): void {
       emitter.off(event as string, listener);
-    }
+    },
   };
 }

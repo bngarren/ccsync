@@ -2,7 +2,7 @@
 
 import { z, ZodError } from "zod";
 import { parse } from "yaml";
-import { resolvePath } from "./utils";
+import { pathIsLikelyFile, resolvePath } from "./utils";
 import path from "path";
 import * as fs from "node:fs/promises";
 import { merge } from "ts-deepmerge";
@@ -18,6 +18,15 @@ const DEFAULT_CONFIG: Config = {
     verbose: false,
     cache_ttl: 5000,
   },
+};
+
+export interface LoadConfigResult {
+  config: Config | null;
+  errors: string[];
+}
+
+const hasGlobPattern = (path: string): boolean => {
+  return path.includes("*") || path.includes("{") || path.includes("[");
 };
 
 // ---- SCHEMA & TYPES ----
@@ -88,22 +97,36 @@ const AdvancedOptionsSchema = z.object({
     .default(5000),
 });
 
-export const ConfigSchema = z.object({
-  sourceRoot: z.string({
-    required_error: "Source path is required",
-    invalid_type_error: "Source path must be text",
-  }),
-  minecraftSavePath: z.string({
-    required_error: "Minecraft save path is required",
-    invalid_type_error: "Save path must be text",
-  }),
-  computerGroups: z.record(z.string(), ComputerGroupSchema).optional(),
-  rules: z.array(SyncRuleSchema),
-  advanced: AdvancedOptionsSchema.default({
-    verbose: false,
-    cache_ttl: 5000,
-  }),
-});
+export const ConfigSchema = z
+  .object({
+    sourceRoot: z.string({
+      required_error: "Source path is required",
+      invalid_type_error: "Source path must be text",
+    }),
+    minecraftSavePath: z.string({
+      required_error: "Minecraft save path is required",
+      invalid_type_error: "Save path must be text",
+    }),
+    computerGroups: z.record(z.string(), ComputerGroupSchema).optional(),
+    rules: z.array(SyncRuleSchema),
+    advanced: AdvancedOptionsSchema.default({
+      verbose: false,
+      cache_ttl: 5000,
+    }),
+  })
+  .superRefine((config, ctx) => {
+    // Validate each rule's source/target compatibility
+    config.rules.forEach((rule, idx) => {
+      if (hasGlobPattern(rule.source) && pathIsLikelyFile(rule.target)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `When using glob patterns in this rule's [source], [target] should be a directory path. A file path is assumed because it contains a file extension.\n [source] = ${rule.source}\n [target] = ${rule.target} <-- ERROR\n [computers] = ${rule.computers}`,
+          path: ["rules", idx],
+          fatal: false,
+        });
+      }
+    });
+  });
 
 export type Config = z.infer<typeof ConfigSchema>;
 export type ComputerGroup = z.infer<typeof ComputerGroupSchema>;
@@ -142,34 +165,50 @@ export const findConfig = async (
   return configs;
 };
 
-export async function loadConfig(configFilePath: string): Promise<Config> {
+export async function loadConfig(
+  configFilePath: string
+): Promise<LoadConfigResult> {
+  const result: LoadConfigResult = {
+    config: null,
+    errors: [],
+  };
+
   try {
     const resolvedPath = resolvePath(configFilePath);
+    const file = await fs.readFile(resolvedPath, "utf-8");
+    const rawConfig = parse(file);
+
     try {
-      const file = await fs.readFile(resolvedPath, 'utf-8');
-      const config = parse(file);
-      const validatedConfig = ConfigSchema.parse(config);
+      const validatedConfig = ConfigSchema.parse(rawConfig);
       // Resolve all paths in the config
-      return {
+      result.config = {
         ...validatedConfig,
         sourceRoot: resolvePath(validatedConfig.sourceRoot),
         minecraftSavePath: resolvePath(validatedConfig.minecraftSavePath),
       };
-    } catch (err) {
-      throw new Error(`Failed to read/parse config file: ${err}`);
+    } catch (error) {
+      if (error instanceof ZodError) {
+        // Format Zod errors into readable messages
+        error.errors.forEach((issue) => {
+          const path = issue.path.join(".");
+          result.errors.push(`${issue.message}`);
+        });
+      } else {
+        result.errors.push(
+          `Config error: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
     }
   } catch (error) {
-    if (error instanceof ZodError) {
-      const errMsg = error.format();
-      throw new Error(
-        `Failed to load config. Ensure that syntax is correct.\n${JSON.stringify(
-          error.flatten().fieldErrors
-        )}`
-      );
-    } else {
-      throw error
-    }
+    result.errors.push(
+      `Failed to read/parse config file: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
   }
+  return result;
 }
 
 export const createDefaultConfig = async (projectDir: string) => {

@@ -30,6 +30,13 @@ export const toTildePath = (fullPath: string): string => {
   return fullPath.startsWith(home) ? fullPath.replace(home, "~") : fullPath;
 };
 
+export const pathIsLikelyFile = (path: string): boolean => {
+  // Get the last segment of the path (after last slash or full path if no slash)
+  const lastSegment = path.split('/').pop() || path;
+  // If it contains a dot, it's likely meant to be a file
+  return lastSegment.includes('.');
+};
+
 export const getFormattedDate = (): string => {
   const now = new Date();
   const time = now.toLocaleTimeString("en-GB", {
@@ -53,7 +60,7 @@ interface SaveValidationResult {
   missingFiles: string[];
 }
 
-export const validateSaveDir = async (
+export const validateMinecraftSave = async (
   saveDir: string
 ): Promise<SaveValidationResult> => {
   const savePath = resolvePath(saveDir);
@@ -135,7 +142,7 @@ export const getComputerShortPath = (saveName: string, computerId: string) => {
     .replace("computercraft", "..");
 };
 
-export const discoverComputers = async (savePath: string) => {
+export const findMinecraftComputers = async (savePath: string) => {
   try {
     // Build path to computercraft directory
     const computercraftPath = path.join(savePath, "computercraft", "computer");
@@ -149,6 +156,8 @@ export const discoverComputers = async (savePath: string) => {
       );
     }
 
+    const computers: Computer[] = [];
+
     // Get the save name from the path
     const savePathParts = computercraftPath.split(path.sep);
     const saveIndex = savePathParts.findIndex((part) => part === "saves");
@@ -158,7 +167,6 @@ export const discoverComputers = async (savePath: string) => {
     const entries = await fs.readdir(computercraftPath, {
       withFileTypes: true,
     });
-    const computers: Computer[] = [];
 
     for (const entry of entries) {
       // Skip if it's not a directory or if it's in the excluded list
@@ -210,7 +218,7 @@ export function resolveComputerIds(
 
   let invalidGroups: string[] = [];
   const resolvedIds = computersList.flatMap((entry) => {
-    const group = config.computerGroups?.[entry]
+    const group = config.computerGroups?.[entry];
     if (group) {
       return group.computers;
     }
@@ -277,11 +285,10 @@ export async function validateFileSync(
         continue;
       }
 
-      const missingIds = computerIds.filter(id => 
-        !computers.some(c => c.id === id)
+      const missingIds = computerIds.filter(
+        (id) => !computers.some((c) => c.id === id)
       );
       validation.missingComputerIds.push(...missingIds);
-    
 
       // Create resolved file entries
       for (const sourcePath of relevantFiles) {
@@ -318,52 +325,100 @@ export async function validateFileSync(
 export async function copyFilesToComputer(
   resolvedFiles: ResolvedFileRule[],
   computerPath: string
-): Promise<void> {
+) {
+  const copiedFiles = [];
+  const skippedFiles = [];
+  const errors = [];
+
   // Normalize the computer path
   const normalizedComputerPath = path.normalize(computerPath);
 
   for (const file of resolvedFiles) {
-    // For directory targets, use source filename
-    const targetFileName = file.targetPath.endsWith('/')
+    // Determine if target is a directory:
+    const isTargetDirectory = !pathIsLikelyFile(file.targetPath)
+
+    // For directory targets, use source filename, otherwise use target filename
+    const targetFileName = isTargetDirectory
       ? path.basename(file.sourcePath)
       : path.basename(file.targetPath);
 
     // Handle both absolute and relative paths by removing leading slash
-    // This makes paths like "/lib" or "/startup.lua" relative to the computer root
-    const relativePath = file.targetPath.replace(/^\//, '');
+    const relativePath = file.targetPath.replace(/^\//, "");
 
     // Get the target directory path
-    const targetDirPath = relativePath.endsWith('/')
-      ? path.join(computerPath, relativePath.slice(0, -1))
+    const targetDirPath = isTargetDirectory
+      ? path.join(computerPath, relativePath)
       : path.join(computerPath, path.dirname(relativePath));
 
     // Construct and normalize the full target path
-    const targetFilePath = path.normalize(path.join(targetDirPath, targetFileName));
+    const targetFilePath = path.normalize(
+      path.join(targetDirPath, targetFileName)
+    );
 
     // Security check: Ensure the target path stays within the computer directory
-    const relativeToComputer = path.relative(normalizedComputerPath, targetFilePath);
-    if (relativeToComputer.startsWith('..') || path.isAbsolute(relativeToComputer)) {
-      throw new Error(
+    const relativeToComputer = path.relative(
+      normalizedComputerPath,
+      targetFilePath
+    );
+    if (
+      relativeToComputer.startsWith("..") ||
+      path.isAbsolute(relativeToComputer)
+    ) {
+      skippedFiles.push(file.sourcePath);
+      errors.push(
         `Security violation: Target path '${file.targetPath}' attempts to write outside the computer directory`
       );
+      break;
     }
 
     // First ensure source file exists and is a file
     const sourceStats = await fs.stat(file.sourcePath);
     if (!sourceStats.isFile()) {
-      throw new Error(`Source is not a file: ${file.sourcePath}`);
+      skippedFiles.push(file.sourcePath);
+      errors.push(`Source is not a file: ${file.sourcePath}`);
+      break;
     }
 
-    // Create target directory
-    await fs.mkdir(targetDirPath, { recursive: true });
+    // Check if target directory exists and is actually a directory
+    try {
+      const targetDirStats = await fs.stat(targetDirPath);
+      if (!targetDirStats.isDirectory()) {
+        skippedFiles.push(file.sourcePath);
+        errors.push(`Cannot create directory '${path.basename(targetDirPath)}' because a file with that name already exists`
+        );
+        break;
+      }
+    } catch (err) {
+      // Directory doesn't exist, create it
+      try {
+        await fs.mkdir(targetDirPath, { recursive: true });
+      } catch (mkdirErr) {
+        skippedFiles.push(file.sourcePath);
+        errors.push(`Failed to create directory: ${mkdirErr}`);
+        break;
+      }
+    }
 
-    // Copy the file
-    await fs.copyFile(file.sourcePath, targetFilePath);
+    try {
+      // Copy the file
+      await fs.copyFile(file.sourcePath, targetFilePath);
 
-    // Verify the copy
-    const targetStats = await fs.stat(targetFilePath);
-    if (!targetStats.isFile()) {
-      throw new Error(`Failed to create target file: ${targetFilePath}`);
+      // Verify the copy
+      const targetStats = await fs.stat(targetFilePath);
+      if (!targetStats.isFile()) {
+        throw new Error(`Failed to create target file: ${targetFilePath}`);
+      } else {
+        copiedFiles.push(file.sourcePath);
+      }
+    } catch (err) {
+      skippedFiles.push(file.sourcePath);
+      errors.push(err instanceof Error ? err.message : String(err));
+      break;
     }
   }
+  return {
+    copiedFiles,
+    skippedFiles,
+    errors,
+  };
 }

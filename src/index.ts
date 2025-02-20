@@ -64,7 +64,23 @@ async function main() {
   p.intro(`${color.magentaBright(`CC:Sync`)}`);
 
   try {
-    const config = await initConfig();
+    // Get the config file
+    const { config, errors } = await initConfig();
+    
+    if (errors.length > 0) {
+      p.log.error("Check your .ccsync.yaml file:");
+      errors.forEach(error => {
+        p.log.error(`  • ${error}`);
+      });
+      p.outro("Please fix these issues and try again.");
+      process.exit(1);
+    }
+
+    if (!config) {
+      p.log.error("No valid configuration found.");
+      process.exit(1);
+    }
+
     // Init log
     const log = createLogger({ verbose: config.advanced.verbose });
     const savePath = path.parse(config.minecraftSavePath);
@@ -120,20 +136,8 @@ async function main() {
 
     if (mode === "manual") {
       const manualController = await syncManager.startManualMode();
-
-      manualController.on(SyncEvent.SYNC_ERROR, ({ error, fatal }) => {
-        if (fatal) {
-          cleanup();
-        }
-      });
     } else {
       const watchController = await syncManager.startWatchMode();
-
-      watchController.on(SyncEvent.SYNC_ERROR, ({ error, fatal }) => {
-        if (fatal) {
-          cleanup();
-        }
-      });
     }
 
     // Keep the process alive until explicitly terminated
@@ -143,7 +147,7 @@ async function main() {
           clearInterval(checkInterval);
           resolve();
         }
-      }, 1000);
+      }, 500);
     });
 
     gracefulExit()

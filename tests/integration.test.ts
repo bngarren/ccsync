@@ -209,7 +209,7 @@ describe("Integration: SyncManager", () => {
 
         // Handle errors
         watchController.on(SyncEvent.SYNC_ERROR, ({ error }) => {
-          reject(new Error(`File sync error: ${error}`));
+          reject(error);
         });
 
         // Set timeout for test

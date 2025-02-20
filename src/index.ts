@@ -34,7 +34,7 @@ const initConfig = async () => {
     process.exit(0);
   } else if (configs.length === 1) {
     configPath = configs[0].path;
-    p.log.info(`Using config: ${color.gray(configs[0].relativePath)}`);
+   // p.log.info(`Using config: ${color.gray(configs[0].relativePath)}`);
   } else {
     // Multiple configs found - let user choose
     const selection = (await p.select({
@@ -57,6 +57,7 @@ const initConfig = async () => {
   return await loadConfig(configPath);
 };
 
+
 async function main() {
   console.clear();
 
@@ -67,6 +68,11 @@ async function main() {
     // Init log
     const log = createLogger({ verbose: config.advanced.verbose });
     const savePath = path.parse(config.minecraftSavePath);
+
+    const gracefulExit = () => {
+      p.outro(theme.accent("Goodbye!"));
+      process.exit(0);
+    }
 
     // ---- Confirm MC save location ----
 
@@ -81,8 +87,7 @@ async function main() {
       log.info(
         "If this save instance is incorrect, change the 'minecraftSavePath' in the .ccsync.yaml to point to the one you want."
       );
-      log.status("Goodbye!");
-      process.exit(0);
+      gracefulExit()
     }
 
     // Choose mode
@@ -99,8 +104,7 @@ async function main() {
     })) as SyncMode;
 
     if (p.isCancel(mode)) {
-      log.status("Goodbye!");
-      process.exit(0);
+      gracefulExit()
     }
 
     const syncManager = new SyncManager(config);
@@ -108,8 +112,7 @@ async function main() {
     // Handle process termination signals
     const cleanup = async () => {
       await syncManager.stop();
-      log.status("Goodbye!");
-      process.exit(0);
+      gracefulExit()
     };
 
     process.on("SIGINT", cleanup); // Ctrl+C
@@ -142,6 +145,9 @@ async function main() {
         }
       }, 1000);
     });
+
+    gracefulExit()
+
   } catch (err) {
     p.log.error(`Fatal error: ${err instanceof Error ? err.message : String(err)}`);
     process.exit(1);

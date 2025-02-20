@@ -9,6 +9,7 @@ mock.module("../src/log", () => ({
   createLogger: () => ({
     verbose: () => {},
     info: () => {},
+    step: () => {},
     success: () => {},
     warn: () => {},
     error: () => {},

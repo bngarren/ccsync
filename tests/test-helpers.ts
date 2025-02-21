@@ -6,6 +6,7 @@ import type { Computer } from "../src/types"
 import { getComputerShortPath } from "../src/utils"
 import * as p from "@clack/prompts"
 import { mock } from "bun:test"
+import { DEFAULT_CONFIG, type Config } from "../src/config"
 
 /**
  * Creates a new tmp directory in the operating system's default directory for temporary files.
@@ -54,6 +55,14 @@ export async function createTestComputer(
   if (options.createStartup) {
     await writeFile(path.join(computerDir, "startup.lua"), "")
   }
+}
+
+/**
+ * Returns a Config object merging the input config with a default
+ * @param config
+ */
+export const withDefaultConfig = (config: Partial<Config>): Config => {
+  return { ...DEFAULT_CONFIG, ...config }
 }
 
 /**

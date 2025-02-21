@@ -10,6 +10,7 @@ import {
   createTestFiles,
   spyOnClackPrompts,
   createTestComputer,
+  withDefaultConfig,
 } from "./test-helpers"
 import { stringify } from "yaml"
 import { SyncEvent } from "../src/types"
@@ -57,13 +58,13 @@ describe("Integration: SyncManager", () => {
 
   test("performs manual sync", async () => {
     const configPath = path.join(tempDir, ".ccsync.yaml")
-    const configObject = {
+    const configObject = withDefaultConfig({
       sourceRoot: sourceDir,
       minecraftSavePath: savePath,
       rules: [
         { source: "program.lua", target: "/program.lua", computers: ["1"] },
       ],
-    }
+    })
 
     const configContent = stringify(configObject)
 
@@ -104,7 +105,7 @@ describe("Integration: SyncManager", () => {
 
   test("handles file changes in watch mode", async () => {
     const configPath = path.join(tempDir, ".ccsync.yaml")
-    const configObject = {
+    const configObject = withDefaultConfig({
       sourceRoot: sourceDir,
       minecraftSavePath: savePath,
       rules: [
@@ -114,10 +115,7 @@ describe("Integration: SyncManager", () => {
           computers: ["1", "2"],
         },
       ],
-      advanced: {
-        verbose: true,
-      },
-    }
+    })
 
     const configContent = stringify(configObject)
     await fs.writeFile(configPath, configContent)
@@ -252,7 +250,7 @@ describe("Integration: SyncManager", () => {
       "print('Custom Startup')"
     )
 
-    const configObject = {
+    const configObject = withDefaultConfig({
       sourceRoot: sourceDir,
       minecraftSavePath: savePath,
       rules: [
@@ -286,10 +284,7 @@ describe("Integration: SyncManager", () => {
           computers: ["2"],
         },
       ],
-      advanced: {
-        verbose: true,
-      },
-    }
+    })
 
     const configContent = stringify(configObject)
     await fs.writeFile(configPath, configContent)
@@ -405,7 +400,7 @@ describe("Integration: SyncManager", () => {
     await fs.writeFile(path.join(sourceDir, "second.lua"), "print('Second')")
     await fs.writeFile(path.join(sourceDir, "third.lua"), "print('Third')")
 
-    const configObject = {
+    const configObject = withDefaultConfig({
       sourceRoot: sourceDir,
       minecraftSavePath: savePath,
       rules: [
@@ -415,10 +410,7 @@ describe("Integration: SyncManager", () => {
           computers: ["1"],
         },
       ],
-      advanced: {
-        verbose: true,
-      },
-    }
+    })
 
     const configContent = stringify(configObject)
     await fs.writeFile(configPath, configContent)

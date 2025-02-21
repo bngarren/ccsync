@@ -1,6 +1,8 @@
 # CC:Sync Configuration File
 # This file configures how CC:Sync copies files to your ComputerCraft computers
 
+version: "0.0.1"
+
 # Where your source files are located (relative to this config file)
 sourceRoot: "./examples/test1"
 

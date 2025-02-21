@@ -7,9 +7,10 @@ import path from "path"
 import * as fs from "node:fs/promises"
 import { merge } from "ts-deepmerge"
 
-const DEFAULT_CONFIG_FILENAME = ".ccsync.yaml"
-
-const DEFAULT_CONFIG: Config = {
+export const CONFIG_VERSION = "1.0"
+export const DEFAULT_CONFIG_FILENAME = ".ccsync.yaml"
+export const DEFAULT_CONFIG: Config = {
+  version: CONFIG_VERSION,
   sourceRoot: "./src",
   minecraftSavePath: "~/minecraft/saves/world",
   computerGroups: {},
@@ -27,6 +28,18 @@ export interface LoadConfigResult {
 
 const hasGlobPattern = (path: string): boolean => {
   return path.includes("*") || path.includes("{") || path.includes("[")
+}
+
+/**
+ * Checks if a config version is compatible with the CLI version
+ * @param configVersion Version from the config file
+ * @returns true if compatible, false if not
+ */
+export function isConfigVersionCompatible(configVersion: string): boolean {
+  // For now, just check major version number
+  const [configMajor] = configVersion.split(".")
+  const [cliMajor] = CONFIG_VERSION.split(".")
+  return configMajor === cliMajor
 }
 
 // ---- SCHEMA & TYPES ----
@@ -99,6 +112,10 @@ const AdvancedOptionsSchema = z.object({
 
 export const ConfigSchema = z
   .object({
+    version: z.string({
+      required_error: "Config version is required",
+      invalid_type_error: "Version must be a string",
+    }),
     sourceRoot: z.string({
       required_error: "Source path is required",
       invalid_type_error: "Source path must be text",
@@ -115,6 +132,14 @@ export const ConfigSchema = z
     }),
   })
   .superRefine((config, ctx) => {
+    // Version compatibility check
+    if (!isConfigVersionCompatible(config.version)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Config version ${CONFIG_VERSION} is required. You are using ${config.version}.`,
+        path: ["version"],
+      })
+    }
     // Validate each rule's source/target compatibility
     config.rules.forEach((rule, idx) => {
       if (hasGlobPattern(rule.source) && pathIsLikelyFile(rule.target)) {
@@ -214,6 +239,9 @@ export const createDefaultConfig = async (projectDir: string) => {
   const configPath = path.join(projectDir, DEFAULT_CONFIG_FILENAME)
   const configContent = `# CC:Sync Configuration File
 # This file configures how CC:Sync copies files to your ComputerCraft computers
+
+# Config version (do not modify)
+version: "${CONFIG_VERSION}"
 
 # Where your source files are located (relative to this config file)
 sourceRoot: "${DEFAULT_CONFIG.sourceRoot}"

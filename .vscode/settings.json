@@ -1,3 +1,8 @@
 {
-    "npm.packageManager": "bun"
+  "npm.packageManager": "bun",
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "always"
+  },
+  "eslint.useFlatConfig": true,
+  "editor.formatOnSave": true
 }

@@ -11,7 +11,7 @@ sourceRoot: "./examples/test1"
 minecraftSavePath: "/Users/bngarren/Documents/curseforge/minecraft/Instances/Craftoria (2)/saves/New World"
 
 # Define groups of computers for easier file targeting
-computerGroups: 
+computerGroups:
   # Example group:
   monitors:
     name: "Monitor Network"
@@ -20,9 +20,9 @@ computerGroups:
 rules:
   # Examples:
   # Sync to a specific computer:
-  - source: "*.lua"    # File in your sourceRoot
-    target: "/lib"    # Where to put it on the computer
-    computers: ["monitors"]         # Computer IDs to sync to
+  - source: "*.lua" # File in your sourceRoot
+    target: "/lib" # Where to put it on the computer
+    computers: ["monitors"] # Computer IDs to sync to
   #
   # Sync to a group of computers:
   # - source: "lib/*.lua"      # Glob patterns supported
@@ -33,7 +33,7 @@ rules:
 advanced:
   # Enable verbose logging
   verbose: false
-  
+
   # How long to cache validation results (milliseconds)
   # Lower = more accurate but more CPU intensive, Higher = faster but may miss changes
   cache_ttl: 5000

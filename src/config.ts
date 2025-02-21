@@ -1,13 +1,13 @@
 // config.ts
 
-import { z, ZodError } from "zod";
-import { parse } from "yaml";
-import { pathIsLikelyFile, resolvePath } from "./utils";
-import path from "path";
-import * as fs from "node:fs/promises";
-import { merge } from "ts-deepmerge";
+import { z, ZodError } from "zod"
+import { parse } from "yaml"
+import { pathIsLikelyFile, resolvePath } from "./utils"
+import path from "path"
+import * as fs from "node:fs/promises"
+import { merge } from "ts-deepmerge"
 
-const DEFAULT_CONFIG_FILENAME = ".ccsync.yaml";
+const DEFAULT_CONFIG_FILENAME = ".ccsync.yaml"
 
 const DEFAULT_CONFIG: Config = {
   sourceRoot: "./src",
@@ -18,16 +18,16 @@ const DEFAULT_CONFIG: Config = {
     verbose: false,
     cache_ttl: 5000,
   },
-};
+}
 
 export interface LoadConfigResult {
-  config: Config | null;
-  errors: string[];
+  config: Config | null
+  errors: string[]
 }
 
 const hasGlobPattern = (path: string): boolean => {
-  return path.includes("*") || path.includes("{") || path.includes("[");
-};
+  return path.includes("*") || path.includes("{") || path.includes("[")
+}
 
 // ---- SCHEMA & TYPES ----
 
@@ -44,7 +44,7 @@ const ComputerIdSchema = z.union([
     .int("Computer ID must be a whole number (no decimals)")
     .nonnegative("Computer ID must be zero or positive")
     .transform((n) => n.toString()),
-]);
+])
 
 // Computer group schema
 const ComputerGroupSchema = z.object({
@@ -56,7 +56,7 @@ const ComputerGroupSchema = z.object({
     required_error: "Group must contain computer IDs",
     invalid_type_error: "Computers must be an array of IDs",
   }),
-});
+})
 
 // Sync rule schema
 const SyncRuleSchema = z.object({
@@ -81,7 +81,7 @@ const SyncRuleSchema = z.object({
     ])
     .optional()
     .describe("Computer IDs or group names to sync files to"),
-});
+})
 
 const AdvancedOptionsSchema = z.object({
   verbose: z
@@ -95,7 +95,7 @@ const AdvancedOptionsSchema = z.object({
     })
     .min(0, "Cache TTL cannot be negative")
     .default(5000),
-});
+})
 
 export const ConfigSchema = z
   .object({
@@ -123,14 +123,14 @@ export const ConfigSchema = z
           message: `When using glob patterns in this rule's [source], [target] should be a directory path. A file path is assumed because it contains a file extension.\n [source] = ${rule.source}\n [target] = ${rule.target} <-- ERROR\n [computers] = ${rule.computers}`,
           path: ["rules", idx],
           fatal: false,
-        });
+        })
       }
-    });
-  });
+    })
+  })
 
-export type Config = z.infer<typeof ConfigSchema>;
-export type ComputerGroup = z.infer<typeof ComputerGroupSchema>;
-export type FileSyncRule = z.infer<typeof SyncRuleSchema>;
+export type Config = z.infer<typeof ConfigSchema>
+export type ComputerGroup = z.infer<typeof ComputerGroupSchema>
+export type FileSyncRule = z.infer<typeof SyncRuleSchema>
 
 // ---- CONFIG METHODS ----
 
@@ -139,31 +139,31 @@ export const withDefaultConfig = (config: Partial<Config>) => {
     { mergeArrays: false },
     DEFAULT_CONFIG,
     config
-  ) as Config;
-};
+  ) as Config
+}
 
 export const findConfig = async (
   startDir: string = process.cwd()
 ): Promise<Array<{ path: string; relativePath: string }>> => {
-  const configs: Array<{ path: string; relativePath: string }> = [];
-  let currentDir = startDir;
+  const configs: Array<{ path: string; relativePath: string }> = []
+  let currentDir = startDir
 
   while (currentDir !== path.parse(currentDir).root) {
-    const configPath = path.join(currentDir, DEFAULT_CONFIG_FILENAME);
+    const configPath = path.join(currentDir, DEFAULT_CONFIG_FILENAME)
     try {
-      await fs.access(configPath);
+      await fs.access(configPath)
       configs.push({
         path: configPath,
         relativePath: path.relative(startDir, configPath),
-      });
+      })
     } catch {
       // Continue searching even if this path doesn't exist
     }
-    currentDir = path.dirname(currentDir);
+    currentDir = path.dirname(currentDir)
   }
 
-  return configs;
-};
+  return configs
+}
 
 export async function loadConfig(
   configFilePath: string
@@ -171,34 +171,33 @@ export async function loadConfig(
   const result: LoadConfigResult = {
     config: null,
     errors: [],
-  };
+  }
 
   try {
-    const resolvedPath = resolvePath(configFilePath);
-    const file = await fs.readFile(resolvedPath, "utf-8");
-    const rawConfig = parse(file);
+    const resolvedPath = resolvePath(configFilePath)
+    const file = await fs.readFile(resolvedPath, "utf-8")
+    const rawConfig = parse(file)
 
     try {
-      const validatedConfig = ConfigSchema.parse(rawConfig);
+      const validatedConfig = ConfigSchema.parse(rawConfig)
       // Resolve all paths in the config
       result.config = {
         ...validatedConfig,
         sourceRoot: resolvePath(validatedConfig.sourceRoot),
         minecraftSavePath: resolvePath(validatedConfig.minecraftSavePath),
-      };
+      }
     } catch (error) {
       if (error instanceof ZodError) {
         // Format Zod errors into readable messages
         error.errors.forEach((issue) => {
-          const path = issue.path.join(".");
-          result.errors.push(`${issue.message}`);
-        });
+          result.errors.push(`${issue.message}`)
+        })
       } else {
         result.errors.push(
           `Config error: ${
             error instanceof Error ? error.message : String(error)
           }`
-        );
+        )
       }
     }
   } catch (error) {
@@ -206,13 +205,13 @@ export async function loadConfig(
       `Failed to read/parse config file: ${
         error instanceof Error ? error.message : String(error)
       }`
-    );
+    )
   }
-  return result;
+  return result
 }
 
 export const createDefaultConfig = async (projectDir: string) => {
-  const configPath = path.join(projectDir, DEFAULT_CONFIG_FILENAME);
+  const configPath = path.join(projectDir, DEFAULT_CONFIG_FILENAME)
   const configContent = `# CC:Sync Configuration File
 # This file configures how CC:Sync copies files to your ComputerCraft computers
 
@@ -253,7 +252,7 @@ advanced:
   # How long to cache validation results (milliseconds)
   # Lower = more accurate but more CPU intensive, Higher = faster but may miss changes
   cache_ttl: 5000
-`;
+`
 
-  await fs.writeFile(configPath, configContent, "utf-8");
-};
+  await fs.writeFile(configPath, configContent, "utf-8")
+}

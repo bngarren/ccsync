@@ -36,6 +36,10 @@
   },
   "scripts": {
     "clean": "rm -rf ./dist",
+    "lint": "eslint .",
+    "pretty": "prettier . --write",
+    "pretty:check": "prettier . --check",
+    "check": "bun run lint && bun run pretty:check",
     "dev": "bun run ./src/index.ts",
     "test": "bun test --preload ./tests/setup.ts",
     "prepare": "npm run build",
@@ -45,13 +49,16 @@
     "build-ex:macos-x64": "bun build src/index.ts --outfile ./dist/ccsync-macos-x64 --target bun-darwin-x64 --compile",
     "build-ex:macos-arm64": "bun build src/index.ts --outfile ./dist/ccsync-macos-arm64 --target bun-darwin-arm64 --compile",
     "build-ex:macos": "bun run build-ex:macos-x64 && bun run build-ex:macos-arm64",
-    "build-ex:windows": "bun build src/index.ts --outfile ./dist/ccsync-windows.exe --target bun-windows-x64-baseline --compile",
-    "preversion": "bun test",
-    "commit:bump": "npm version patch -m \"bump to %s\""
+    "build-ex:windows": "bun build src/index.ts --outfile ./dist/ccsync-windows.exe --target bun-windows-x64-baseline --compile"
   },
   "devDependencies": {
     "@types/bun": "^1.2.2",
-    "@types/node": "^22.13.4"
+    "@types/node": "^22.13.4",
+    "eslint": "^9.20.1",
+    "eslint-config-prettier": "^10.0.1",
+    "neostandard": "^0.12.1",
+    "prettier": "^3.5.1",
+    "typescript-eslint": "^8.24.1"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"

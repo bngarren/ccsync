@@ -1,11 +1,11 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
-import path from "path";
-import os from "os";
-import crypto from "crypto";
-import type { Computer } from "../src/types";
-import { getComputerShortPath } from "../src/utils";
-import * as p from "@clack/prompts";
-import { mock } from "bun:test";
+import { mkdir, rm, writeFile } from "node:fs/promises"
+import path from "path"
+import os from "os"
+import crypto from "crypto"
+import type { Computer } from "../src/types"
+import { getComputerShortPath } from "../src/utils"
+import * as p from "@clack/prompts"
+import { mock } from "bun:test"
 
 /**
  * Creates a new tmp directory in the operating system's default directory for temporary files.
@@ -18,8 +18,8 @@ import { mock } from "bun:test";
  * @returns Full path to tmp directory
  */
 export function createUniqueTempDir() {
-  const uniqueId = crypto.randomBytes(16).toString("hex");
-  return path.join(os.tmpdir(), `ccsync-test-${uniqueId}`);
+  const uniqueId = crypto.randomBytes(16).toString("hex")
+  return path.join(os.tmpdir(), `ccsync-test-${uniqueId}`)
 }
 
 /**
@@ -28,14 +28,14 @@ export function createUniqueTempDir() {
  */
 export async function createTestSave(saveDir: string) {
   // Create main directories
-  await mkdir(path.join(saveDir, "region"), { recursive: true });
+  await mkdir(path.join(saveDir, "region"), { recursive: true })
   await mkdir(path.join(saveDir, "computercraft", "computer"), {
     recursive: true,
-  });
+  })
 
   // Create required files
-  await writeFile(path.join(saveDir, "level.dat"), "");
-  await writeFile(path.join(saveDir, "session.lock"), "");
+  await writeFile(path.join(saveDir, "level.dat"), "")
+  await writeFile(path.join(saveDir, "session.lock"), "")
 }
 
 /**
@@ -48,11 +48,11 @@ export async function createTestComputer(
   id: string,
   options: { createStartup?: boolean } = { createStartup: true }
 ) {
-  const computerDir = path.join(computersDir, id);
-  await mkdir(computerDir, { recursive: true });
+  const computerDir = path.join(computersDir, id)
+  await mkdir(computerDir, { recursive: true })
   // Add a dummy file to simulate computer data
   if (options.createStartup) {
-    await writeFile(path.join(computerDir, "startup.lua"), "");
+    await writeFile(path.join(computerDir, "startup.lua"), "")
   }
 }
 
@@ -72,11 +72,11 @@ export async function createTestComputer(
  * @param targetDir
  */
 export async function createTestFiles(targetDir: string) {
-  await mkdir(targetDir, { recursive: true });
-  await writeFile(path.join(targetDir, "program.lua"), "print('Hello')");
-  await writeFile(path.join(targetDir, "startup.lua"), "print('Startup')");
-  await mkdir(path.join(targetDir, "lib"), { recursive: true });
-  await writeFile(path.join(targetDir, "lib/utils.lua"), "-- Utils");
+  await mkdir(targetDir, { recursive: true })
+  await writeFile(path.join(targetDir, "program.lua"), "print('Hello')")
+  await writeFile(path.join(targetDir, "startup.lua"), "print('Startup')")
+  await mkdir(path.join(targetDir, "lib"), { recursive: true })
+  await writeFile(path.join(targetDir, "lib/utils.lua"), "-- Utils")
 }
 
 /**
@@ -95,15 +95,15 @@ export function createComputerObject(
     id,
     path: path.join(pathToComputersDir, id),
     shortPath: getComputerShortPath(saveName, id),
-  };
+  }
 }
 
 // Cleanup helper
 export async function cleanupTempDir(tempDir: string) {
   try {
-    await rm(tempDir, { recursive: true, force: true });
+    await rm(tempDir, { recursive: true, force: true })
   } catch (err) {
-    console.warn(`Warning: Failed to clean up test directory ${tempDir}:`, err);
+    console.warn(`Warning: Failed to clean up test directory ${tempDir}:`, err)
   }
 }
 
@@ -113,57 +113,57 @@ export async function cleanupTempDir(tempDir: string) {
  * Registers an on "exit" listener that will cleanup all tmp dirs if there is an unexpected termination during operation
  */
 export class TempCleaner {
-  private static instance: TempCleaner;
-  private tempDirs: Set<string> = new Set();
-  private handlerRegistered = false;
+  private static instance: TempCleaner
+  private tempDirs: Set<string> = new Set()
+  private handlerRegistered = false
 
   private constructor() {
     // Register only once
     if (!this.handlerRegistered) {
       process.on("exit", () => {
-        console.warn("Running test cleanup after unexpected termination!");
-        this.cleanup();
-      });
-      this.handlerRegistered = true;
+        console.warn("Running test cleanup after unexpected termination!")
+        this.cleanup()
+      })
+      this.handlerRegistered = true
     }
   }
 
   static getInstance(): TempCleaner {
     if (!TempCleaner.instance) {
-      TempCleaner.instance = new TempCleaner();
+      TempCleaner.instance = new TempCleaner()
     }
-    return TempCleaner.instance;
+    return TempCleaner.instance
   }
 
   add(dir: string) {
-    this.tempDirs.add(dir);
+    this.tempDirs.add(dir)
     //console.log("TempCleaner added: ", dir)
   }
 
   remove(dir: string) {
-    this.tempDirs.delete(dir);
+    this.tempDirs.delete(dir)
     //console.log("TempCleaner removed: ", dir)
   }
 
   async cleanDir(dir: string) {
     try {
-      await rm(dir, { recursive: true, force: true });
-      this.remove(dir);
+      await rm(dir, { recursive: true, force: true })
+      this.remove(dir)
     } catch (err) {
-      console.warn(`Warning: Failed to clean up test directory ${dir}:`, err);
+      console.warn(`Warning: Failed to clean up test directory ${dir}:`, err)
     }
   }
 
   private cleanup() {
     for (const dir of this.tempDirs) {
-      require("fs").rmSync(dir, { recursive: true });
+      require("fs").rmSync(dir, { recursive: true })
     }
-    this.tempDirs.clear();
+    this.tempDirs.clear()
   }
 }
 
 export function spyOnClackPrompts() {
-  const messages: string[] = [];
+  const messages: string[] = []
 
   // Store original methods
   const original = {
@@ -171,44 +171,44 @@ export function spyOnClackPrompts() {
     success: p.log.success,
     error: p.log.error,
     warn: p.log.warn,
-  };
+  }
 
   // Replace with spy versions
   p.log.info = (msg: string) => {
-    messages.push(`info: ${msg}`);
-  };
+    messages.push(`info: ${msg}`)
+  }
   p.log.success = (msg: string) => {
-    messages.push(`success: ${msg}`);
-  };
+    messages.push(`success: ${msg}`)
+  }
   p.log.error = (msg: string) => {
-    messages.push(`error: ${msg}`);
-  };
+    messages.push(`error: ${msg}`)
+  }
   p.log.warn = (msg: string) => {
-    messages.push(`warn: ${msg}`);
-  };
+    messages.push(`warn: ${msg}`)
+  }
 
   // Mock the entire @clack/prompts module for spinner
   mock.module("@clack/prompts", () => ({
     ...p, // Keep all other original exports
     spinner: () => ({
       start: (msg: string) => {
-        messages.push(`spinner: ${msg}`);
+        messages.push(`spinner: ${msg}`)
       },
       stop: (msg?: string) => {
-        if (msg) messages.push(`spinner stop: ${msg}`);
+        if (msg) messages.push(`spinner stop: ${msg}`)
       },
     }),
-  }));
+  }))
 
   // Return cleanup function and message getter
   return {
     messages,
     cleanup: () => {
-      p.log.info = original.info;
-      p.log.success = original.success;
-      p.log.error = original.error;
-      p.log.warn = original.warn;
-      mock.restore();
+      p.log.info = original.info
+      p.log.success = original.success
+      p.log.error = original.error
+      p.log.warn = original.warn
+      mock.restore()
     },
-  };
+  }
 }

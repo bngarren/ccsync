@@ -405,6 +405,74 @@ describe("File Operations", () => {
       expect(await fs.readFile(targetPath, "utf8")).toBe("-- Utils");
     });
 
+    test("treats target without extension as directory", async () => {
+      // Create source file
+      await fs.writeFile(path.join(sourceDir, "program.lua"), "print('Program')");
+    
+      const resolvedFiles: ResolvedFileRule[] = [
+        {
+          sourcePath: path.join(sourceDir, "program.lua"),
+          targetPath: "lib", // No extension = directory
+          computers: ["1"],
+        },
+      ];
+    
+      await copyFilesToComputer(resolvedFiles, computerDir);
+    
+      // Verify file was copied to lib directory with original name
+      const targetPath = path.join(computerDir, "lib", "program.lua");
+      expect(await fs.readFile(targetPath, "utf8")).toBe("print('Program')");
+    });
+
+    test("errors when target file exists but directory needed", async () => {
+      // Create source file
+      await fs.writeFile(path.join(sourceDir, "program.lua"), "print('Program')");
+      
+      // Create a file named 'lib'
+      await fs.writeFile(path.join(computerDir, "lib"), "I am a file");
+    
+      // Try to use 'lib' as a directory target
+      const resolvedFiles: ResolvedFileRule[] = [
+        {
+          sourcePath: path.join(sourceDir, "program.lua"),
+          targetPath: "lib", // No extension = should be directory
+          computers: ["1"],
+        },
+      ];
+    
+      const result = await copyFilesToComputer(resolvedFiles, computerDir);
+    
+      // Should fail with appropriate error
+      expect(result.copiedFiles).toHaveLength(0);
+      expect(result.skippedFiles).toHaveLength(1);
+      expect(result.errors[0]).toContain("Cannot create directory"); // Verify error message
+    });
+
+    test("renames file when target has extension", async () => {
+      // Create source file
+      await fs.writeFile(path.join(sourceDir, "program.lua"), "print('Program')");
+    
+      const resolvedFiles: ResolvedFileRule[] = [
+        {
+          sourcePath: path.join(sourceDir, "program.lua"),
+          targetPath: "startup.lua", // Different name
+          computers: ["1"],
+        },
+      ];
+    
+      const result = await copyFilesToComputer(resolvedFiles, computerDir);
+    
+      // Should succeed
+      expect(result.copiedFiles).toHaveLength(1);
+      expect(result.skippedFiles).toHaveLength(0);
+      expect(result.errors).toHaveLength(0);
+    
+      // Verify file was renamed and copied correctly
+      const targetPath = path.join(computerDir, "startup.lua");
+      expect(await fs.exists(path.join(computerDir, "program.lua"))).toBe(false); // Original name shouldn't exist
+      expect(await fs.readFile(targetPath, "utf8")).toBe("print('Program')");
+    });
+
     test("handles nested directory structures", async () => {
       // Create a more complex source structure
       await fs.mkdir(path.join(sourceDir, "apis/net"), { recursive: true });
@@ -529,6 +597,46 @@ describe("File Operations", () => {
       expect(
         await fs.readFile(path.join(computerDir, "modules/test3.lua"), "utf8")
       ).toBe("return true");
+    });
+
+    test("attempts all files even when some fail", async () => {
+      // Create source files
+      await fs.writeFile(path.join(sourceDir, "a.lua"), "print('a')");
+      await fs.writeFile(path.join(sourceDir, "b.lua"), "print('b')");
+      await fs.writeFile(path.join(sourceDir, "c.lua"), "print('c')");
+    
+      // Create a file named 'lib' to cause directory creation to fail
+      await fs.writeFile(path.join(computerDir, "lib"), "I am a file");
+    
+      const resolvedFiles: ResolvedFileRule[] = [
+        {
+          sourcePath: path.join(sourceDir, "a.lua"),
+          targetPath: "lib", // Will fail - lib exists as file
+          computers: ["1"],
+        },
+        {
+          sourcePath: path.join(sourceDir, "b.lua"),
+          targetPath: "other/", // Should succeed
+          computers: ["1"],
+        },
+        {
+          sourcePath: path.join(sourceDir, "c.lua"),
+          targetPath: "data/", // Should succeed
+          computers: ["1"],
+        },
+      ];
+    
+      const result = await copyFilesToComputer(resolvedFiles, computerDir);
+    
+      // First file should fail, other two should succeed
+      expect(result.copiedFiles).toHaveLength(2);
+      expect(result.skippedFiles).toHaveLength(1);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]).toContain("Cannot create directory");
+    
+      // Verify successful copies
+      expect(await fs.readFile(path.join(computerDir, "other", "b.lua"), "utf8")).toBe("print('b')");
+      expect(await fs.readFile(path.join(computerDir, "data", "c.lua"), "utf8")).toBe("print('c')");
     });
 
     test("prevents file copy outside of computer directory", async () => {

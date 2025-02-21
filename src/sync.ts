@@ -23,6 +23,7 @@ import { theme } from "./theme";
 import * as p from "@clack/prompts";
 import { KeyHandler } from "./keys";
 import { setTimeout } from "node:timers/promises";
+import { glob } from "glob";
 
 enum SyncManagerState {
   IDLE,
@@ -229,8 +230,6 @@ export class SyncManager {
         results.push({ computerId: computer.id, success: false });
         fileResults.set(relativePath, results);
       });
-
-      console.log(syncResult)
 
       // Log any errors
       if (syncResult.errors.length > 0) {
@@ -551,7 +550,15 @@ class ManualModeController {
 class WatchModeController {
   private watcher: ReturnType<typeof watch> | null = null;
   private keyHandler: KeyHandler | null = null;
+  /**
+   * Files being watched or tracked for file changes
+   */
+  private watchedFiles: Set<string> = new Set();
+  /**
+   * Temp set of files that have just changed that will be synced. Clear when synced.
+   */
   private changedFiles: Set<string> = new Set();
+  
   private isInitialSync = true;
   protected events = createTypedEmitter<WatchSyncEvents>();
 
@@ -596,16 +603,19 @@ class WatchModeController {
   }
 
   async start(): Promise<void> {
-    this.emit(SyncEvent.STARTED); // Signal ready to run
-    this.log.status(`CC: Sync watch mode started at ${getFormattedDate()}`);
 
     try {
-      await this.performSyncCycle();
-
-      if (this.syncManager.getState() !== SyncManagerState.RUNNING) return;
 
       this.setupKeyHandler();
       await this.setupWatcher();
+
+      this.emit(SyncEvent.STARTED); // Signal ready to run
+      this.log.status(`CC: Sync watch mode started at ${getFormattedDate()}`);
+
+      // Peform initial sync
+      await this.performSyncCycle();
+
+      if (this.syncManager.getState() !== SyncManagerState.RUNNING) return;
 
       // Keep running until state changes
       while (this.syncManager.getState() === SyncManagerState.RUNNING) {
@@ -730,10 +740,31 @@ class WatchModeController {
     this.keyHandler.start();
   }
 
+  private async resolveWatchPatterns(): Promise<string[]> {
+    try {
+      // Get all unique file paths from glob patterns
+      const uniqueSourcePaths = new Set<string>();
+      
+      for (const rule of this.config.rules) {
+        const sourcePath = path.join(this.config.sourceRoot, rule.source);
+        const matches = await glob(sourcePath, { absolute: true });
+        matches.forEach(match => uniqueSourcePaths.add(match));
+      }
+
+      // Convert to array and store in watchedFiles
+      const patterns = Array.from(uniqueSourcePaths);
+      this.watchedFiles = new Set(patterns);
+      
+      return patterns;
+    } catch (err) {
+      this.log.error(`Failed to resolve watch patterns: ${err}`);
+      throw err;
+    }
+  }
+
   private async setupWatcher(): Promise<void> {
-    const patterns = this.config.rules.map((f) =>
-      path.join(this.config.sourceRoot, f.source)
-    );
+    // Get actual file paths to watch
+    const patterns = await this.resolveWatchPatterns();
 
     this.watcher = watch(patterns, {
       ignoreInitial: true,
@@ -786,5 +817,6 @@ class WatchModeController {
       this.watcher = null;
     }
     this.changedFiles.clear();
+    this.watchedFiles.clear();
   }
 }

@@ -368,7 +368,7 @@ export async function copyFilesToComputer(
       errors.push(
         `Security violation: Target path '${file.targetPath}' attempts to write outside the computer directory`
       );
-      break;
+      continue;
     }
 
     // First ensure source file exists and is a file
@@ -376,7 +376,7 @@ export async function copyFilesToComputer(
     if (!sourceStats.isFile()) {
       skippedFiles.push(file.sourcePath);
       errors.push(`Source is not a file: ${file.sourcePath}`);
-      break;
+      continue;
     }
 
     // Check if target directory exists and is actually a directory
@@ -386,7 +386,7 @@ export async function copyFilesToComputer(
         skippedFiles.push(file.sourcePath);
         errors.push(`Cannot create directory '${path.basename(targetDirPath)}' because a file with that name already exists`
         );
-        break;
+        continue;
       }
     } catch (err) {
       // Directory doesn't exist, create it
@@ -395,7 +395,7 @@ export async function copyFilesToComputer(
       } catch (mkdirErr) {
         skippedFiles.push(file.sourcePath);
         errors.push(`Failed to create directory: ${mkdirErr}`);
-        break;
+        continue;
       }
     }
 
@@ -413,7 +413,7 @@ export async function copyFilesToComputer(
     } catch (err) {
       skippedFiles.push(file.sourcePath);
       errors.push(err instanceof Error ? err.message : String(err));
-      break;
+      continue;
     }
   }
   return {

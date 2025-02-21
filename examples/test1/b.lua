@@ -1,1 +1,1 @@
-print("B")
+print("BB")

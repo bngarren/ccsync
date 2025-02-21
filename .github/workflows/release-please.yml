@@ -47,3 +47,4 @@ jobs:
         with:
           release-type: node
           token: ${{ secrets.PAT }}
+          config-file: release-please-config.json

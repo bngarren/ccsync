@@ -1,4 +1,6 @@
 {
+  "pull-request-header": "🤖 Release created:",
+  "pull-request-footer": "_release-please generated PR_",
   "packages": {
     ".": {
       "changelog-path": "CHANGELOG.md",
@@ -6,8 +8,7 @@
       "bump-minor-pre-major": false,
       "bump-patch-for-minor-pre-major": false,
       "draft": false,
-      "prerelease": true,
-      "pull-request-header": ":robot: Release PR"
+      "prerelease": true
     }
   },
   "include-component-in-tag": false,

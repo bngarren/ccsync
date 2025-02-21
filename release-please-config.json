@@ -10,8 +10,6 @@
       "pull-request-header": ":robot: Release PR"
     }
   },
-  "last-release-sha": "f2a82b3814929322743e138b840e465e0d10ee52",
   "include-component-in-tag": false,
-  "release-as": "1.0.0-alpha.3",
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json"
 }

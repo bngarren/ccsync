@@ -48,7 +48,3 @@ jobs:
           release-type: node
           token: ${{ secrets.PAT }}
           config-file: release-please-config.json
-      - name: Print release outputs for debugging
-        run: |
-          echo "Release outputs:"
-          echo "${{toJson(steps.release.outputs)}}"

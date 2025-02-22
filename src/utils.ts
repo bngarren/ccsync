@@ -6,6 +6,7 @@ import { glob } from "glob"
 import type { Computer, ResolvedFileRule, ValidationResult } from "./types"
 import { isNodeError } from "./errors"
 
+// ---- Language ----
 export const pluralize = (text: string) => {
   return (count: number) => {
     const isPlural = Math.abs(count) !== 1
@@ -13,6 +14,22 @@ export const pluralize = (text: string) => {
   }
 }
 
+// ---- Date ----
+export const getFormattedDate = (): string => {
+  const now = new Date()
+  const time = now.toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+  })
+  const date = now.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "2-digit",
+  })
+  return `${time} on ${date}`
+}
+
+// ---- Paths ----
 export function resolvePath(filePath: string): string {
   // Handle home directory expansion
   if (filePath.startsWith("~")) {
@@ -33,18 +50,67 @@ export const pathIsLikelyFile = (path: string): boolean => {
   return lastSegment.includes(".")
 }
 
-export const getFormattedDate = (): string => {
-  const now = new Date()
-  const time = now.toLocaleTimeString("en-GB", {
-    hour: "2-digit",
-    minute: "2-digit",
-  })
-  const date = now.toLocaleDateString("en-GB", {
-    day: "2-digit",
-    month: "short",
-    year: "2-digit",
-  })
-  return `${time} on ${date}`
+/**
+ * Normalizes a file path to use forward slashes and handles trailing slashes consistently.
+ *
+ * @param filepath The path to normalize
+ * @param stripTrailing Whether to remove trailing slash (default: true)
+ * @returns Normalized path
+ */
+export const normalizePath = (
+  filepath: string,
+  stripTrailing = true
+): string => {
+  if (typeof filepath !== "string") {
+    throw new TypeError("Path must be a string")
+  }
+
+  // Special case for root paths
+  if (filepath === "\\" || filepath === "/") return "/"
+
+  // Handle empty or very short paths
+  if (filepath.length <= 1) return filepath
+
+  // Normalize using Node's path.normalize first (handles . and ..)
+  let normalized = path.normalize(filepath)
+
+  // Convert all backslashes to forward slashes
+  normalized = normalized.replace(/\\/g, "/")
+
+  // Handle trailing slash based on the path type
+  if (stripTrailing) {
+    const isDriveRoot = /^[A-Z]:\/$/i.test(normalized)
+    const isShareRoot = /^\/\/[^/]+\/[^/]+\/$/.test(normalized)
+
+    if (!isDriveRoot && !isShareRoot && normalized.length > 1) {
+      normalized = normalized.replace(/\/$/, "")
+    }
+  }
+
+  return normalized
+}
+
+/**
+ * Compares two paths for equality, accounting for platform differences
+ */
+export const pathsAreEqual = (path1: string, path2: string): boolean => {
+  const norm1 = normalizePath(path1)
+  const norm2 = normalizePath(path2)
+
+  // On Windows, paths are case-insensitive
+  if (process.platform === "win32") {
+    return norm1.toLowerCase() === norm2.toLowerCase()
+  }
+
+  return norm1 === norm2
+}
+
+/**
+ * Ensures a path uses the correct separators for the current OS.
+ * Use this when making actual filesystem calls.
+ */
+export const toSystemPath = (filepath: string): string => {
+  return process.platform === "win32" ? filepath.replace(/\//g, "\\") : filepath
 }
 
 // - - - - - MINECRAFT - - - - -
@@ -133,15 +199,19 @@ export const validateMinecraftSave = async (
 const EXCLUDED_DIRS = new Set([".vscode", ".git", ".DS_Store"])
 
 export const getComputerShortPath = (saveName: string, computerId: string) => {
-  return path
-    .join(saveName, "computercraft", "computer", computerId)
-    .replace("computercraft", "..")
+  return normalizePath(
+    path
+      .join(saveName, "computercraft", "computer", computerId)
+      .replace("computercraft", "..")
+  )
 }
 
 export const findMinecraftComputers = async (savePath: string) => {
   try {
     // Build path to computercraft directory
-    const computercraftPath = path.join(savePath, "computercraft", "computer")
+    const computercraftPath = normalizePath(
+      path.join(savePath, "computercraft", "computer")
+    )
 
     // Check if directory exists
     try {
@@ -251,20 +321,29 @@ export async function validateFileSync(
     errors: [],
   }
 
+  const normalizedSourceRoot = normalizePath(config.sourceRoot)
+
   // Process each sync rule
   for (const rule of config.rules) {
     try {
       // Find all matching source files
-      const sourceFiles = await glob(rule.source, {
-        cwd: config.sourceRoot,
-        absolute: true,
-      })
+      const sourceFiles = (
+        await glob(rule.source, {
+          cwd: normalizedSourceRoot,
+          absolute: true,
+        })
+      ).map((sf) => normalizePath(sf))
 
       // Filter by changed files if in watch mode
       const relevantFiles = changedFiles
-        ? sourceFiles.filter((file) =>
-            changedFiles.has(path.relative(config.sourceRoot, file))
-          )
+        ? sourceFiles.filter((file) => {
+            const relPath = normalizePath(
+              path.relative(config.sourceRoot, file)
+            )
+            return Array.from(changedFiles).some(
+              (changed) => normalizePath(changed) === relPath
+            )
+          })
         : sourceFiles
 
       if (relevantFiles.length === 0) {
@@ -289,8 +368,8 @@ export async function validateFileSync(
       // Create resolved file entries
       for (const sourcePath of relevantFiles) {
         validation.resolvedFileRules.push({
-          sourcePath,
-          targetPath: rule.target,
+          sourcePath: normalizePath(sourcePath),
+          targetPath: normalizePath(rule.target),
           computers: computerIds,
         })
       }
@@ -351,27 +430,30 @@ export async function copyFilesToComputer(
   const errors = []
 
   // Normalize the computer path
-  const normalizedComputerPath = path.normalize(computerPath)
+  const normalizedComputerPath = normalizePath(computerPath)
 
   for (const file of resolvedFiles) {
+    // Normalize source and target paths
+    const normalizedSource = normalizePath(file.sourcePath)
+    const normalizedTarget = normalizePath(file.targetPath.replace(/^\//, ""))
+
     // Determine if target is a directory:
-    const isTargetDirectory = !pathIsLikelyFile(file.targetPath)
+    const isTargetDirectory = !pathIsLikelyFile(normalizedTarget)
 
     // For directory targets, use source filename, otherwise use target filename
     const targetFileName = isTargetDirectory
-      ? path.basename(file.sourcePath)
-      : path.basename(file.targetPath)
-
-    // Handle both absolute and relative paths by removing leading slash
-    const relativePath = file.targetPath.replace(/^\//, "")
+      ? path.basename(normalizedSource)
+      : path.basename(normalizedTarget)
 
     // Get the target directory path
-    const targetDirPath = isTargetDirectory
-      ? path.join(computerPath, relativePath)
-      : path.join(computerPath, path.dirname(relativePath))
+    const targetDirPath = normalizePath(
+      isTargetDirectory
+        ? path.join(computerPath, normalizedTarget)
+        : path.join(computerPath, path.dirname(normalizedTarget))
+    )
 
     // Construct and normalize the full target path
-    const targetFilePath = path.normalize(
+    const targetFilePath = normalizePath(
       path.join(targetDirPath, targetFileName)
     )
 
@@ -380,8 +462,9 @@ export async function copyFilesToComputer(
       normalizedComputerPath,
       targetFilePath
     )
+
     if (
-      relativeToComputer.startsWith("..") ||
+      normalizePath(relativeToComputer).startsWith("..") ||
       path.isAbsolute(relativeToComputer)
     ) {
       skippedFiles.push(file.sourcePath)
@@ -392,7 +475,7 @@ export async function copyFilesToComputer(
     }
 
     // First ensure source file exists and is a file
-    const sourceStats = await fs.stat(file.sourcePath)
+    const sourceStats = await fs.stat(toSystemPath(file.sourcePath)) // use systemm-specific path here
     if (!sourceStats.isFile()) {
       skippedFiles.push(file.sourcePath)
       errors.push(`Source is not a file: ${file.sourcePath}`)
@@ -401,7 +484,7 @@ export async function copyFilesToComputer(
 
     // Check if target directory exists and is actually a directory
     try {
-      const targetDirStats = await fs.stat(targetDirPath)
+      const targetDirStats = await fs.stat(toSystemPath(targetDirPath))
       if (!targetDirStats.isDirectory()) {
         skippedFiles.push(file.sourcePath)
         errors.push(
@@ -412,7 +495,7 @@ export async function copyFilesToComputer(
     } catch (err) {
       // Directory doesn't exist, create it
       try {
-        await fs.mkdir(targetDirPath, { recursive: true })
+        await fs.mkdir(toSystemPath(targetDirPath), { recursive: true })
       } catch (mkdirErr) {
         skippedFiles.push(file.sourcePath)
         errors.push(`Failed to create directory: ${mkdirErr}`)
@@ -421,11 +504,14 @@ export async function copyFilesToComputer(
     }
 
     try {
-      // Copy the file
-      await fs.copyFile(file.sourcePath, targetFilePath)
+      // Copy the file using system-specific paths for fs operations
+      await fs.copyFile(
+        toSystemPath(file.sourcePath),
+        toSystemPath(targetFilePath)
+      )
 
       // Verify the copy
-      const targetStats = await fs.stat(targetFilePath)
+      const targetStats = await fs.stat(toSystemPath(targetFilePath))
       if (!targetStats.isFile()) {
         throw new Error(`Failed to create target file: ${targetFilePath}`)
       } else {

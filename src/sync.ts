@@ -18,6 +18,7 @@ import {
   validateFileSync,
   getFormattedDate,
   copyFilesToComputer,
+  normalizePath,
 } from "./utils"
 import { theme } from "./theme"
 import * as p from "@clack/prompts"
@@ -647,7 +648,9 @@ class WatchModeController {
     try {
       // If this is triggered by a file change, update the changedFiles set
       if (changedPath) {
-        const relativePath = path.relative(this.config.sourceRoot, changedPath)
+        const relativePath = normalizePath(
+          path.relative(this.config.sourceRoot, changedPath)
+        )
         this.changedFiles.add(relativePath)
         this.syncManager.invalidateCache()
         this.log.status(`File changed: ${changedPath}`)
@@ -743,9 +746,12 @@ class WatchModeController {
       const uniqueSourcePaths = new Set<string>()
 
       for (const rule of this.config.rules) {
-        const sourcePath = path.join(this.config.sourceRoot, rule.source)
+        const sourcePath = normalizePath(
+          path.join(this.config.sourceRoot, rule.source),
+          false // Don't strip trailing slash for globs
+        )
         const matches = await glob(sourcePath, { absolute: true })
-        matches.forEach((match) => uniqueSourcePaths.add(match))
+        matches.forEach((match) => uniqueSourcePaths.add(normalizePath(match)))
       }
 
       // Convert to array and store in watchedFiles

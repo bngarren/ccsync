@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0-beta](https://github.com/bngarren/ccsync/compare/v1.0.0-alpha.4...v1.0.0-beta) (2025-02-22)
+
+
+### Bug Fixes
+
+* **sync:** add file permissions error handling and tests ([9b4b7ce](https://github.com/bngarren/ccsync/commit/9b4b7ce919244738c506684b0a80c83ce342872a))
+
+
+### Miscellaneous Chores
+
+* release as 1.0.0-beta ([767a26c](https://github.com/bngarren/ccsync/commit/767a26c6f92b1731cada0dd194587b063f81b931))
+
 ## [1.0.0-alpha.4](https://github.com/bngarren/ccsync/compare/v1.0.0-alpha.3...v1.0.0-alpha.4) (2025-02-21)
 
 

@@ -1,4 +1,4 @@
-import { expect, test, describe, beforeEach, afterEach } from "bun:test"
+import { expect, test, describe, beforeEach, afterEach, spyOn } from "bun:test"
 import * as fs from "node:fs/promises"
 import {
   validateMinecraftSave,
@@ -701,6 +701,36 @@ describe("File Operations", () => {
       )
       expect(copiedFiles).toHaveLength(0)
       expect(skippedFiles).toHaveLength(resolvedFiles.length)
+    })
+
+    test("handles target file being in use by another process", async () => {
+      await fs.writeFile(path.join(sourceDir, "program.lua"), "print('test')")
+      await fs.mkdir(path.join(computersDir, "1"), { recursive: true })
+
+      const spy = spyOn(fs, "copyFile").mockImplementation(async () => {
+        const err = new Error(
+          "EBUSY: resource busy or locked"
+        ) as NodeJS.ErrnoException
+        err.code = "EBUSY"
+        throw err
+      })
+
+      const resolvedFiles: ResolvedFileRule[] = [
+        {
+          sourcePath: path.join(sourceDir, "program.lua"),
+          targetPath: "/program.lua",
+          computers: ["1"],
+        },
+      ]
+
+      const result = await copyFilesToComputer(
+        resolvedFiles,
+        path.join(computersDir, "1")
+      )
+      expect(result.skippedFiles).toContain(path.join(sourceDir, "program.lua"))
+      expect(result.errors[0]).toContain("File is locked or in use")
+      expect(spy).toHaveBeenCalled()
+      spy.mockRestore()
     })
   })
 

@@ -1,7 +1,7 @@
 # CC:Sync Configuration File
 # This file configures how CC:Sync copies files to your ComputerCraft computers
 
-version: "0.0.1"
+version: "1.0"
 
 # Where your source files are located (relative to this config file)
 sourceRoot: "./examples/test1"
@@ -22,9 +22,9 @@ computerGroups:
 rules:
   # Examples:
   # Sync to a specific computer:
-  - source: "*.lua" # File in your sourceRoot
-    target: "/lib" # Where to put it on the computer
-    computers: ["monitors"] # Computer IDs to sync to
+  - source: "a.lua" # File in your sourceRoot
+    target: "/" # Where to put it on the computer
+    computers: ["1"] # Computer IDs to sync to
   #
   # Sync to a group of computers:
   # - source: "lib/*.lua"      # Glob patterns supported

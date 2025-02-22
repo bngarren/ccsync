@@ -4,6 +4,7 @@ import path from "path"
 import type { Config } from "./config"
 import { glob } from "glob"
 import type { Computer, ResolvedFileRule, ValidationResult } from "./types"
+import { isNodeError } from "./errors"
 
 export const pluralize = (text: string) => {
   return (count: number) => {
@@ -300,11 +301,35 @@ export async function validateFileSync(
       )
       validation.availableComputers.push(...matchingComputers)
     } catch (err) {
-      validation.errors.push(
-        `Error processing config file sync rule for '${rule.source}'\n ⮑  ${
-          err instanceof Error ? err.message : String(err)
-        }`
-      )
+      // Handle the main errors glob can throw
+      if (isNodeError(err)) {
+        switch (err.code) {
+          case "ENOENT":
+            validation.errors.push(
+              `Source directory not found: ${config.sourceRoot}`
+            )
+            break
+          case "EACCES":
+            validation.errors.push(
+              `Permission denied reading source directory: ${config.sourceRoot}`
+            )
+            break
+          case "EMFILE":
+            validation.errors.push(
+              "Too many open files. Try reducing the number of glob patterns."
+            )
+            break
+          default:
+            validation.errors.push(
+              `Error processing '${rule.source}': ${err.message}`
+            )
+        }
+      } else {
+        // Handle glob pattern/config errors
+        validation.errors.push(
+          `Invalid pattern '${rule.source}': ${err instanceof Error ? err.message : String(err)}`
+        )
+      }
     }
   }
 
@@ -408,7 +433,23 @@ export async function copyFilesToComputer(
       }
     } catch (err) {
       skippedFiles.push(file.sourcePath)
-      errors.push(err instanceof Error ? err.message : String(err))
+
+      if (isNodeError(err)) {
+        if (err.code === "ENOENT") {
+          errors.push(`Source file not found: ${file.sourcePath}`)
+        } else if (err.code === "EACCES") {
+          errors.push(`Permission denied: ${err.message}`)
+        } else if (err.code === "EISDIR") {
+          errors.push(`Cannot copy to '${targetFilePath}': Is a directory`)
+        } else if (err.code === "EBUSY") {
+          errors.push(`File is locked or in use: ${targetFilePath}`)
+        } else {
+          errors.push(err instanceof Error ? err.message : String(err))
+        }
+      } else {
+        errors.push(err instanceof Error ? err.message : String(err))
+      }
+
       continue
     }
   }

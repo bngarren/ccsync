@@ -110,6 +110,14 @@ const AdvancedOptionsSchema = z.object({
     .default(5000),
 })
 
+const ComputerGroupsSchema = z
+  .record(z.string(), ComputerGroupSchema)
+  .refine((groups) => {
+    // Ensure no empty groups
+    return Object.values(groups).every((group) => group.computers.length > 0)
+  }, "Computer groups cannot be empty")
+  .optional()
+
 export const ConfigSchema = z
   .object({
     version: z.string({
@@ -124,7 +132,7 @@ export const ConfigSchema = z
       required_error: "Minecraft save path is required",
       invalid_type_error: "Save path must be text",
     }),
-    computerGroups: z.record(z.string(), ComputerGroupSchema).optional(),
+    computerGroups: ComputerGroupsSchema,
     rules: z.array(SyncRuleSchema),
     advanced: AdvancedOptionsSchema.default({
       verbose: false,

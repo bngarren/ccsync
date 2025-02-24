@@ -368,7 +368,10 @@ export async function validateFileSync(
       // Create resolved file entries
       for (const sourcePath of relevantFiles) {
         validation.resolvedFileRules.push({
-          sourcePath: normalizePath(sourcePath),
+          sourceAbsolutePath: normalizePath(sourcePath),
+          sourceRelativePath: normalizePath(
+            path.relative(path.dirname(sourcePath), sourcePath)
+          ),
           targetPath: normalizePath(rule.target),
           computers: computerIds,
         })
@@ -467,7 +470,7 @@ export async function copyFilesToComputer(
       normalizePath(relativeToComputer).startsWith("..") ||
       path.isAbsolute(relativeToComputer)
     ) {
-      skippedFiles.push(file.sourcePath)
+      skippedFiles.push(file.sourceAbsolutePath)
       errors.push(
         `Security violation: Target path '${file.targetPath}' attempts to write outside the computer directory`
       )
@@ -475,10 +478,10 @@ export async function copyFilesToComputer(
     }
 
     // First ensure source file exists and is a file
-    const sourceStats = await fs.stat(toSystemPath(file.sourcePath)) // use systemm-specific path here
+    const sourceStats = await fs.stat(toSystemPath(file.sourceAbsolutePath)) // use systemm-specific path here
     if (!sourceStats.isFile()) {
-      skippedFiles.push(file.sourcePath)
-      errors.push(`Source is not a file: ${file.sourcePath}`)
+      skippedFiles.push(file.sourceAbsolutePath)
+      errors.push(`Source is not a file: ${file.sourceAbsolutePath}`)
       continue
     }
 
@@ -486,7 +489,7 @@ export async function copyFilesToComputer(
     try {
       const targetDirStats = await fs.stat(toSystemPath(targetDirPath))
       if (!targetDirStats.isDirectory()) {
-        skippedFiles.push(file.sourcePath)
+        skippedFiles.push(file.sourceAbsolutePath)
         errors.push(
           `Cannot create directory '${path.basename(targetDirPath)}' because a file with that name already exists`
         )
@@ -497,7 +500,7 @@ export async function copyFilesToComputer(
       try {
         await fs.mkdir(toSystemPath(targetDirPath), { recursive: true })
       } catch (mkdirErr) {
-        skippedFiles.push(file.sourcePath)
+        skippedFiles.push(file.sourceAbsolutePath)
         errors.push(`Failed to create directory: ${mkdirErr}`)
         continue
       }
@@ -506,7 +509,7 @@ export async function copyFilesToComputer(
     try {
       // Copy the file using system-specific paths for fs operations
       await fs.copyFile(
-        toSystemPath(file.sourcePath),
+        toSystemPath(file.sourceAbsolutePath),
         toSystemPath(targetFilePath)
       )
 
@@ -515,14 +518,14 @@ export async function copyFilesToComputer(
       if (!targetStats.isFile()) {
         throw new Error(`Failed to create target file: ${targetFilePath}`)
       } else {
-        copiedFiles.push(file.sourcePath)
+        copiedFiles.push(file.sourceAbsolutePath)
       }
     } catch (err) {
-      skippedFiles.push(file.sourcePath)
+      skippedFiles.push(file.sourceAbsolutePath)
 
       if (isNodeError(err)) {
         if (err.code === "ENOENT") {
-          errors.push(`Source file not found: ${file.sourcePath}`)
+          errors.push(`Source file not found: ${file.sourceAbsolutePath}`)
         } else if (err.code === "EACCES") {
           errors.push(`Permission denied: ${err.message}`)
         } else if (err.code === "EISDIR") {

@@ -201,7 +201,7 @@ export class SyncManager {
     for (const file of validation.resolvedFileRules) {
       const relativePath = path.relative(
         this.config.sourceRoot,
-        file.sourcePath
+        file.sourceAbsolutePath
       )
       fileResults.set(relativePath, [])
     }
@@ -245,7 +245,9 @@ export class SyncManager {
     // Display final status for each file
     for (const [filePath, results] of fileResults.entries()) {
       const file = validation.resolvedFileRules.find(
-        (f) => path.relative(this.config.sourceRoot, f.sourcePath) === filePath
+        (f) =>
+          path.relative(this.config.sourceRoot, f.sourceAbsolutePath) ===
+          filePath
       )
       if (!file) continue
 

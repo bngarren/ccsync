@@ -18,6 +18,8 @@ export enum SyncMode {
  * A resolved file rule has been validated such that a file exists at the source path.
  */
 export interface ResolvedFileRule {
+  sourceAbsolutePath: string // Absolute path to source file
+  sourceRelativePath: string // Relative path to source file from source root
   sourcePath: string // Absolute path to source file
   targetPath: string // Relative path on computer
   computers: string[] // Resolved list of computer IDs (not group names)

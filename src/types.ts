@@ -5,12 +5,12 @@ export enum SyncMode {
   WATCH = "watch",
 }
 
-// Base interface for file sync configuration in .ccsync.yaml
-export interface SyncRule {
-  source: string // Glob pattern relative to sourceRoot
-  target: string // Target path on computer
-  computers?: string[] // Array of computer IDs or group names
-}
+// // Base interface for file sync configuration in .ccsync.yaml
+// export interface SyncRule {
+//   source: string // Glob pattern relative to sourceRoot
+//   target: string // Target path on computer
+//   computers?: string[] // Array of computer IDs or group names
+// }
 
 /**
  * Represents a viable file resolved from a config sync rule.

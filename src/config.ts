@@ -96,7 +96,6 @@ const SyncRuleSchema = z.object({
       ComputerIdSchema,
       z.string().min(1, "Group name cannot be empty"),
     ])
-    .optional()
     .describe("Computer IDs or group names to sync files to"),
 })
 
@@ -163,7 +162,7 @@ export const ConfigSchema = z
 
 export type Config = z.infer<typeof ConfigSchema>
 export type ComputerGroup = z.infer<typeof ComputerGroupSchema>
-export type FileSyncRule = z.infer<typeof SyncRuleSchema>
+export type SyncRule = z.infer<typeof SyncRuleSchema>
 
 // ---- CONFIG METHODS ----
 

@@ -96,48 +96,60 @@ export class SyncManager {
       }
     }
 
-    // Validate save directory
-    const saveDirValidation = await validateMinecraftSave(
-      this.config.minecraftSavePath
-    )
-    if (!saveDirValidation.isValid) {
-      throw new Error(saveDirValidation.errors[0])
+    const result: ValidationResult = {
+      resolvedFileRules: [],
+      availableComputers: [],
+      missingComputerIds: [],
+      errors: [],
     }
-
-    // Discover computers
-    const computers = await findMinecraftComputers(
-      this.config.minecraftSavePath
-    )
-    if (computers.length === 0) {
-      this.log.error("No computers found in the save directory.")
-      this.log.info(
-        "Sometimes a computer placed in the world isn't fully loaded until its file system is modified. Try adding a dummy file and then re-run CC:Sync."
-      )
-      throw new Error("No computers found in the save directory")
-    }
-
-    // Get changed files from watch mode if applicable
-    const changedFiles =
-      this.activeModeController instanceof WatchModeController
-        ? this.activeModeController.getChangedFiles()
-        : undefined
 
     try {
+      // Validate save directory
+      const saveDirValidation = await validateMinecraftSave(
+        this.config.minecraftSavePath
+      )
+      if (!saveDirValidation.isValid) {
+        result.errors.push(...saveDirValidation.errors)
+        return result
+      }
+
+      // Discover computers
+      let computers: Computer[] = []
+      try {
+        computers = await findMinecraftComputers(this.config.minecraftSavePath)
+      } catch (err) {
+        result.errors.push(
+          `Failed to find computers: ${err instanceof Error ? err.message : String(err)}`
+        )
+        return result
+      }
+
+      if (computers.length === 0) {
+        result.errors.push(
+          "No computers found in the save directory. Try adding a dummy file to a computer and then re-run CC:Sync."
+        )
+        return result
+      }
+
+      // Get changed files from watch mode if applicable
+      const changedFiles =
+        this.activeModeController instanceof WatchModeController
+          ? this.activeModeController.getChangedFiles()
+          : undefined
+
+      // Validate the file sync rules
       const validation = await validateFileSync(
         this.config,
         computers,
         changedFiles
       )
 
+      // If validation has errors, return them
       if (validation.errors.length > 0) {
-        this.log.error(`Could not continue due to the following errors:`)
-        validation.errors.forEach((error) =>
-          this.log.error(`${validation.errors.length > 1 ? "• " : ""}${error}`)
-        )
-        throw new Error("File sync validation failed")
+        return validation
       }
 
-      // Cache validation results
+      // Cache successful validation results
       this.lastValidation = {
         validation,
         computers,
@@ -145,8 +157,12 @@ export class SyncManager {
       }
       return validation
     } catch (err) {
+      // For unexpected errors (not validation errors), add to result
+      result.errors.push(
+        `Unexpected validation error: ${err instanceof Error ? err.message : String(err)}`
+      )
       this.lastValidation = null
-      throw err
+      return result
     }
   }
 
@@ -471,8 +487,27 @@ class ManualModeController {
 
     try {
       const validation = await this.syncManager.runValidation()
-
       this.emit(SyncEvent.SYNC_VALIDATION, validation)
+
+      // Check if validation has errors
+      if (validation.errors.length > 0) {
+        // Log the validation errors
+        this.log.error(`Could not continue due to the following errors:`)
+        validation.errors.forEach((error) =>
+          this.log.error(`${validation.errors.length > 1 ? "• " : ""}${error}`)
+        )
+
+        // Emit sync error event
+        this.emit(SyncEvent.SYNC_ERROR, {
+          error: new Error(
+            "Validation failed: " + validation.errors.join(", ")
+          ),
+          fatal: false, // Non-fatal error
+          source: "validation",
+        })
+
+        return // Stop here, don't proceed with sync
+      }
 
       const { successCount, errorCount, missingCount } =
         await this.syncManager.performSync(validation)
@@ -504,9 +539,10 @@ class ManualModeController {
         missingCount,
       })
     } catch (err) {
+      // Only for unexpected runtime errors, not validation errors
       this.emit(SyncEvent.SYNC_ERROR, {
         error: err instanceof Error ? err : new Error(String(err)),
-        fatal: true,
+        fatal: true, // Runtime errors are considered fatal
       })
       throw err
     }
@@ -662,6 +698,35 @@ class WatchModeController {
       const validation = await this.syncManager.runValidation(true)
       this.emit(SyncEvent.SYNC_VALIDATION, validation)
 
+      // Check if validation has errors
+      if (validation.errors.length > 0) {
+        // Log the validation errors
+        this.log.error(`Validation failed:`)
+        validation.errors.forEach((error) =>
+          this.log.error(`${validation.errors.length > 1 ? "• " : ""}${error}`)
+        )
+
+        this.emit(SyncEvent.SYNC_ERROR, {
+          error: new Error(
+            "Validation failed: " + validation.errors.join(", ")
+          ),
+          fatal: this.isInitialSync, // Fatal only on initial sync
+          source: "validation",
+        })
+
+        // For initial sync, throw to abort startup
+        if (this.isInitialSync) {
+          throw new Error("Initial validation failed")
+        }
+
+        // For regular sync, just log and continue watching
+        if (!this.isInitialSync) {
+          this.logWatchStatus()
+        }
+
+        return // Don't proceed with sync
+      }
+
       // Perform sync
       const { successCount, errorCount, missingCount } =
         await this.syncManager.performSync(validation)
@@ -711,10 +776,11 @@ class WatchModeController {
         this.logWatchStatus()
       }
     } catch (err) {
-      // TODO determine if sync error is FATAL or not
+      // For unexpected runtime errors
+
       this.emit(SyncEvent.SYNC_ERROR, {
         error: err instanceof Error ? err : new Error(String(err)),
-        fatal: true,
+        fatal: true, // Runtime errors are considered fatal
       })
       if (!this.isInitialSync) {
         this.logWatchStatus()

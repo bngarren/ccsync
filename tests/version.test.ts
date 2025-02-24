@@ -2,7 +2,12 @@
 import { expect, test, describe, beforeEach, afterEach } from "bun:test"
 import { mkdir, writeFile } from "node:fs/promises"
 import path from "path"
-import { loadConfig, DEFAULT_CONFIG, CONFIG_VERSION } from "../src/config"
+import {
+  loadConfig,
+  DEFAULT_CONFIG,
+  CONFIG_VERSION,
+  ConfigErrorCategory,
+} from "../src/config"
 import { createUniqueTempDir, TempCleaner } from "./test-helpers"
 import yaml from "yaml"
 
@@ -42,7 +47,10 @@ describe("Version compatibility", () => {
     const { config, errors } = await loadConfig(configPath)
 
     expect(errors).toHaveLength(1)
-    expect(errors[0]).toContain(`Config version ${CONFIG_VERSION} is required`)
+    expect(errors[0].category).toBe(ConfigErrorCategory.VERSION)
+    expect(errors[0].message).toContain(
+      `Config version ${CONFIG_VERSION} is required`
+    )
     expect(config).toBeNull()
   })
 
@@ -53,7 +61,7 @@ describe("Version compatibility", () => {
     const { config, errors } = await loadConfig(configPath)
 
     expect(errors).toHaveLength(1)
-    expect(errors[0]).toContain("Config version is required")
+    expect(errors[0].message).toContain("Config version is required")
     expect(config).toBeNull()
   })
 })

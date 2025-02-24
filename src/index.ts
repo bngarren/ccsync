@@ -2,7 +2,13 @@
 // index.ts
 
 import * as p from "@clack/prompts"
-import { createDefaultConfig, findConfig, loadConfig } from "./config"
+import {
+  ConfigErrorCategory,
+  createDefaultConfig,
+  findConfig,
+  loadConfig,
+  type ConfigError,
+} from "./config"
 import color from "picocolors"
 import path from "path"
 import { SyncManager } from "./sync"
@@ -57,27 +63,85 @@ const initConfig = async () => {
   return await loadConfig(configPath)
 }
 
+function getErrorCategoryTitle(category: ConfigErrorCategory) {
+  switch (category) {
+    case ConfigErrorCategory.PATH:
+      return "Path Issues"
+    case ConfigErrorCategory.RULE:
+      return "Sync Rule Issues"
+    case ConfigErrorCategory.COMPUTER:
+      return "Computer Configuration Issues"
+    case ConfigErrorCategory.VERSION:
+      return "Version Compatibility Issues"
+    default:
+      return "Other Issues"
+  }
+}
+
+const presentConfigErrors = (errors: ConfigError[], isVerbose: boolean) => {
+  p.log.error("Configuration errors found:")
+
+  // Group errors by category
+  const errorsByCategory: Record<ConfigErrorCategory, ConfigError[]> =
+    Object.values(ConfigErrorCategory).reduce(
+      (acc, category) => {
+        acc[category] = []
+        return acc
+      },
+      {} as Record<ConfigErrorCategory, ConfigError[]>
+    )
+
+  // Populate error categories
+  errors.forEach((error) => {
+    errorsByCategory[error.category].push(error)
+  })
+
+  // Display errors with category headers
+  Object.entries(errorsByCategory).forEach(([category, categoryErrors]) => {
+    if (categoryErrors.length === 0) return
+
+    const title = getErrorCategoryTitle(category as ConfigErrorCategory)
+    p.log.error(theme.bold(`${title}:`))
+
+    categoryErrors.forEach((error) => {
+      p.log.error(
+        `  • ${error.message}${error.suggestion ? "\n    " + theme.dim(error.suggestion) : ""}`
+      )
+
+      if (isVerbose && error.verboseDetail) {
+        p.log.info(`    ${theme.dim(error.verboseDetail)}`)
+      }
+    })
+  })
+
+  // helpful general guidance at the end
+  p.log.info(
+    theme.bold("\nGeneral guidance:") +
+      "\n  • Edit your .ccsync.yaml file to fix the issues above" +
+      "\n  • Run with verbose=true for more detailed error information" +
+      "\n  • Refer to documentation at https://github.com/bngarren/ccsync#readme"
+  )
+  // p.log.info("  • Use 'ccsync --init' to create a fresh config if needed")
+}
+
 async function main() {
   console.clear()
 
-  p.intro(`${color.magentaBright(`CC:Sync`)}`)
+  p.intro(`${color.magentaBright(`CC: Sync`)}`)
 
   try {
     // Get the config file
     const { config, errors } = await initConfig()
 
     if (errors.length > 0) {
-      p.log.error("Check your .ccsync.yaml file:")
-      errors.forEach((error) => {
-        p.log.error(`  • ${error}`)
-      })
+      presentConfigErrors(errors, config?.advanced?.verbose || false)
       p.outro("Please fix these issues and try again.")
-      process.exit(1)
+      process.exit(0)
     }
 
     if (!config) {
       p.log.error("No valid configuration found.")
-      process.exit(1)
+      process.exit(0)
     }
 
     // Init log

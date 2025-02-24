@@ -24,7 +24,7 @@ export const DEFAULT_CONFIG: Config = {
 
 export interface LoadConfigResult {
   config: Config | null
-  errors: string[]
+  errors: ConfigError[]
 }
 
 const hasGlobPattern = (path: string): boolean => {
@@ -41,6 +41,67 @@ export function isConfigVersionCompatible(configVersion: string): boolean {
   const [configMajor] = configVersion.split(".")
   const [cliMajor] = CONFIG_VERSION.split(".")
   return configMajor === cliMajor
+}
+
+// ---- ERROR HANDLING ----
+
+export enum ConfigErrorCategory {
+  PATH = "path",
+  RULE = "rule",
+  COMPUTER = "computer",
+  VERSION = "version",
+  UNKNOWN = "unknown",
+}
+
+// Structured error object with helpful context
+export interface ConfigError {
+  category: ConfigErrorCategory
+  message: string
+  verboseDetail?: string // Additional technical details for verbose mode
+  path?: string[] // Path to the error in the config object
+  suggestion?: string // Actionable guidance
+}
+
+const categorizeZodError = (issue: z.ZodIssue): ConfigError => {
+  let category = ConfigErrorCategory.UNKNOWN
+  let suggestion = ""
+
+  // Path contains the location of the error in the config object
+  const path = issue.path
+
+  // Use the path and error code to infer the category
+  if (path[0] === "sourceRoot" || path[0] === "minecraftSavePath") {
+    category = ConfigErrorCategory.PATH
+    suggestion =
+      "Ensure the path exists and is accessible. Use absolute paths or ~ for home directory."
+  } else if (path[0] === "rules") {
+    category = ConfigErrorCategory.RULE
+
+    // Check for specific rule issues
+    if (issue.message.includes("glob") || issue.message.includes("target")) {
+      suggestion =
+        "Check that your target is a directory path when using glob patterns. Directories should end with a slash."
+    } else if (issue.message.includes("computer")) {
+      suggestion =
+        "Make sure all computer IDs or group names referenced in rules actually exist."
+    }
+  } else if (path[0] === "computerGroups") {
+    category = ConfigErrorCategory.COMPUTER
+    suggestion =
+      "Check that all computer groups have valid names and contain at least one computer ID."
+  } else if (path[0] === "version") {
+    category = ConfigErrorCategory.VERSION
+    suggestion = `Update your config version to ${CONFIG_VERSION} or recreate your config file.`
+  }
+
+  // Create structured error object
+  return {
+    category,
+    message: issue.message,
+    path: [...String(issue.path)],
+    suggestion,
+    verboseDetail: `Error code: ${issue.code}, Path: ${path.join(".")}`,
+  }
 }
 
 // ---- SCHEMA & TYPES ----
@@ -141,7 +202,7 @@ export const ConfigSchema = z
         invalid_type_error: "Save path must be text",
       })
       .transform((path) => normalizePath(path)),
-    computerGroups: z.record(z.string(), ComputerGroupSchema).optional(),
+    computerGroups: ComputerGroupsSchema,
     rules: z.array(SyncRuleSchema),
     advanced: AdvancedOptionsSchema.default({
       verbose: false,
@@ -255,28 +316,39 @@ export async function loadConfig(
     const parseResult = ConfigSchema.safeParse(rawConfig)
 
     if (!parseResult.success) {
-      // Format Zod errors into readable messages, either errors or warnings
-      parseResult.error.errors.forEach((issue) => {
-        const msg = `${issue.message}`
-        result.errors.push(msg)
-      })
+      // Transform Zod errors into structured errors
+      result.errors = parseResult.error.errors.map(categorizeZodError)
       return result
     }
 
     const validatedConfig = parseResult.data
     // Resolve and normalize all paths in the config
-    // TODO normalize paths
     result.config = {
       ...validatedConfig,
-      sourceRoot: resolvePath(validatedConfig.sourceRoot),
-      minecraftSavePath: resolvePath(validatedConfig.minecraftSavePath),
+      sourceRoot: normalizePath(resolvePath(validatedConfig.sourceRoot)),
+      minecraftSavePath: normalizePath(
+        resolvePath(validatedConfig.minecraftSavePath)
+      ),
     }
   } catch (error) {
-    result.errors.push(
-      `Failed to read/parse config file: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    )
+    const errorMessage = error instanceof Error ? error.message : String(error)
+
+    // Determine if this is a file access issue
+    const isFileAccessError =
+      errorMessage.includes("ENOENT") ||
+      errorMessage.includes("no such file") ||
+      errorMessage.includes("cannot open")
+
+    result.errors.push({
+      category: isFileAccessError
+        ? ConfigErrorCategory.PATH
+        : ConfigErrorCategory.UNKNOWN,
+      message: `Failed to read/parse config file: ${errorMessage}`,
+      suggestion: isFileAccessError
+        ? "Check that the config file exists and is readable."
+        : "Verify the config file contains valid YAML syntax.",
+      verboseDetail: `Full error: ${error instanceof Error ? error.stack : String(error)}`,
+    })
   }
   return result
 }
@@ -292,10 +364,10 @@ version: "${CONFIG_VERSION}"
 # Where your source files are located (relative to this config file)
 sourceRoot: "${DEFAULT_CONFIG.sourceRoot}"
 
-# Path to your Minecraft world save
+# Absolute path to your Minecraft world save
 # Can use ~ for your home directory
 # Example Windows: "~/AppData/Roaming/.minecraft/saves/my_world"
-# Example Linux: "~/.minecraft/saves/my_world"
+# Example Unix: "~/.minecraft/saves/my_world"
 minecraftSavePath: "${DEFAULT_CONFIG.minecraftSavePath}"
 
 # Define groups of computers for easier file targeting

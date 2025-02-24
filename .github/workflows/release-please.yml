@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   ci:
-    uses: ./.github/workflows/lint-prettify-and-test.yml
+    uses: ./.github/workflows/lint-check-and-test.yml
 
   release-please:
     needs: ci

@@ -43,11 +43,25 @@ export const toTildePath = (fullPath: string): string => {
   return fullPath.startsWith(home) ? fullPath.replace(home, "~") : fullPath
 }
 
-export const pathIsLikelyFile = (path: string): boolean => {
+export const pathIsLikelyFile = (pathStr: string): boolean => {
+  // Normalize first
+  const normalizedPath = normalizePath(pathStr)
+
+  // If it has a trailing slash, it's definitely a directory
+  if (normalizedPath.endsWith("/")) {
+    return false
+  }
+
   // Get the last segment of the path (after last slash or full path if no slash)
-  const lastSegment = path.split("/").pop() || path
-  // If it contains a dot, it's likely meant to be a file
-  return lastSegment.includes(".")
+  const lastSegment = normalizedPath.split("/").pop() || normalizedPath
+
+  // If it has a file extension, it's likely a file
+  if (lastSegment.includes(".") && !lastSegment.startsWith(".")) {
+    return true
+  }
+
+  // we assume it's a directory (safer default for copying)
+  return false
 }
 
 /**
@@ -65,26 +79,41 @@ export const normalizePath = (
     throw new TypeError("Path must be a string")
   }
 
-  // Special case for root paths
-  if (filepath === "\\" || filepath === "/") return "/"
+  // Handle empty path
+  if (!filepath) return ""
 
-  // Handle empty or very short paths
-  if (filepath.length <= 1) return filepath
+  // Special cases
+  if (filepath === "\\" || filepath === "/") return "/"
+  if (filepath === ".") return "."
+  if (filepath === "..") return ".."
 
   // Normalize using Node's path.normalize first (handles . and ..)
   let normalized = path.normalize(filepath)
 
+  // Handle Windows drive letters consistently
+  const hasWindowsDrive = /^[A-Z]:/i.test(normalized)
+
   // Convert all backslashes to forward slashes
   normalized = normalized.replace(/\\/g, "/")
+
+  // Strip ./ from the beginning if present
+  if (normalized.startsWith("./")) {
+    normalized = normalized.substring(2)
+  }
 
   // Handle trailing slash based on the path type
   if (stripTrailing) {
     const isDriveRoot = /^[A-Z]:\/$/i.test(normalized)
     const isShareRoot = /^\/\/[^/]+\/[^/]+\/$/.test(normalized)
-
-    if (!isDriveRoot && !isShareRoot && normalized.length > 1) {
+    const isFileRoot = normalized === "/"
+    if (!isDriveRoot && !isShareRoot && !isFileRoot && normalized.length > 1) {
       normalized = normalized.replace(/\/$/, "")
     }
+  }
+
+  // Restore Windows drive letter if present
+  if (hasWindowsDrive && normalized.length >= 2 && normalized[1] !== ":") {
+    normalized = normalized[0] + ":" + normalized.substring(1)
   }
 
   return normalized
@@ -354,7 +383,9 @@ export async function validateFileSync(
         : sourceFiles
 
       if (relevantFiles.length === 0) {
-        validation.errors.push(`No matching files found for: '${rule.source}'`)
+        validation.errors.push(
+          `No matching files found for: '${toSystemPath(rule.source)}'`
+        )
         continue
       }
 
@@ -362,7 +393,7 @@ export async function validateFileSync(
       const computerIds = resolveComputerIds(rule.computers, config)
       if (computerIds.length === 0) {
         validation.errors.push(
-          `No target computers specified for: '${rule.source}'`
+          `No target computers specified for: '${toSystemPath(rule.source)}'`
         )
         continue
       }
@@ -397,12 +428,12 @@ export async function validateFileSync(
         switch (err.code) {
           case "ENOENT":
             validation.errors.push(
-              `Source directory not found: ${config.sourceRoot}`
+              `Source directory not found: ${toSystemPath(config.sourceRoot)}`
             )
             break
           case "EACCES":
             validation.errors.push(
-              `Permission denied reading source directory: ${config.sourceRoot}`
+              `Permission denied reading source directory: ${toSystemPath(config.sourceRoot)}`
             )
             break
           case "EMFILE":
@@ -412,13 +443,13 @@ export async function validateFileSync(
             break
           default:
             validation.errors.push(
-              `Error processing '${rule.source}': ${err.message}`
+              `Error processing '${toSystemPath(rule.source)}': ${err.message}`
             )
         }
       } else {
         // Handle glob pattern/config errors
         validation.errors.push(
-          `Invalid pattern '${rule.source}': ${err instanceof Error ? err.message : String(err)}`
+          `Invalid pattern '${toSystemPath(rule.source)}': ${err instanceof Error ? err.message : String(err)}`
         )
       }
     }
@@ -507,7 +538,7 @@ export async function copyFilesToComputer(
     ) {
       skippedFiles.push(file.sourceAbsolutePath)
       errors.push(
-        `Security violation: Target path '${file.targetPath}' attempts to write outside the computer directory`
+        `Security violation: Target path '${toSystemPath(file.targetPath)}' attempts to write outside the computer directory`
       )
       continue
     }
@@ -516,7 +547,9 @@ export async function copyFilesToComputer(
     const sourceStats = await fs.stat(toSystemPath(file.sourceAbsolutePath)) // use systemm-specific path here
     if (!sourceStats.isFile()) {
       skippedFiles.push(file.sourceAbsolutePath)
-      errors.push(`Source is not a file: ${file.sourceAbsolutePath}`)
+      errors.push(
+        `Source is not a file: ${toSystemPath(file.sourceAbsolutePath)}`
+      )
       continue
     }
 
@@ -526,7 +559,7 @@ export async function copyFilesToComputer(
       if (!targetDirStats.isDirectory()) {
         skippedFiles.push(file.sourceAbsolutePath)
         errors.push(
-          `Cannot create directory '${path.basename(targetDirPath)}' because a file with that name already exists`
+          `Cannot create directory '${toSystemPath(path.basename(targetDirPath))}' because a file with that name already exists`
         )
         continue
       }
@@ -551,7 +584,9 @@ export async function copyFilesToComputer(
       // Verify the copy
       const targetStats = await fs.stat(toSystemPath(targetFilePath))
       if (!targetStats.isFile()) {
-        throw new Error(`Failed to create target file: ${targetFilePath}`)
+        throw new Error(
+          `Failed to create target file: ${toSystemPath(targetFilePath)}`
+        )
       } else {
         copiedFiles.push(file.sourceAbsolutePath)
       }
@@ -560,13 +595,19 @@ export async function copyFilesToComputer(
 
       if (isNodeError(err)) {
         if (err.code === "ENOENT") {
-          errors.push(`Source file not found: ${file.sourceAbsolutePath}`)
+          errors.push(
+            `Source file not found: ${toSystemPath(file.sourceAbsolutePath)}`
+          )
         } else if (err.code === "EACCES") {
           errors.push(`Permission denied: ${err.message}`)
         } else if (err.code === "EISDIR") {
-          errors.push(`Cannot copy to '${targetFilePath}': Is a directory`)
+          errors.push(
+            `Cannot copy to '${toSystemPath(targetFilePath)}': Is a directory`
+          )
         } else if (err.code === "EBUSY") {
-          errors.push(`File is locked or in use: ${targetFilePath}`)
+          errors.push(
+            `File is locked or in use: ${toSystemPath(targetFilePath)}`
+          )
         } else {
           errors.push(err instanceof Error ? err.message : String(err))
         }

@@ -164,8 +164,16 @@ describe("Computer Discovery", () => {
 // ---- PATH HANDLING ----
 
 describe("Path Handling", () => {
-  test("normalizes Windows-style paths", () => {
+  test("normalizes paths correctly", () => {
     const tests = [
+      { input: "", expected: "" },
+      { input: ".", expected: "." },
+      { input: "..", expected: ".." },
+      { input: "./folder", expected: "folder" },
+      { input: "../folder", expected: "../folder" },
+      { input: "folder//subfolder", expected: "folder/subfolder" },
+      { input: "folder/./subfolder", expected: "folder/subfolder" },
+      { input: "folder/../sibling", expected: "sibling" },
       {
         input: "C:\\Users\\test\\file.txt",
         expected: "C:/Users/test/file.txt",

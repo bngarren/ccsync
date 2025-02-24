@@ -12,7 +12,7 @@ import {
 } from "../src/utils"
 import path from "path"
 import { mkdir, rm, writeFile } from "node:fs/promises"
-import { type Config } from "../src/config"
+import { withDefaultConfig, type Config } from "../src/config"
 import {
   createResolvedFile,
   createResolvedFiles,
@@ -21,7 +21,6 @@ import {
   createTestSave,
   createUniqueTempDir,
   TempCleaner,
-  withDefaultConfig,
 } from "./test-helpers"
 import { testLog } from "./setup"
 

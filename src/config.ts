@@ -167,12 +167,14 @@ export type SyncRule = z.infer<typeof SyncRuleSchema>
 
 // ---- CONFIG METHODS ----
 
-export const withDefaultConfig = (config: Partial<Config>) => {
-  return merge.withOptions(
-    { mergeArrays: false },
-    DEFAULT_CONFIG,
-    config
-  ) as Config
+export const withDefaultConfig = (config: Partial<Config>): Config => {
+  return merge.withOptions({ mergeArrays: false }, DEFAULT_CONFIG, config, {
+    rules:
+      config.rules?.map((rule) => ({
+        ...rule,
+        flatten: rule.flatten ?? true, // Default to true if undefined
+      })) || [],
+  }) as Config
 }
 
 export const findConfig = async (
@@ -214,11 +216,11 @@ export async function loadConfig(
     try {
       const validatedConfig = ConfigSchema.parse(rawConfig)
       // Resolve all paths in the config
-      result.config = {
+      result.config = withDefaultConfig({
         ...validatedConfig,
         sourceRoot: resolvePath(validatedConfig.sourceRoot),
         minecraftSavePath: resolvePath(validatedConfig.minecraftSavePath),
-      }
+      })
     } catch (error) {
       if (error instanceof ZodError) {
         // Format Zod errors into readable messages

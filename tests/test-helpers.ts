@@ -6,7 +6,7 @@ import type { Computer, ResolvedFileRule } from "../src/types"
 import { getComputerShortPath, isRecursiveGlob } from "../src/utils"
 import * as p from "@clack/prompts"
 import { mock } from "bun:test"
-import { DEFAULT_CONFIG, type Config, type SyncRule } from "../src/config"
+import { type SyncRule } from "../src/config"
 
 /**
  * Creates a new tmp directory in the operating system's default directory for temporary files.
@@ -55,14 +55,6 @@ export async function createTestComputer(
   if (options.createStartup) {
     await writeFile(path.join(computerDir, "startup.lua"), "")
   }
-}
-
-/**
- * Returns a Config object merging the input config with a default
- * @param config
- */
-export const withDefaultConfig = (config: Partial<Config>): Config => {
-  return { ...DEFAULT_CONFIG, ...config }
 }
 
 /**
@@ -268,7 +260,7 @@ export function createResolvedFiles(
     createResolvedFile({
       sourceRoot,
       sourcePath: rule.source,
-      flatten: !isRecursiveGlob(rule.source) || rule.flatten || true,
+      flatten: !isRecursiveGlob(rule.source) || rule.flatten,
       targetPath: rule.target,
       computers: rule.computers,
     })

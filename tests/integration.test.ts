@@ -1,7 +1,7 @@
 import { expect, test, describe, beforeEach, afterEach, mock } from "bun:test"
 import * as fs from "node:fs/promises"
 import path from "path"
-import { loadConfig } from "../src/config"
+import { loadConfig, withDefaultConfig } from "../src/config"
 import { SyncManager } from "../src/sync"
 import {
   TempCleaner,
@@ -10,10 +10,9 @@ import {
   createTestFiles,
   spyOnClackPrompts,
   createTestComputer,
-  withDefaultConfig,
 } from "./test-helpers"
 import { stringify } from "yaml"
-import { SyncEvent } from "../src/types"
+import { SyncEvent, type SyncResult } from "../src/types"
 
 describe("Integration: SyncManager", () => {
   let tempDir: string
@@ -128,11 +127,9 @@ describe("Integration: SyncManager", () => {
     if (!config) throw new Error("Failed to load config")
     const syncManager = new SyncManager(config)
 
+    const watchController = await syncManager.startWatchMode()
     try {
-      // eslint-disable-next-line no-async-promise-executor
-      return new Promise<void>(async (resolve, reject) => {
-        const watchController = await syncManager.startWatchMode()
-
+      await new Promise<void>((resolve, reject) => {
         // Track test phases
         let initialSyncCompleted = false
         let fileChangeDetected = false
@@ -231,166 +228,163 @@ describe("Integration: SyncManager", () => {
     }
   })
 
+  /**
+   * Tests complex file sync scenarios with multiple rules and glob patterns.
+   *
+   * Test validates:
+   * 1. Basic glob pattern syncing ("*.lua" -> "/" flattens files to root)
+   * 2. Directory-specific glob patterns ("programs/*.lua" -> "/" flattens from programs/ to root)
+   * 3. Directory preservation with target directories ("lib/*.lua" -> "/lib/" maintains utils.lua)
+   * 4. Directory structure preservation with recursive globs when flatten=false (** / *.lua -> /all/)
+   * 5. Multiple computers getting different sets of files based on rules
+   */
   test("handles multiple sync rules with complex patterns", async () => {
-    const configPath = path.join(tempDir, ".ccsync.yaml")
+    // Create base test files
+    await createTestFiles(sourceDir)
 
-    // Create additional test files
+    // Add test file in programs/ directory
     await fs.mkdir(path.join(sourceDir, "programs"), { recursive: true })
-    await fs.mkdir(path.join(sourceDir, "scripts"), { recursive: true })
     await fs.writeFile(
       path.join(sourceDir, "programs/main.lua"),
       "print('Main Program')"
     )
-    await fs.writeFile(
-      path.join(sourceDir, "programs/util.lua"),
-      "print('Utility')"
-    )
-    await fs.writeFile(
-      path.join(sourceDir, "scripts/startup.lua"),
-      "print('Custom Startup')"
-    )
 
+    const configPath = path.join(tempDir, ".ccsync.yaml")
     const configObject = withDefaultConfig({
       sourceRoot: sourceDir,
       minecraftSavePath: savePath,
       rules: [
-        // Rule 1: Copy all program files to root directory
+        // Computer 1: Root files to root directory (flattened)
+        { source: "*.lua", target: "/", computers: ["1"] },
+        // Computer 1: Programs files to root directory (flattened)
+        { source: "programs/*.lua", target: "/", computers: ["1"] },
+        // Computer 1: Root files to backup directory (flattened)
+        { source: "*.lua", target: "/backup/", computers: ["1"] },
+        // Computer 1: Programs files to backup directory (flattened)
+        { source: "programs/*.lua", target: "/backup/", computers: ["1"] },
+        // Both computers: lib files to lib directory
+        { source: "lib/*.lua", target: "/lib/", computers: ["1", "2"] },
+        // Computer 2: All files to /all/ preserving source directory structure
         {
-          source: "programs/*.lua",
-          target: "/",
-          computers: ["1"],
-        },
-        // Rule 2: Copy the same program files to a subdirectory
-        {
-          source: "programs/*.lua",
-          target: "/backup/",
-          computers: ["1"],
-        },
-        // Rule 3: Copy specific file to multiple locations
-        {
-          source: "scripts/startup.lua",
-          target: "/startup.lua",
-          computers: ["1"],
-        },
-        {
-          source: "scripts/startup.lua",
-          target: "/system/startup.lua",
-          computers: ["1"],
-        },
-        // Rule 4: Overlapping glob pattern
-        {
-          source: "**/*.lua",
+          source: "**/*.lua", // Matches all .lua files recursively
           target: "/all/",
           computers: ["2"],
+          flatten: false, // Preserve source structure relative to sourceRoot
         },
       ],
     })
 
-    const configContent = stringify(configObject)
-    await fs.writeFile(configPath, configContent)
-
-    // Create target computers
-    await createTestComputer(computersDir, "1", { createStartup: false })
-    await createTestComputer(computersDir, "2", { createStartup: false })
+    await fs.writeFile(configPath, stringify(configObject))
+    await Promise.all([
+      createTestComputer(computersDir, "1", { createStartup: false }),
+      createTestComputer(computersDir, "2", { createStartup: false }),
+    ])
 
     const { config } = await loadConfig(configPath)
     if (!config) throw new Error("Failed to load config")
+
     const syncManager = new SyncManager(config)
+    const manualController = await syncManager.startManualMode()
+    let syncCompleted = false
 
-    // Start manual mode and wait for sync
-    // eslint-disable-next-line no-async-promise-executor
-    return new Promise<void>(async (resolve, reject) => {
-      try {
-        const manualController = await syncManager.startManualMode()
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = () => {
+          manualController.off(SyncEvent.SYNC_COMPLETE, handleSyncComplete)
+          manualController.off(SyncEvent.SYNC_ERROR, handleSyncError)
+        }
 
-        manualController.on(
-          SyncEvent.SYNC_COMPLETE,
-          async ({ successCount, errorCount, missingCount }) => {
-            try {
-              // Verify sync statistics
-              expect(successCount).toBe(2) // Both computers synced
-              expect(errorCount).toBe(0)
-              expect(missingCount).toBe(0)
+        const handleSyncComplete = async ({
+          successCount,
+          errorCount,
+          missingCount,
+        }: SyncResult) => {
+          try {
+            // Verify sync statistics
+            expect(successCount).toBe(2) // Both computers processed
+            expect(errorCount).toBe(0) // No errors
+            expect(missingCount).toBe(0) // No missing computers
 
-              // Computer 1: Verify files in root directory
-              const computer1Dir = path.join(computersDir, "1")
-              expect(await fs.exists(path.join(computer1Dir, "main.lua"))).toBe(
-                true
-              )
-              expect(await fs.exists(path.join(computer1Dir, "util.lua"))).toBe(
-                true
-              )
+            // Verify both computers' file states
+            await Promise.all([
+              verifyComputer1Files(path.join(computersDir, "1")),
+              verifyComputer2Files(path.join(computersDir, "2")),
+            ])
 
-              // Computer 1: Verify files in backup directory
-              expect(
-                await fs.exists(path.join(computer1Dir, "backup", "main.lua"))
-              ).toBe(true)
-              expect(
-                await fs.exists(path.join(computer1Dir, "backup", "util.lua"))
-              ).toBe(true)
-
-              // Computer 1: Verify startup file in multiple locations
-              expect(
-                await fs.exists(path.join(computer1Dir, "startup.lua"))
-              ).toBe(true)
-              expect(
-                await fs.exists(
-                  path.join(computer1Dir, "system", "startup.lua")
-                )
-              ).toBe(true)
-
-              // Verify content is identical for duplicated files
-              const startupContent1 = await fs.readFile(
-                path.join(computer1Dir, "startup.lua"),
-                "utf8"
-              )
-              const startupContent2 = await fs.readFile(
-                path.join(computer1Dir, "system", "startup.lua"),
-                "utf8"
-              )
-              expect(startupContent1).toBe(startupContent2)
-              expect(startupContent1).toBe("print('Custom Startup')")
-
-              // Computer 2: Verify all Lua files are in all/ directory
-              const computer2Dir = path.join(computersDir, "2")
-              expect(
-                await fs.exists(path.join(computer2Dir, "all", "main.lua"))
-              ).toBe(true)
-              expect(
-                await fs.exists(path.join(computer2Dir, "all", "util.lua"))
-              ).toBe(true)
-              expect(
-                await fs.exists(path.join(computer2Dir, "all", "startup.lua"))
-              ).toBe(true)
-
-              // Computer 2: Verify files aren't in root
-              expect(await fs.exists(path.join(computer2Dir, "main.lua"))).toBe(
-                false
-              )
-              expect(
-                await fs.exists(path.join(computer2Dir, "startup.lua"))
-              ).toBe(false)
-
-              await manualController.stop()
-              await syncManager.stop()
-              resolve()
-            } catch (err) {
-              await syncManager.stop()
-              reject(err)
-            }
+            syncCompleted = true
+            cleanup()
+            resolve()
+          } catch (err) {
+            cleanup()
+            reject(err)
           }
-        )
+        }
 
-        manualController.on(SyncEvent.SYNC_ERROR, async (error) => {
-          await syncManager.stop()
+        const handleSyncError = (error: unknown) => {
+          cleanup()
           reject(error)
-        })
-      } catch (err) {
-        await syncManager.stop()
-        reject(err)
-      }
-    })
+        }
+
+        manualController.once(SyncEvent.SYNC_COMPLETE, handleSyncComplete)
+        manualController.once(SyncEvent.SYNC_ERROR, handleSyncError)
+      })
+
+      expect(syncCompleted).toBe(true)
+    } finally {
+      await manualController.stop()
+      await syncManager.stop()
+    }
   })
+
+  async function verifyComputer1Files(computer1Dir: string) {
+    // Check root level files
+    const rootFiles = await Promise.all([
+      fs.exists(path.join(computer1Dir, "program.lua")), // from root
+      fs.exists(path.join(computer1Dir, "startup.lua")), // from root
+      fs.exists(path.join(computer1Dir, "main.lua")), // from programs/
+      fs.exists(path.join(computer1Dir, "lib/utils.lua")), // from lib/
+    ])
+    rootFiles.forEach((exists) => expect(exists).toBe(true))
+
+    // Check backup directory
+    const backupFiles = await Promise.all([
+      fs.exists(path.join(computer1Dir, "backup/program.lua")), // from root
+      fs.exists(path.join(computer1Dir, "backup/startup.lua")), // from root
+      fs.exists(path.join(computer1Dir, "backup/main.lua")), // from programs/
+    ])
+    backupFiles.forEach((exists) => expect(exists).toBe(true))
+
+    // Verify content of one file to ensure proper copying
+    const content = await fs.readFile(
+      path.join(computer1Dir, "program.lua"),
+      "utf8"
+    )
+    expect(content).toBe("print('Hello')")
+  }
+
+  async function verifyComputer2Files(computer2Dir: string) {
+    // Verify lib files exist in root lib directory
+    await expect(
+      fs.exists(path.join(computer2Dir, "lib/utils.lua"))
+    ).resolves.toBe(true)
+
+    // Check all directory has files with preserved structure
+    const allDirFiles = await Promise.all([
+      fs.exists(path.join(computer2Dir, "all/program.lua")), // from root
+      fs.exists(path.join(computer2Dir, "all/startup.lua")), // fromt root
+      fs.exists(path.join(computer2Dir, "all/programs/main.lua")), // from programs/
+      fs.exists(path.join(computer2Dir, "all/lib/utils.lua")), // from lib/
+    ])
+    allDirFiles.forEach((exists) => expect(exists).toBe(true))
+
+    // Verify files don't exist in root (except lib)
+    const rootFiles = await Promise.all([
+      fs.exists(path.join(computer2Dir, "program.lua")),
+      fs.exists(path.join(computer2Dir, "startup.lua")),
+      fs.exists(path.join(computer2Dir, "main.lua")),
+    ])
+    rootFiles.forEach((exists) => expect(exists).toBe(false))
+  }
 
   test("handles glob pattern with multiple matching files in watch mode", async () => {
     const configPath = path.join(tempDir, ".ccsync.yaml")
@@ -421,12 +415,10 @@ describe("Integration: SyncManager", () => {
     const { config } = await loadConfig(configPath)
     if (!config) throw new Error("Failed to load config")
     const syncManager = new SyncManager(config)
+    const watchController = await syncManager.startWatchMode()
 
-    // eslint-disable-next-line no-async-promise-executor
-    return new Promise<void>(async (resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       try {
-        const watchController = await syncManager.startWatchMode()
-
         // Track test phases
         let initialSyncCompleted = false
         let fileChangeDetected = false
@@ -530,13 +522,13 @@ describe("Integration: SyncManager", () => {
         // Clean up timeout on success
         process.once("beforeExit", () => clearTimeout(timeout))
       } catch (err) {
-        await syncManager.stop()
         reject(err)
       }
     })
+    await syncManager.stop()
   })
 
-  test.skip("handles path edge cases in sync operation", async () => {
+  test("handles path edge cases in sync operation", async () => {
     const configPath = path.join(tempDir, ".ccsync.yaml")
 
     // Create test files with various path cases
@@ -625,11 +617,10 @@ describe("Integration: SyncManager", () => {
     if (!config) throw new Error("Failed to load config")
     const syncManager = new SyncManager(config)
 
-    try {
-      // eslint-disable-next-line no-async-promise-executor
-      return new Promise<void>(async (resolve, reject) => {
-        const manualController = await syncManager.startManualMode()
+    const manualController = await syncManager.startManualMode()
 
+    try {
+      await new Promise<void>((resolve, reject) => {
         manualController.on(
           SyncEvent.SYNC_COMPLETE,
           async ({ successCount, errorCount, missingCount }) => {

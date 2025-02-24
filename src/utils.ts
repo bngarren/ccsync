@@ -365,6 +365,9 @@ export async function validateFileSync(
       )
       validation.missingComputerIds.push(...missingIds)
 
+      // Determine if this is a recursive glob pattern
+      const isRecursiveGlob = rule.source.includes("**/")
+
       // Create resolved file entries
       for (const sourcePath of relevantFiles) {
         validation.resolvedFileRules.push({
@@ -372,6 +375,7 @@ export async function validateFileSync(
           sourceRelativePath: normalizePath(
             path.relative(path.dirname(sourcePath), sourcePath)
           ),
+          isRecursiveGlob,
           targetPath: normalizePath(rule.target),
           computers: computerIds,
         })
@@ -436,24 +440,31 @@ export async function copyFilesToComputer(
   const normalizedComputerPath = normalizePath(computerPath)
 
   for (const file of resolvedFiles) {
-    // Normalize source and target paths
-    const normalizedSource = normalizePath(file.sourcePath)
+    // Normalize target path
     const normalizedTarget = normalizePath(file.targetPath.replace(/^\//, ""))
 
     // Determine if target is a directory:
     const isTargetDirectory = !pathIsLikelyFile(normalizedTarget)
 
-    // For directory targets, use source filename, otherwise use target filename
-    const targetFileName = isTargetDirectory
-      ? path.basename(normalizedSource)
-      : path.basename(normalizedTarget)
+    // For directory targets, maintain source directory structure
+    let targetDirPath: string
+    let targetFileName: string
 
-    // Get the target directory path
-    const targetDirPath = normalizePath(
-      isTargetDirectory
-        ? path.join(computerPath, normalizedTarget)
-        : path.join(computerPath, path.dirname(normalizedTarget))
-    )
+    if (isTargetDirectory) {
+      if (file.isRecursiveGlob) {
+        // For **/ patterns, preserve directory structure
+        const sourceDir = path.dirname(file.sourceRelativePath)
+        targetDirPath = path.join(computerPath, normalizedTarget, sourceDir)
+      } else {
+        // For simple patterns or direct files, just use target dir
+        targetDirPath = path.join(computerPath, normalizedTarget)
+      }
+      targetFileName = path.basename(file.sourceRelativePath)
+    } else {
+      // For file targets, use specified path
+      targetDirPath = path.join(computerPath, path.dirname(normalizedTarget))
+      targetFileName = path.basename(normalizedTarget)
+    }
 
     // Construct and normalize the full target path
     const targetFilePath = normalizePath(

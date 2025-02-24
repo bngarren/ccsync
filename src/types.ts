@@ -5,12 +5,12 @@ export enum SyncMode {
   WATCH = "watch",
 }
 
-// Base interface for file sync configuration in .ccsync.yaml
-export interface SyncRule {
-  source: string // Glob pattern relative to sourceRoot
-  target: string // Target path on computer
-  computers?: string[] // Array of computer IDs or group names
-}
+// // Base interface for file sync configuration in .ccsync.yaml
+// export interface SyncRule {
+//   source: string // Glob pattern relative to sourceRoot
+//   target: string // Target path on computer
+//   computers?: string[] // Array of computer IDs or group names
+// }
 
 /**
  * Represents a viable file resolved from a config sync rule.
@@ -18,7 +18,9 @@ export interface SyncRule {
  * A resolved file rule has been validated such that a file exists at the source path.
  */
 export interface ResolvedFileRule {
-  sourcePath: string // Absolute path to source file
+  sourceAbsolutePath: string // Absolute path to source file
+  sourceRelativePath: string // Relative path to source file from source root
+  flatten?: boolean // Flatten if non-recursive or explicitly set
   targetPath: string // Relative path on computer
   computers: string[] // Resolved list of computer IDs (not group names)
 }

@@ -2,11 +2,11 @@ import { mkdir, rm, writeFile } from "node:fs/promises"
 import path from "path"
 import os from "os"
 import crypto from "crypto"
-import type { Computer } from "../src/types"
-import { getComputerShortPath } from "../src/utils"
+import type { Computer, ResolvedFileRule } from "../src/types"
+import { getComputerShortPath, isRecursiveGlob } from "../src/utils"
 import * as p from "@clack/prompts"
 import { mock } from "bun:test"
-import { DEFAULT_CONFIG, type Config } from "../src/config"
+import { type SyncRule } from "../src/config"
 
 /**
  * Creates a new tmp directory in the operating system's default directory for temporary files.
@@ -20,7 +20,7 @@ import { DEFAULT_CONFIG, type Config } from "../src/config"
  */
 export function createUniqueTempDir() {
   const uniqueId = crypto.randomBytes(16).toString("hex")
-  return path.join(os.tmpdir(), `ccsync-test-${uniqueId}`)
+  return path.join(os.tmpdir(), "ccsync-test", uniqueId)
 }
 
 /**
@@ -55,14 +55,6 @@ export async function createTestComputer(
   if (options.createStartup) {
     await writeFile(path.join(computerDir, "startup.lua"), "")
   }
-}
-
-/**
- * Returns a Config object merging the input config with a default
- * @param config
- */
-export const withDefaultConfig = (config: Partial<Config>): Config => {
-  return { ...DEFAULT_CONFIG, ...config }
 }
 
 /**
@@ -220,4 +212,57 @@ export function spyOnClackPrompts() {
       mock.restore()
     },
   }
+}
+
+interface CreateResolvedFileOptions {
+  sourceRoot: string // Root of source files, per the config.sourceRoot
+  sourcePath: string // Path relative to sourceRoot
+  flatten?: boolean // Whether to flatten sources files into target dir
+  targetPath: string // Target path on computer
+  computers: string | string[] // Computer IDs or array of IDs
+}
+
+/**
+ * Creates a ResolvedFileRule for testing
+ * @example
+ * createResolvedFile({
+ *   sourceRoot: "/src",
+ *   sourcePath: "lib/utils.lua",
+ *   targetPath: "/lib/",
+ *   computers: ["1", "2"]
+ * })
+ */
+export function createResolvedFile(
+  opts: CreateResolvedFileOptions
+): ResolvedFileRule {
+  const sourceRoot = opts.sourceRoot
+  const computers = Array.isArray(opts.computers)
+    ? opts.computers
+    : [opts.computers]
+
+  return {
+    sourceAbsolutePath: path.resolve(sourceRoot, opts.sourcePath),
+    sourceRelativePath: opts.sourcePath,
+    flatten: opts.flatten || true,
+    targetPath: opts.targetPath,
+    computers,
+  }
+}
+
+/**
+ * Creates multiple ResolvedFileRules for testing
+ */
+export function createResolvedFiles(
+  sourceRoot: string,
+  rules: SyncRule[]
+): ResolvedFileRule[] {
+  return rules.map((rule) =>
+    createResolvedFile({
+      sourceRoot,
+      sourcePath: rule.source,
+      flatten: !isRecursiveGlob(rule.source) || rule.flatten,
+      targetPath: rule.target,
+      computers: rule.computers,
+    })
+  )
 }

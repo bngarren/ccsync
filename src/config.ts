@@ -2,7 +2,7 @@
 
 import { z } from "zod"
 import { parse } from "yaml"
-import { pathIsLikelyFile, resolvePath } from "./utils"
+import { normalizePath, pathIsLikelyFile, resolvePath } from "./utils"
 import path from "path"
 import * as fs from "node:fs/promises"
 import * as fsSync from "node:fs"
@@ -74,14 +74,18 @@ const ComputerGroupSchema = z.object({
 
 // Sync rule schema
 const SyncRuleSchema = z.object({
-  source: z.string({
-    required_error: "Source file path is required",
-    invalid_type_error: "Source must be a file path",
-  }),
-  target: z.string({
-    required_error: "Target file path is required",
-    invalid_type_error: "Target must be a file path",
-  }),
+  source: z
+    .string({
+      required_error: "Source file path is required",
+      invalid_type_error: "Source must be a file path",
+    })
+    .transform((path) => normalizePath(path, false)), // keep trailing slashes for globs
+  target: z
+    .string({
+      required_error: "Target file path is required",
+      invalid_type_error: "Target must be a file path",
+    })
+    .transform((path) => normalizePath(path)),
   computers: z
     .union([
       z.array(
@@ -93,8 +97,8 @@ const SyncRuleSchema = z.object({
       ComputerIdSchema,
       z.string().min(1, "Group name cannot be empty"),
     ])
-    .optional()
     .describe("Computer IDs or group names to sync files to"),
+  flatten: z.boolean().optional(),
 })
 
 const AdvancedOptionsSchema = z.object({
@@ -125,15 +129,19 @@ export const ConfigSchema = z
       required_error: "Config version is required",
       invalid_type_error: "Version must be a string",
     }),
-    sourceRoot: z.string({
-      required_error: "Source path is required",
-      invalid_type_error: "Source path must be text",
-    }),
-    minecraftSavePath: z.string({
-      required_error: "Minecraft save path is required",
-      invalid_type_error: "Save path must be text",
-    }),
-    computerGroups: ComputerGroupsSchema,
+    sourceRoot: z
+      .string({
+        required_error: "Source path is required",
+        invalid_type_error: "Source path must be text",
+      })
+      .transform((path) => normalizePath(path)),
+    minecraftSavePath: z
+      .string({
+        required_error: "Minecraft save path is required",
+        invalid_type_error: "Save path must be text",
+      })
+      .transform((path) => normalizePath(path)),
+    computerGroups: z.record(z.string(), ComputerGroupSchema).optional(),
     rules: z.array(SyncRuleSchema),
     advanced: AdvancedOptionsSchema.default({
       verbose: false,
@@ -194,16 +202,18 @@ export const ConfigSchema = z
 
 export type Config = z.infer<typeof ConfigSchema>
 export type ComputerGroup = z.infer<typeof ComputerGroupSchema>
-export type FileSyncRule = z.infer<typeof SyncRuleSchema>
+export type SyncRule = z.infer<typeof SyncRuleSchema>
 
 // ---- CONFIG METHODS ----
 
-export const withDefaultConfig = (config: Partial<Config>) => {
-  return merge.withOptions(
-    { mergeArrays: false },
-    DEFAULT_CONFIG,
-    config
-  ) as Config
+export const withDefaultConfig = (config: Partial<Config>): Config => {
+  return merge.withOptions({ mergeArrays: false }, DEFAULT_CONFIG, config, {
+    rules:
+      config.rules?.map((rule) => ({
+        ...rule,
+        flatten: rule.flatten ?? true, // Default to true if undefined
+      })) || [],
+  }) as Config
 }
 
 export const findConfig = async (

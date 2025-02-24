@@ -3,7 +3,7 @@ import path from "path"
 import os from "os"
 import crypto from "crypto"
 import type { Computer, ResolvedFileRule } from "../src/types"
-import { getComputerShortPath } from "../src/utils"
+import { getComputerShortPath, isRecursiveGlob } from "../src/utils"
 import * as p from "@clack/prompts"
 import { mock } from "bun:test"
 import { DEFAULT_CONFIG, type Config, type SyncRule } from "../src/config"
@@ -20,7 +20,7 @@ import { DEFAULT_CONFIG, type Config, type SyncRule } from "../src/config"
  */
 export function createUniqueTempDir() {
   const uniqueId = crypto.randomBytes(16).toString("hex")
-  return path.join(os.tmpdir(), `ccsync-test-${uniqueId}`)
+  return path.join(os.tmpdir(), "ccsync-test", uniqueId)
 }
 
 /**
@@ -225,7 +225,7 @@ export function spyOnClackPrompts() {
 interface CreateResolvedFileOptions {
   sourceRoot: string // Root of source files, per the config.sourceRoot
   sourcePath: string // Path relative to sourceRoot
-  isRecursiveGlob: boolean // Whether source was **/ pattern
+  flatten?: boolean // Whether to flatten sources files into target dir
   targetPath: string // Target path on computer
   computers: string | string[] // Computer IDs or array of IDs
 }
@@ -251,7 +251,7 @@ export function createResolvedFile(
   return {
     sourceAbsolutePath: path.resolve(sourceRoot, opts.sourcePath),
     sourceRelativePath: opts.sourcePath,
-    isRecursiveGlob: opts.isRecursiveGlob || false,
+    flatten: opts.flatten || true,
     targetPath: opts.targetPath,
     computers,
   }
@@ -268,7 +268,7 @@ export function createResolvedFiles(
     createResolvedFile({
       sourceRoot,
       sourcePath: rule.source,
-      isRecursiveGlob: rule.source.includes("**/"),
+      flatten: !isRecursiveGlob(rule.source) || rule.flatten || true,
       targetPath: rule.target,
       computers: rule.computers,
     })

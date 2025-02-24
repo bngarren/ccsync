@@ -97,6 +97,7 @@ const SyncRuleSchema = z.object({
       z.string().min(1, "Group name cannot be empty"),
     ])
     .describe("Computer IDs or group names to sync files to"),
+  flatten: z.boolean().optional(),
 })
 
 const AdvancedOptionsSchema = z.object({

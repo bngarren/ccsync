@@ -113,6 +113,13 @@ export const toSystemPath = (filepath: string): string => {
   return process.platform === "win32" ? filepath.replace(/\//g, "\\") : filepath
 }
 
+export const isRecursiveGlob = (pattern: string): boolean => {
+  // Match any pattern containing ** which indicates recursion
+  const result = pattern.includes("**")
+  // console.log("isRecursiveGlob:", { pattern, result })
+  return result
+}
+
 // - - - - - MINECRAFT - - - - -
 
 interface SaveValidationResult {
@@ -365,17 +372,15 @@ export async function validateFileSync(
       )
       validation.missingComputerIds.push(...missingIds)
 
-      // Determine if this is a recursive glob pattern
-      const isRecursiveGlob = rule.source.includes("**/")
-
       // Create resolved file entries
       for (const sourcePath of relevantFiles) {
         validation.resolvedFileRules.push({
           sourceAbsolutePath: normalizePath(sourcePath),
+          // Calculated relative to sourceRoot
           sourceRelativePath: normalizePath(
-            path.relative(path.dirname(sourcePath), sourcePath)
+            path.relative(config.sourceRoot, sourcePath)
           ),
-          isRecursiveGlob,
+          flatten: !isRecursiveGlob(rule.source) || rule.flatten,
           targetPath: normalizePath(rule.target),
           computers: computerIds,
         })
@@ -436,10 +441,22 @@ export async function copyFilesToComputer(
   const skippedFiles = []
   const errors = []
 
+  // DEBUG
+  // console.log("\n=== Starting copyFilesToComputer ===")
+  // console.log("Computer path:", computerPath)
+  // console.log("Number of files to process:", resolvedFiles.length)
+
   // Normalize the computer path
   const normalizedComputerPath = normalizePath(computerPath)
 
   for (const file of resolvedFiles) {
+    // DEBUG
+    // console.log("\n--- Processing file ---")
+    // console.log("Source absolute path:", file.sourceAbsolutePath)
+    // console.log("Source relative path:", file.sourceRelativePath)
+    // console.log("Flatten?", file.flatten)
+    // console.log("Target path:", file.targetPath)
+
     // Normalize target path
     const normalizedTarget = normalizePath(file.targetPath.replace(/^\//, ""))
 
@@ -451,13 +468,18 @@ export async function copyFilesToComputer(
     let targetFileName: string
 
     if (isTargetDirectory) {
-      if (file.isRecursiveGlob) {
-        // For **/ patterns, preserve directory structure
-        const sourceDir = path.dirname(file.sourceRelativePath)
-        targetDirPath = path.join(computerPath, normalizedTarget, sourceDir)
-      } else {
-        // For simple patterns or direct files, just use target dir
+      if (file.flatten) {
         targetDirPath = path.join(computerPath, normalizedTarget)
+      } else {
+        const sourceDir = path.dirname(file.sourceRelativePath)
+        targetDirPath =
+          sourceDir === "."
+            ? path.join(computerPath, normalizedTarget)
+            : path.join(computerPath, normalizedTarget, sourceDir)
+        // console.log("Keeping source dir structure on copy:", {
+        //   sourceDir,
+        //   targetDirPath,
+        // })
       }
       targetFileName = path.basename(file.sourceRelativePath)
     } else {
@@ -470,6 +492,8 @@ export async function copyFilesToComputer(
     const targetFilePath = normalizePath(
       path.join(targetDirPath, targetFileName)
     )
+
+    // console.log("Target file path: ", targetFilePath)
 
     // Security check: Ensure the target path stays within the computer directory
     const relativeToComputer = path.relative(

@@ -20,7 +20,7 @@ export enum SyncMode {
 export interface ResolvedFileRule {
   sourceAbsolutePath: string // Absolute path to source file
   sourceRelativePath: string // Relative path to source file from source root
-  isRecursiveGlob: boolean // Whether source was **/ pattern
+  flatten?: boolean // Flatten if non-recursive or explicitly set
   targetPath: string // Relative path on computer
   computers: string[] // Resolved list of computer IDs (not group names)
 }

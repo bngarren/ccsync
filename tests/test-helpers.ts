@@ -2,11 +2,11 @@ import { mkdir, rm, writeFile } from "node:fs/promises"
 import path from "path"
 import os from "os"
 import crypto from "crypto"
-import type { Computer } from "../src/types"
+import type { Computer, ResolvedFileRule } from "../src/types"
 import { getComputerShortPath } from "../src/utils"
 import * as p from "@clack/prompts"
 import { mock } from "bun:test"
-import { DEFAULT_CONFIG, type Config } from "../src/config"
+import { DEFAULT_CONFIG, type Config, type SyncRule } from "../src/config"
 
 /**
  * Creates a new tmp directory in the operating system's default directory for temporary files.
@@ -220,4 +220,57 @@ export function spyOnClackPrompts() {
       mock.restore()
     },
   }
+}
+
+interface CreateResolvedFileOptions {
+  sourceRoot: string // Root of source files, per the config.sourceRoot
+  sourcePath: string // Path relative to sourceRoot
+  isRecursiveGlob: boolean // Whether source was **/ pattern
+  targetPath: string // Target path on computer
+  computers: string | string[] // Computer IDs or array of IDs
+}
+
+/**
+ * Creates a ResolvedFileRule for testing
+ * @example
+ * createResolvedFile({
+ *   sourceRoot: "/src",
+ *   sourcePath: "lib/utils.lua",
+ *   targetPath: "/lib/",
+ *   computers: ["1", "2"]
+ * })
+ */
+export function createResolvedFile(
+  opts: CreateResolvedFileOptions
+): ResolvedFileRule {
+  const sourceRoot = opts.sourceRoot
+  const computers = Array.isArray(opts.computers)
+    ? opts.computers
+    : [opts.computers]
+
+  return {
+    sourceAbsolutePath: path.resolve(sourceRoot, opts.sourcePath),
+    sourceRelativePath: opts.sourcePath,
+    isRecursiveGlob: opts.isRecursiveGlob || false,
+    targetPath: opts.targetPath,
+    computers,
+  }
+}
+
+/**
+ * Creates multiple ResolvedFileRules for testing
+ */
+export function createResolvedFiles(
+  sourceRoot: string,
+  rules: SyncRule[]
+): ResolvedFileRule[] {
+  return rules.map((rule) =>
+    createResolvedFile({
+      sourceRoot,
+      sourcePath: rule.source,
+      isRecursiveGlob: rule.source.includes("**/"),
+      targetPath: rule.target,
+      computers: rule.computers,
+    })
+  )
 }

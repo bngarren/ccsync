@@ -14,6 +14,8 @@ import path from "path"
 import { mkdir, rm, writeFile } from "node:fs/promises"
 import { withDefaultConfig, type Config } from "../src/config"
 import {
+  createResolvedFile,
+  createResolvedFiles,
   createTestComputer,
   createTestFiles,
   createTestSave,
@@ -21,7 +23,6 @@ import {
   TempCleaner,
 } from "./test-helpers"
 import { testLog } from "./setup"
-import type { ResolvedFileRule } from "../src/types"
 
 // ---- MC SAVE OPERATIONS ----
 describe("Save Directory Validation", () => {
@@ -406,7 +407,7 @@ describe("File Operations", () => {
       const validation = await validateFileSync(config, computers, changedFiles)
 
       expect(validation.resolvedFileRules).toHaveLength(1)
-      expect(validation.resolvedFileRules[0].sourcePath).toContain(
+      expect(validation.resolvedFileRules[0].sourceAbsolutePath).toContain(
         "program.lua"
       )
     })
@@ -465,11 +466,13 @@ describe("File Operations", () => {
 
       // WHEN copying files with Windows paths
       for (const test of pathTests) {
-        const resolvedFile: ResolvedFileRule = {
-          sourcePath: path.join(sourceDir, "program.lua"),
+        const resolvedFile = createResolvedFile({
+          sourceRoot: sourceDir,
+          sourcePath: "program.lua",
+          isRecursiveGlob: false,
           targetPath: test.targetPath,
-          computers: ["1"],
-        }
+          computers: "1",
+        })
 
         const result = await copyFilesToComputer([resolvedFile], targetComputer)
         // THEN files should be copied with normalized paths
@@ -501,13 +504,13 @@ describe("File Operations", () => {
         "print('test')"
       )
 
-      const resolvedFiles: ResolvedFileRule[] = [
+      const resolvedFiles = createResolvedFiles(sourceDir, [
         {
-          sourcePath: path.join(sourceDir, "lib/nested\\folder\\program.lua"),
-          targetPath: "programs\\test/file.lua",
-          computers: ["1"],
+          source: "lib/nested\\folder\\program.lua",
+          target: "programs\\test/file.lua",
+          computers: "1",
         },
-      ]
+      ])
 
       const targetComputer = path.join(computerDir, "1")
       await fs.mkdir(targetComputer, { recursive: true })
@@ -531,18 +534,10 @@ describe("File Operations", () => {
       await fs.writeFile(sourceProgramPath, "print('Hello')")
       await fs.writeFile(sourceStartupPath, "print('Startup')")
 
-      const resolvedFiles: ResolvedFileRule[] = [
-        {
-          sourcePath: sourceProgramPath,
-          targetPath: "program.lua",
-          computers: ["1"],
-        },
-        {
-          sourcePath: sourceStartupPath,
-          targetPath: "main.lua",
-          computers: ["1"],
-        },
-      ]
+      const resolvedFiles = createResolvedFiles(sourceDir, [
+        { source: "program.lua", target: "program.lua", computers: "1" },
+        { source: "startup.lua", target: "main.lua", computers: "1" },
+      ])
 
       await copyFilesToComputer(resolvedFiles, computerDir)
 
@@ -580,18 +575,12 @@ describe("File Operations", () => {
       const computer1Dir = path.join(computerDir, "1")
       await fs.mkdir(computer1Dir, { recursive: true })
 
-      const resolvedFiles: ResolvedFileRule[] = [
-        {
-          sourcePath: path.join(sourceDir, "program.lua"),
-          targetPath: "/startup.lua", // Absolute path to computer root
-          computers: ["1"],
-        },
-        {
-          sourcePath: path.join(sourceDir, "lib.lua"),
-          targetPath: "/lib/", // Absolute path to lib directory
-          computers: ["1"],
-        },
-      ]
+      const resolvedFiles = createResolvedFiles(sourceDir, [
+        // Absolute path to computer root
+        { source: "program.lua", target: "/startup.lua", computers: "1" },
+        // Absolute path to lib directory
+        { source: "lib.lua", target: "/lib/", computers: "1" },
+      ])
 
       await copyFilesToComputer(resolvedFiles, computer1Dir)
 
@@ -613,13 +602,9 @@ describe("File Operations", () => {
       await fs.mkdir(path.join(sourceDir, "lib"), { recursive: true })
       await fs.writeFile(path.join(sourceDir, "lib/utils.lua"), "-- Utils")
 
-      const resolvedFiles: ResolvedFileRule[] = [
-        {
-          sourcePath: path.join(sourceDir, "lib/utils.lua"),
-          targetPath: "lib/",
-          computers: ["1"],
-        },
-      ]
+      const resolvedFiles = createResolvedFiles(sourceDir, [
+        { source: "lib/utils.lua", target: "lib/", computers: ["1"] },
+      ])
 
       await copyFilesToComputer(resolvedFiles, computerDir)
 
@@ -635,13 +620,10 @@ describe("File Operations", () => {
         "print('Program')"
       )
 
-      const resolvedFiles: ResolvedFileRule[] = [
-        {
-          sourcePath: path.join(sourceDir, "program.lua"),
-          targetPath: "lib", // No extension = directory
-          computers: ["1"],
-        },
-      ]
+      const resolvedFiles = createResolvedFiles(sourceDir, [
+        // Target has no extension = directory
+        { source: "program.lua", target: "lib", computers: ["1"] },
+      ])
 
       await copyFilesToComputer(resolvedFiles, computerDir)
 
@@ -660,14 +642,10 @@ describe("File Operations", () => {
       // Create a file named 'lib'
       await fs.writeFile(path.join(computerDir, "lib"), "I am a file")
 
-      // Try to use 'lib' as a directory target
-      const resolvedFiles: ResolvedFileRule[] = [
-        {
-          sourcePath: path.join(sourceDir, "program.lua"),
-          targetPath: "lib", // No extension = should be directory
-          computers: ["1"],
-        },
-      ]
+      const resolvedFiles = createResolvedFiles(sourceDir, [
+        // Try to use 'lib' as directory target
+        { source: "program.lua", target: "lib", computers: ["1"] },
+      ])
 
       const result = await copyFilesToComputer(resolvedFiles, computerDir)
 
@@ -684,13 +662,10 @@ describe("File Operations", () => {
         "print('Program')"
       )
 
-      const resolvedFiles: ResolvedFileRule[] = [
-        {
-          sourcePath: path.join(sourceDir, "program.lua"),
-          targetPath: "startup.lua", // Different name
-          computers: ["1"],
-        },
-      ]
+      const resolvedFiles = createResolvedFiles(sourceDir, [
+        // Different name
+        { source: "program.lua", target: "startup.lua", computers: ["1"] },
+      ])
 
       const result = await copyFilesToComputer(resolvedFiles, computerDir)
 
@@ -713,13 +688,9 @@ describe("File Operations", () => {
         "-- HTTP API"
       )
 
-      const resolvedFiles: ResolvedFileRule[] = [
-        {
-          sourcePath: path.join(sourceDir, "apis/net/http.lua"),
-          targetPath: "apis/",
-          computers: ["1"],
-        },
-      ]
+      const resolvedFiles = createResolvedFiles(sourceDir, [
+        { source: "apis/net/http.lua", target: "apis/", computers: ["1"] },
+      ])
 
       await copyFilesToComputer(resolvedFiles, computerDir)
 
@@ -732,13 +703,13 @@ describe("File Operations", () => {
       // Create source file
       await fs.writeFile(path.join(sourceDir, "program.lua"), "print('Init')")
 
-      const resolvedFiles: ResolvedFileRule[] = [
+      const resolvedFiles = createResolvedFiles(sourceDir, [
         {
-          sourcePath: path.join(sourceDir, "program.lua"),
-          targetPath: "programs/startup/init.lua",
+          source: "program.lua",
+          target: "programs/startup/init.lua",
           computers: ["1"],
         },
-      ]
+      ])
 
       await copyFilesToComputer(resolvedFiles, computerDir)
 
@@ -757,23 +728,15 @@ describe("File Operations", () => {
       await fs.writeFile(path.join(sourceDir, "lib/utils.lua"), "-- Utils")
       await fs.writeFile(path.join(sourceDir, "startup.lua"), "print('Boot')")
 
-      const resolvedFiles: ResolvedFileRule[] = [
+      const resolvedFiles = createResolvedFiles(sourceDir, [
+        { source: "program.lua", target: "startup.lua", computers: "1" },
+        { source: "lib/utils.lua", target: "apis/", computers: "1" },
         {
-          sourcePath: path.join(sourceDir, "program.lua"),
-          targetPath: "startup.lua",
-          computers: ["1"],
+          source: "startup.lua",
+          target: "system/boot/startup.lua",
+          computers: "1",
         },
-        {
-          sourcePath: path.join(sourceDir, "lib/utils.lua"),
-          targetPath: "apis/",
-          computers: ["1"],
-        },
-        {
-          sourcePath: path.join(sourceDir, "startup.lua"),
-          targetPath: "system/boot/startup.lua",
-          computers: ["1"],
-        },
-      ]
+      ])
 
       await copyFilesToComputer(resolvedFiles, computerDir)
 
@@ -799,23 +762,12 @@ describe("File Operations", () => {
       await fs.mkdir(path.join(sourceDir, "dir"), { recursive: true })
       await fs.writeFile(path.join(sourceDir, "dir/test3.lua"), "return true")
 
-      const resolvedFiles: ResolvedFileRule[] = [
-        {
-          sourcePath: path.join(sourceDir, "test1.lua"),
-          targetPath: "a.lua",
-          computers: ["1"],
-        },
-        {
-          sourcePath: path.join(sourceDir, "test2.lua"),
-          targetPath: "lib/",
-          computers: ["1"],
-        },
-        {
-          sourcePath: path.join(sourceDir, "dir/test3.lua"),
-          targetPath: "modules/",
-          computers: ["1"],
-        },
-      ]
+      // With this:
+      const resolvedFiles = createResolvedFiles(sourceDir, [
+        { source: "test1.lua", target: "a.lua", computers: "1" },
+        { source: "test2.lua", target: "lib/", computers: "1" },
+        { source: "dir/test3.lua", target: "modules/", computers: "1" },
+      ])
 
       await copyFilesToComputer(resolvedFiles, computerDir)
 
@@ -840,23 +792,11 @@ describe("File Operations", () => {
       // Create a file named 'lib' to cause directory creation to fail
       await fs.writeFile(path.join(computerDir, "lib"), "I am a file")
 
-      const resolvedFiles: ResolvedFileRule[] = [
-        {
-          sourcePath: path.join(sourceDir, "a.lua"),
-          targetPath: "lib", // Will fail - lib exists as file
-          computers: ["1"],
-        },
-        {
-          sourcePath: path.join(sourceDir, "b.lua"),
-          targetPath: "other/", // Should succeed
-          computers: ["1"],
-        },
-        {
-          sourcePath: path.join(sourceDir, "c.lua"),
-          targetPath: "data/", // Should succeed
-          computers: ["1"],
-        },
-      ]
+      const resolvedFiles = createResolvedFiles(sourceDir, [
+        { source: "a.lua", target: "lib", computers: "1" }, // Will fail - lib exists as file
+        { source: "b.lua", target: "other/", computers: "1" }, // Should succeed
+        { source: "c.lua", target: "data/", computers: "1" }, // Should succeed
+      ])
 
       const result = await copyFilesToComputer(resolvedFiles, computerDir)
 
@@ -897,13 +837,13 @@ describe("File Operations", () => {
       for (const maliciousPath of maliciousPaths) {
         testLog(`  - Testing malicious path: ${maliciousPath}`)
 
-        const resolvedFiles: ResolvedFileRule[] = [
+        const resolvedFiles = createResolvedFiles(sourceDir, [
           {
-            sourcePath: path.join(sourceDir, "program.lua"),
-            targetPath: maliciousPath,
+            source: "program.lua",
+            target: maliciousPath,
             computers: ["1"],
           },
-        ]
+        ])
 
         // Expect the copy operation to fail
         const { copiedFiles, skippedFiles } = await copyFilesToComputer(
@@ -926,13 +866,13 @@ describe("File Operations", () => {
       }
 
       // Also test directory traversal with trailing slash
-      const resolvedFiles: ResolvedFileRule[] = [
+      const resolvedFiles = createResolvedFiles(sourceDir, [
         {
-          sourcePath: path.join(sourceDir, "program.lua"),
-          targetPath: "../dangerous/",
+          source: "program.lua",
+          target: "../dangerous/",
           computers: ["1"],
         },
-      ]
+      ])
 
       const { copiedFiles, skippedFiles } = await copyFilesToComputer(
         resolvedFiles,
@@ -954,13 +894,13 @@ describe("File Operations", () => {
         throw err
       })
 
-      const resolvedFiles: ResolvedFileRule[] = [
+      const resolvedFiles = createResolvedFiles(sourceDir, [
         {
-          sourcePath: path.join(sourceDir, "program.lua"),
-          targetPath: "/program.lua",
+          source: "program.lua",
+          target: "/program.lua",
           computers: ["1"],
         },
-      ]
+      ])
 
       const result = await copyFilesToComputer(
         resolvedFiles,
@@ -1061,7 +1001,7 @@ describe("File Operations", () => {
 
     // Verify API files are the ones we expect
     const apiSourceFiles = apiFiles
-      .map((f) => path.basename(f.sourcePath))
+      .map((f) => path.basename(f.sourceAbsolutePath))
       .sort()
     expect(apiSourceFiles).toEqual(["http.lua", "json.lua"])
 

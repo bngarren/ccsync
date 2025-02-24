@@ -1,6 +1,6 @@
 // config.ts
 
-import { z, ZodError } from "zod"
+import { z } from "zod"
 import { parse } from "yaml"
 import { pathIsLikelyFile, resolvePath } from "./utils"
 import path from "path"
@@ -242,27 +242,24 @@ export async function loadConfig(
     const file = await fs.readFile(resolvedPath, "utf-8")
     const rawConfig = parse(file)
 
-    try {
-      const validatedConfig = ConfigSchema.parse(rawConfig)
-      // Resolve all paths in the config
-      result.config = {
-        ...validatedConfig,
-        sourceRoot: resolvePath(validatedConfig.sourceRoot),
-        minecraftSavePath: resolvePath(validatedConfig.minecraftSavePath),
-      }
-    } catch (error) {
-      if (error instanceof ZodError) {
-        // Format Zod errors into readable messages
-        error.errors.forEach((issue) => {
-          result.errors.push(`${issue.message}`)
-        })
-      } else {
-        result.errors.push(
-          `Config error: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        )
-      }
+    const parseResult = ConfigSchema.safeParse(rawConfig)
+
+    if (!parseResult.success) {
+      // Format Zod errors into readable messages, either errors or warnings
+      parseResult.error.errors.forEach((issue) => {
+        const msg = `${issue.message}`
+        result.errors.push(msg)
+      })
+      return result
+    }
+
+    const validatedConfig = parseResult.data
+    // Resolve and normalize all paths in the config
+    // TODO normalize paths
+    result.config = {
+      ...validatedConfig,
+      sourceRoot: resolvePath(validatedConfig.sourceRoot),
+      minecraftSavePath: resolvePath(validatedConfig.minecraftSavePath),
     }
   } catch (error) {
     result.errors.push(

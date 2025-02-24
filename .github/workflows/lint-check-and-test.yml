@@ -1,0 +1,32 @@
+name: Lint, Prettify, and Test
+
+on:
+  workflow_call:
+  pull_request:
+    branches:
+      - master
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install Dependencies
+        run: bun install
+
+      - name: Run Lint
+        run: bun run lint
+
+      - name: Run Prettier Check
+        run: bun run pretty:check
+
+      - name: Run Tests
+        run: bun run test

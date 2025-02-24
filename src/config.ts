@@ -5,6 +5,7 @@ import { parse } from "yaml"
 import { pathIsLikelyFile, resolvePath } from "./utils"
 import path from "path"
 import * as fs from "node:fs/promises"
+import * as fsSync from "node:fs"
 import { merge } from "ts-deepmerge"
 
 export const CONFIG_VERSION = "1.0"
@@ -155,10 +156,40 @@ export const ConfigSchema = z
           code: z.ZodIssueCode.custom,
           message: `When using glob patterns in this rule's [source], [target] should be a directory path. A file path is assumed because it contains a file extension.\n [source] = ${rule.source}\n [target] = ${rule.target} <-- ERROR\n [computers] = ${rule.computers}`,
           path: ["rules", idx],
-          fatal: false,
+          fatal: true,
         })
       }
     })
+
+    // Validate source root exists and is accessible
+    try {
+      const resolvedSourceRoot = resolvePath(config.sourceRoot)
+      if (!fsSync.existsSync(resolvedSourceRoot)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Source root '${config.sourceRoot}' does not exist`,
+          path: ["sourceRoot"],
+          fatal: true,
+        })
+      } else {
+        const stats = fsSync.statSync(resolvedSourceRoot)
+        if (!stats.isDirectory()) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Source root '${config.sourceRoot}' is not a directory`,
+            path: ["sourceRoot"],
+            fatal: true,
+          })
+        }
+      }
+    } catch (err) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Error checking source root: ${err instanceof Error ? err.message : String(err)}`,
+        path: ["sourceRoot"],
+        fatal: true,
+      })
+    }
   })
 
 export type Config = z.infer<typeof ConfigSchema>

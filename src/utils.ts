@@ -304,42 +304,98 @@ export const findMinecraftComputers = async (savePath: string) => {
 // - - - - - Files - - - - -
 
 /**
- * Resolves computer IDs from a sync rule's computers field, expanding any group names
- * @param computers Computer IDs or group names from a sync rule
- * @param config The full config object for group lookups
- * @returns Array of resolved computer IDs
- * @throws Error if a computer group name is used but doesn't exist
+ * Resolves computer references into a flat array of computer IDs, recursively expanding group references.
+ *
+ * This function handles:
+ * - Exact computer IDs (e.g., "1", "2")
+ * - Group references that contain computer IDs
+ * - Nested group references
+ * - Circular references (safely avoided)
+ *
+ * @example
+ * // Config with nested groups
+ * const config = {
+ *   computerGroups: {
+ *     monitors: { name: "Monitors", computers: ["1", "2"] },
+ *     servers: { name: "Servers", computers: ["3", "monitors"] }
+ *   }
+ * };
+ *
+ * // Returns { resolvedIds: ["3", "1", "2"], errors: [] }
+ * resolveComputerReferences("servers", config);
+ *
+ * // Returns { resolvedIds: ["5", "3", "1", "2"], errors: [] }
+ * resolveComputerReferences(["5", "servers"], config);
+ *
+ * // Returns { resolvedIds: [], errors: ["invalid computer groups → \"unknown\""] }
+ * resolveComputerReferences("unknown", config);
+ *
+ * @param computers - Single computer ID, group name, or array of computer IDs and group names
+ * @param config - The full config object containing computerGroups definitions
+ * @returns Object containing resolved IDs and any errors encountered
  */
-export function resolveComputerIds(
+export function resolveComputerReferences(
   computers: string | string[] | undefined,
   config: Config
-): string[] {
-  if (!computers) return []
+): { resolvedIds: string[]; errors: string[] } {
+  if (!computers) return { resolvedIds: [], errors: [] }
 
   const computersList = Array.isArray(computers) ? computers : [computers]
+  const resolvedIds = new Set<string>() // Use a set to avoid duplicates
+  const processedGroups = new Set<string>() // track processed groups to avoid infinite recursion
+  const invalidGroups: string[] = [] // Track invalid group references
 
-  const invalidGroups: string[] = []
-  const resolvedIds = computersList.flatMap((entry) => {
-    const group = config.computerGroups?.[entry]
-    if (group) {
-      return group.computers
+  // Helper to recursively resolve group references
+  function resolveGroup(groupName: string) {
+    // Skip if already processed to prevent infinite loops
+    if (processedGroups.has(groupName)) return
+
+    const group = config.computerGroups?.[groupName]
+    if (!group) return
+
+    processedGroups.add(groupName)
+
+    for (const computer of group.computers) {
+      if (!isNaN(Number(computer))) {
+        // It's a computer ID
+        resolvedIds.add(computer)
+      } else if (config.computerGroups?.[computer]) {
+        // It's a group reference
+        resolveGroup(computer)
+      } else {
+        // It's an invalid reference - track it
+        invalidGroups.push(computer)
+      }
     }
-    // If not a group, it should be a computer ID
-    return [entry]
-  })
-
-  // Verify all groups existed
-  computersList.forEach((entry) => {
-    if (!config.computerGroups?.[entry] && !entry.match(/^\d+$/)) {
-      invalidGroups.push(entry)
-    }
-  })
-
-  if (invalidGroups.length > 0) {
-    throw new Error(`invalid computer groups → "${invalidGroups.join(", ")}"`)
   }
 
-  return resolvedIds
+  // Process each entry
+  for (const entry of computersList) {
+    if (config.computerGroups?.[entry]) {
+      // It's a group name, resolve it
+      resolveGroup(entry)
+    } else if (!isNaN(Number(entry))) {
+      // It's a valid computer ID
+      resolvedIds.add(entry)
+    } else {
+      // It's neither a valid group nor a numeric ID
+      invalidGroups.push(entry)
+    }
+  }
+
+  const result = {
+    resolvedIds: Array.from(resolvedIds),
+    errors: [] as string[],
+  }
+
+  // Only add error if we found invalid groups
+  if (invalidGroups.length > 0) {
+    result.errors.push(
+      `Invalid computer groups → "${[...new Set(invalidGroups)].join(", ")}"`
+    )
+  }
+
+  return result
 }
 
 /**
@@ -390,7 +446,18 @@ export async function validateFileSync(
       }
 
       // Resolve computer IDs for this rule
-      const computerIds = resolveComputerIds(rule.computers, config)
+      const { resolvedIds: computerIds, errors } = resolveComputerReferences(
+        rule.computers,
+        config
+      )
+
+      if (errors.length > 0) {
+        errors.forEach((e) => {
+          validation.errors.push(e)
+        })
+        // allow continued processing even if we didnt fully resolve all computer references
+      }
+
       if (computerIds.length === 0) {
         validation.errors.push(
           `No target computers specified for: '${toSystemPath(rule.source)}'`

@@ -6,7 +6,8 @@ import type { Computer, ResolvedFileRule } from "../src/types"
 import { getComputerShortPath, isRecursiveGlob } from "../src/utils"
 import * as p from "@clack/prompts"
 import { mock } from "bun:test"
-import { type SyncRule } from "../src/config"
+import { DEFAULT_CONFIG, type SyncRule } from "../src/config"
+import * as yaml from "yaml"
 
 /**
  * Creates a new tmp directory in the operating system's default directory for temporary files.
@@ -99,67 +100,25 @@ export function createComputerObject(
   }
 }
 
+/**
+ * Writes a config file to the given path. Can pass a partial Config object that will be merged with default config.
+ * @param configPath Path to file, i.e. use a temp path for testing
+ * @param configChanges Key/values to merge
+ */
+export const writeConfig = async (
+  configPath: string,
+  configChanges: Partial<typeof DEFAULT_CONFIG> = {}
+) => {
+  const config = { ...DEFAULT_CONFIG, ...configChanges }
+  await writeFile(configPath, yaml.stringify(config))
+}
+
 // Cleanup helper
 export async function cleanupTempDir(tempDir: string) {
   try {
     await rm(tempDir, { recursive: true, force: true })
   } catch (err) {
     console.warn(`Warning: Failed to clean up test directory ${tempDir}:`, err)
-  }
-}
-
-/**
- * Manages tmp directories created and helps to destroy them.
- *
- * Registers an on "exit" listener that will cleanup all tmp dirs if there is an unexpected termination during operation
- */
-export class TempCleaner {
-  private static instance: TempCleaner
-  private tempDirs: Set<string> = new Set()
-  private handlerRegistered = false
-
-  private constructor() {
-    // Register only once
-    if (!this.handlerRegistered) {
-      process.on("exit", () => {
-        console.warn("Running test cleanup after unexpected termination!")
-        this.cleanup()
-      })
-      this.handlerRegistered = true
-    }
-  }
-
-  static getInstance(): TempCleaner {
-    if (!TempCleaner.instance) {
-      TempCleaner.instance = new TempCleaner()
-    }
-    return TempCleaner.instance
-  }
-
-  add(dir: string) {
-    this.tempDirs.add(dir)
-    //console.log("TempCleaner added: ", dir)
-  }
-
-  remove(dir: string) {
-    this.tempDirs.delete(dir)
-    //console.log("TempCleaner removed: ", dir)
-  }
-
-  async cleanDir(dir: string) {
-    try {
-      await rm(dir, { recursive: true, force: true })
-      this.remove(dir)
-    } catch (err) {
-      console.warn(`Warning: Failed to clean up test directory ${dir}:`, err)
-    }
-  }
-
-  private cleanup() {
-    for (const dir of this.tempDirs) {
-      require("fs").rmSync(dir, { recursive: true })
-    }
-    this.tempDirs.clear()
   }
 }
 
@@ -265,4 +224,59 @@ export function createResolvedFiles(
       computers: rule.computers,
     })
   )
+}
+
+/**
+ * Manages tmp directories created and helps to destroy them.
+ *
+ * Registers an on "exit" listener that will cleanup all tmp dirs if there is an unexpected termination during operation
+ */
+export class TempCleaner {
+  private static instance: TempCleaner
+  private tempDirs: Set<string> = new Set()
+  private handlerRegistered = false
+
+  private constructor() {
+    // Register only once
+    if (!this.handlerRegistered) {
+      process.on("exit", () => {
+        console.warn("Running test cleanup after unexpected termination!")
+        this.cleanup()
+      })
+      this.handlerRegistered = true
+    }
+  }
+
+  static getInstance(): TempCleaner {
+    if (!TempCleaner.instance) {
+      TempCleaner.instance = new TempCleaner()
+    }
+    return TempCleaner.instance
+  }
+
+  add(dir: string) {
+    this.tempDirs.add(dir)
+    //console.log("TempCleaner added: ", dir)
+  }
+
+  remove(dir: string) {
+    this.tempDirs.delete(dir)
+    //console.log("TempCleaner removed: ", dir)
+  }
+
+  async cleanDir(dir: string) {
+    try {
+      await rm(dir, { recursive: true, force: true })
+      this.remove(dir)
+    } catch (err) {
+      console.warn(`Warning: Failed to clean up test directory ${dir}:`, err)
+    }
+  }
+
+  private cleanup() {
+    for (const dir of this.tempDirs) {
+      require("fs").rmSync(dir, { recursive: true })
+    }
+    this.tempDirs.clear()
+  }
 }

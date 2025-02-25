@@ -190,6 +190,44 @@ rules:
     computers: "monitors" 
 ```
 
+<details>
+
+<summary>Nested Computer Groups Example</summary>
+
+```yaml
+# ...same as above
+
+computerGroups:
+  base:
+    name: "Base"
+    computers: ["monitors", "servers", "clients"]
+  monitors:
+    name: "Monitors"
+    computers: ["1"]
+  servers:
+    name: "Servers"
+    computers: ["2","4"]
+  clients:
+    name: "Clients"
+    computers: ["3","5"]
+
+rules:
+# Ensure that all computers get updated lib
+  - source: "lib/*.lua"
+    target: "lib/"
+    computers: ["base"] # expands to computers 1, 2, 3, 4, 5
+
+# All "monitor" computers get startup.lua in their root dir
+  - source: "monitor/startup.lua"
+    target: "/" # or ""
+    computers: "monitors"  # expands to computer 1
+
+  - source: "networking/*.lua"
+    target: "networking/"
+    computers: ["servers", "clients"] # expands to computers 2, 3, 4, 5
+```
+</details>
+
 ### 4. Run CC: Sync:
 
 ```sh
@@ -197,28 +235,39 @@ npx @bngarren/ccsync
 ```
 
 ## Modes
+The program can operate in two modes, depending on the level of control you desire:
 
 - **Manual mode**: you trigger when the files are synced (i.e. copied from project to Minecraft computers)
+
 - **Watch mode**: watches all files identified by the config's `rules` for changes and will automatically re-sync. Leave it running in a shell while you code 😎
+
+<br>
+
+> Warning: At this time, any files added to the source path AFTER the program has started will not be recognized or synced, even if they would be matched by file name or glob pattern. Restart the program for these files to sync.
 
 ## Configuration
 The config for CC: Sync is a `.ccsync.yaml` file in your project root. If no file is present, running the CLI will generate a default config file.
 
 ### Basic Options
 
-- **sourceRoot**: Directory containing your source files (relative to the location of the `.ccsync.yaml` file)
-- **minecraftSavePath**: Path to your Minecraft save directory. See [Where is my Minecraft save?](#where-is-my-minecraft-save)
-- **computerGroups**: Define groups of computers for easier targeting
-- **rules**: Array of file → computer(s) sync rules. Each sync rule requires:
-  - **source**: File or glob pattern to sync (relative to *sourceRoot*)
-  - **target**: Destination path on the computer
-  - **computers**: Computer IDs or group names to sync to
+| Key               | Description                                                                                                     |
+|-------------------|-----------------------------------------------------------------------------------------------------------------|
+| `sourceRoot`      | Directory containing your source files (absolute path or relative to the location of the `.ccsync.yaml` file). |
+| `minecraftSavePath` | Path to your Minecraft save directory. See below: [Where is my Minecraft save?](#where-is-my-minecraft-save). This is the folder containing 'level.dat', 'session.lock', etc. |
+| `computerGroups`  | Define groups of computers for easier targeting. A computer group can reference exact computer IDs or other groups. |
+| `rules`           | The _sync rules_ define which file(s) go to which computer(s). Each sync rule ***requires***:                          |
+|                   |  - `source`: File name or glob pattern (relative to `sourceRoot`).                                              |
+|                   |  - `target`: Destination path on the computer (relative to the root directory of the computer).                |
+|                   |  - `computers`: Computer IDs or group names to sync to. 
+|                   | The following fields are ***optional***:
+|                   |  - `flatten` (default true): Whether the matched source files should be flattened into the target directory. If a recursive glob pattern (e.g., **/*.lua) is used and `flatten` is false, the source directory structure will be preserved in the target directory.
 
 ### Advanced Options
-These shouldn't need to be modified--mostly for debugging and performance.
-
-- **verbose**: Enable detailed logging
-- **cache_ttl**: Cache duration in milliseconds
+These shouldn't need to be modified—mostly for debugging and performance.
+| Key               | Description                                                                                                     |
+|-------------------|-----------------------------------------------------------------------------------------------------------------|
+| `verbose`      | Enable detailed logging and error messages. |
+| `cache_ttl`      | Cache duration in milliseconds. This reduces how many times the source/target parameters must be validated on quick, repetitive re-syncs. |
 
 ### Where is my Minecraft save?
 Below are some common places to look based on your operating system. However, if you use a custom launcher, then you will need to check where it stores the saves.
@@ -244,7 +293,7 @@ If CC: Sync can't find your computers:
 
 - Verify file paths in sync rules
 - Check that source files exist
-- Ensure target computers are specified correctly
+- Ensure target computers are specified correctly. Remember that you must use the computer's **ID** not the _label_.
 - Run with verbose: true for detailed logs
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>

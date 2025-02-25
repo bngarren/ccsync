@@ -222,6 +222,7 @@ rules:
     target: "/" # or ""
     computers: "monitors"  # expands to computer 1
 
+# Both "servers" and "clients" computers get networking code
   - source: "networking/*.lua"
     target: "networking/"
     computers: ["servers", "clients"] # expands to computers 2, 3, 4, 5

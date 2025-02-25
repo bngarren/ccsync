@@ -8,7 +8,7 @@ import {
   CONFIG_VERSION,
   ConfigErrorCategory,
 } from "../src/config"
-import { createUniqueTempDir, TempCleaner } from "./test-helpers"
+import { createUniqueTempDir, TempCleaner, writeConfig } from "./test-helpers"
 import yaml from "yaml"
 
 describe("Version compatibility", () => {
@@ -27,23 +27,17 @@ describe("Version compatibility", () => {
     await tempCleaner.cleanDir(tempDir)
   })
 
-  async function writeConfig(
-    configChanges: Partial<typeof DEFAULT_CONFIG> = {}
-  ) {
-    const config = { ...DEFAULT_CONFIG, ...configChanges }
-    await writeFile(configPath, yaml.stringify(config))
-  }
-
   test("accepts valid config version", async () => {
-    await writeConfig()
-    const { config, errors } = await loadConfig(configPath)
-
+    await writeConfig(configPath)
+    const { config, errors } = await loadConfig(configPath, {
+      skipPathValidation: true,
+    })
     expect(errors).toHaveLength(0)
     expect(config?.version).toBe(CONFIG_VERSION)
   })
 
   test("rejects incompatible major version", async () => {
-    await writeConfig({ version: "2.0" })
+    await writeConfig(configPath, { version: "2.0" })
     const { config, errors } = await loadConfig(configPath)
 
     expect(errors).toHaveLength(1)

@@ -1027,7 +1027,7 @@ describe("File Operations", () => {
         {
           source: "program.lua",
           target: "/program.lua",
-          computers: "nonexistent_group",
+          computers: ["nonexistent_group", "1"],
         },
       ],
     })

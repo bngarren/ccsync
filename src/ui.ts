@@ -6,7 +6,7 @@ import chalk from "chalk"
 import type { ResolvedFileRule } from "./types"
 import path from "node:path"
 import boxen from "boxen"
-import { stdout } from "node:process"
+import { pluralize } from "./utils"
 
 const theme = {
   primary: chalk.hex("#61AFEF"), // Bright blue
@@ -66,6 +66,7 @@ export class UI {
   private sourceRoot: string
   private isRendering = false // lock to prevent concurrent renders
   private pendingRender = false // Flag to track if render was requested during another render
+  private initialRender = true
 
   constructor(sourceRoot: string, mode: "watch" | "manual") {
     // super();
@@ -77,11 +78,31 @@ export class UI {
       fileResults: [],
       lastUpdated: new Date(),
     }
+
+    this.setupTerminationHandlers()
   }
 
-  // Clear the entire screen and reset cursor
+  private setupTerminationHandlers(): void {
+    const cleanup = () => {
+      this.stop()
+    }
+    // These will be automatically removed when the process exits
+    process.on("SIGINT", cleanup)
+    process.on("SIGTERM", cleanup)
+    process.on("exit", cleanup)
+  }
+
+  // Clear the entire screen and reset cursor - only on first render
   private clearScreen() {
-    stdout.write("\u001B[2J\u001B[0;0f")
+    if (this.initialRender) {
+      try {
+        // Use logUpdate's clear instead of raw ANSI codes to prevent flickering
+        logUpdate.clear()
+        this.initialRender = false
+      } catch (error) {
+        console.error("Error clearing screen:", error)
+      }
+    }
   }
 
   start(): void {
@@ -94,6 +115,7 @@ export class UI {
     this.isActive = true
     this.isRendering = false
     this.pendingRender = false
+    this.initialRender = true
 
     this.clearScreen()
     logUpdate.clear()
@@ -111,8 +133,8 @@ export class UI {
     this.isActive = false
     if (this.timer) {
       clearInterval(this.timer)
+      this.timer = null
     }
-    this.timer = null
 
     // Finalize the output (wait a bit to ensure pending operations complete)
     setTimeout(() => {
@@ -211,46 +233,46 @@ export class UI {
   }
 
   private renderHeader(): string {
-    const statusColor = this.getStatusColor()
-    const statusSymbol = this.getStatusSymbol()
-
     return (
+      "\n\n" +
       theme.bold(
-        theme.highlight(`CC:Sync - ${this.state.mode.toUpperCase()} MODE`)
-      ) +
-      "\n" +
-      statusColor(
-        `${statusSymbol} Status: ${this.state.status.toUpperCase()}`
-      ) +
-      theme.dim(` · Last updated: ${this.formatElapsedTime()}`)
+        theme.highlight(`  CC: Sync - ${this.state.mode.toUpperCase()} mode`)
+      )
     )
   }
 
-  private renderStats(): string {
+  private renderResultsBox(): string {
     const { success, error, missing, total } = this.state.stats
 
-    return (
-      "\n" +
-      boxen(
-        theme.heading("SYNC STATS") +
-          "\n\n" +
-          theme.success(`${symbols.check} Success: ${success}`) +
-          "  " +
-          theme.error(`${symbols.cross} Error: ${error}`) +
-          "  " +
-          theme.warning(`${symbols.warning} Missing: ${missing}`) +
-          "\n" +
-          theme.normal(`Total Computers: ${total}`),
-        {
-          padding: 1,
-          margin: { top: 1, bottom: 1 },
-          borderStyle: "round",
-          borderColor: "blue",
-          title: "Summary",
-          titleAlignment: "center",
-        }
-      )
-    )
+    // const content =
+    //   theme.success(`${symbols.check} Success: ${success}  `).padEnd(20) +
+    //   theme.error(`${symbols.cross} Error: ${error}  `).padEnd(20) +
+    //   theme.warning(`${symbols.warning} Missing: ${missing}`).padEnd(20)
+    // theme.normal(`Total Computers: ${total}`)
+
+    const pluralComputer = pluralize("computer")(total)
+
+    const content =
+      theme.dim(
+        `@${this.state.lastUpdated.toLocaleString()} (${this.formatElapsedTime()})\n\n`
+      ) +
+      theme.normal(
+        `Attempted to sync to ${theme.bold(total)} ${pluralComputer}:\n\n`
+      ) +
+      theme[success > 0 ? "success" : "normal"](`Success: ${success}  `) +
+      theme[error > 0 ? "error" : "normal"](`Error: ${error}  `) +
+      theme[missing > 0 ? "warning" : "normal"](`Missing: ${missing}`)
+
+    return boxen(content, {
+      padding: 1,
+      margin: { top: 2, bottom: 1, left: 1, right: 1 },
+      borderStyle: "round",
+      borderColor: "blue",
+      title: `Sync Results`,
+      titleAlignment: "center",
+      width: 45,
+      textAlignment: "center",
+    })
   }
 
   private renderFileResults(): string {
@@ -308,6 +330,7 @@ export class UI {
           .join("   "),
         {
           padding: 0.5,
+          margin: { left: 1 },
           borderStyle: "round",
           borderColor: "cyan",
           title: "Controls",
@@ -344,15 +367,19 @@ export class UI {
     this.pendingRender = false
 
     try {
+      this.clearScreen()
+
       const output =
         this.renderHeader() +
-        this.renderStats() +
+        this.renderResultsBox() +
         this.renderFileResults() +
         this.renderMessage() +
         this.renderControls()
 
       // Update the terminal once with complete content
       logUpdate(output)
+
+      this.initialRender = false
     } catch (error) {
       // Prevent rendering errors from breaking the application
       console.error("UI rendering error:", error)
@@ -362,6 +389,7 @@ export class UI {
 
       // If a render was requested while rendering, do it now
       if (this.pendingRender && this.isActive) {
+        // Small delay to prevent too frequent updates and flickering
         setTimeout(() => this.render(), 10)
       }
     }

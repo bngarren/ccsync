@@ -16,11 +16,9 @@ import {
   validateMinecraftSave,
   findMinecraftComputers,
   validateFileSync,
-  getFormattedDate,
   copyFilesToComputer,
   normalizePath,
 } from "./utils"
-import { theme } from "./theme"
 import { KeyHandler } from "./keys"
 import { setTimeout } from "node:timers/promises"
 import { glob } from "glob"
@@ -232,13 +230,6 @@ export class SyncManager {
 
     // Process each computer
     for (const computer of validation.availableComputers) {
-      if (this.ui) {
-        this.ui.updateStatus(
-          "running",
-          `Copying files to computer ${computer.id}...`
-        )
-      }
-
       const syncResult = await this.syncToComputer(
         computer,
         validation.resolvedFileRules
@@ -291,12 +282,12 @@ export class SyncManager {
 
     // Update UI with final status
     if (this.ui) {
-      this.ui.updateFileResults(validation.resolvedFileRules, fileResults)
       this.ui.updateStats({
         success: result.successCount,
         error: result.errorCount,
         missing: result.missingCount,
       })
+      this.ui.updateFileResults(validation.resolvedFileRules, fileResults)
       this.ui.updateStatus(status, statusMessage)
     }
 
@@ -371,23 +362,33 @@ export class SyncManager {
 
     try {
       this.setState(SyncManagerState.STARTING)
+
+      // Initialize UI for watch mode
+      this.ui = new UI(this.config.sourceRoot, "watch")
+
       const watchController = new WatchModeController(
         this,
         this.config,
-        this.log
+        this.log,
+        this.ui
       )
       this.activeModeController = watchController
 
       // Listen for controller state changes
       watchController.on(SyncEvent.STARTED, () => {
         this.setState(SyncManagerState.RUNNING)
+        if (this.ui) this.ui.start()
       })
 
       watchController.on(SyncEvent.STOPPED, () => {
         this.setState(SyncManagerState.STOPPED)
+        if (this.ui) this.ui.stop()
       })
 
-      watchController.on(SyncEvent.SYNC_ERROR, ({ fatal }) => {
+      watchController.on(SyncEvent.SYNC_ERROR, ({ error, fatal }) => {
+        if (this.ui) {
+          this.ui.updateStatus("error", `Error: ${getErrorMessage(error)}`)
+        }
         if (fatal) {
           this.setState(SyncManagerState.ERROR)
           this.stop()
@@ -397,7 +398,11 @@ export class SyncManager {
       // Start the controller
       watchController.start().catch((error) => {
         this.setState(SyncManagerState.ERROR)
-        this.log.error(`Controller failed to start: ${error}`)
+        if (this.ui)
+          this.ui.updateStatus(
+            "error",
+            `Failed to start: ${getErrorMessage(error)}`
+          )
         this.stop()
       })
 
@@ -483,6 +488,10 @@ class ManualModeController {
     this.emit(SyncEvent.STARTED) // Signal ready to run
 
     try {
+      if (this.ui) {
+        this.ui.clear()
+      }
+
       while (this.syncManager.getState() === SyncManagerState.RUNNING) {
         await this.performSyncCycle()
 
@@ -604,7 +613,8 @@ class WatchModeController {
   constructor(
     private syncManager: SyncManager,
     private config: Config,
-    private log: Logger
+    private log: Logger,
+    private ui: UI | null = null
   ) {}
 
   emit<K extends keyof WatchSyncEvents>(
@@ -647,7 +657,10 @@ class WatchModeController {
       await this.setupWatcher()
 
       this.emit(SyncEvent.STARTED) // Signal ready to run
-      this.log.status(`CC: Sync watch mode started at ${getFormattedDate()}`)
+
+      if (this.ui) {
+        this.ui.clear()
+      }
 
       // Peform initial sync
       await this.performSyncCycle()
@@ -692,7 +705,7 @@ class WatchModeController {
         )
         this.changedFiles.add(relativePath)
         this.syncManager.invalidateCache()
-        this.log.status(`File changed: ${changedPath}`)
+        // this.log.status(`File changed: ${changedPath}`)
       }
 
       // Perform validation
@@ -702,10 +715,10 @@ class WatchModeController {
       // Check if validation has errors
       if (validation.errors.length > 0) {
         // Log the validation errors
-        this.log.error(`Validation failed:`)
-        validation.errors.forEach((error) =>
-          this.log.error(`${validation.errors.length > 1 ? "• " : ""}${error}`)
-        )
+        // this.log.error(`Validation failed:`)
+        // validation.errors.forEach((error) =>
+        //   this.log.error(`${validation.errors.length > 1 ? "• " : ""}${error}`)
+        // )
 
         this.emit(SyncEvent.SYNC_ERROR, {
           error: new Error(
@@ -720,39 +733,12 @@ class WatchModeController {
           throw new Error("Initial validation failed")
         }
 
-        // For regular sync, just log and continue watching
-        if (!this.isInitialSync) {
-          this.logWatchStatus()
-        }
-
         return // Don't proceed with sync
       }
 
       // Perform sync
       const { successCount, errorCount, missingCount } =
         await this.syncManager.performSync(validation)
-
-      const totalFails = errorCount + missingCount
-      const fDate = theme.gray(`@ ${getFormattedDate()}`)
-
-      // Log appropriate message based on sync result
-      if (totalFails === 0) {
-        this.log.success(
-          `${this.isInitialSync ? "Initial sync" : "Sync"} successful. ${fDate}`
-        )
-      } else if (
-        totalFails ===
-        validation.availableComputers.length +
-          validation.missingComputerIds.length
-      ) {
-        this.log.error(
-          `${this.isInitialSync ? "Initial sync" : "Sync"} failed. ${fDate}`
-        )
-      } else {
-        this.log.warn(
-          `${this.isInitialSync ? "Initial sync" : "Sync"} partial. ${fDate}`
-        )
-      }
 
       // Emit appropriate event based on sync type
       if (this.isInitialSync) {
@@ -771,11 +757,6 @@ class WatchModeController {
         // Clear changed files after successful non-initial sync
         this.changedFiles.clear()
       }
-
-      // Log watch message if not initial sync
-      if (!this.isInitialSync) {
-        this.logWatchStatus()
-      }
     } catch (err) {
       // For unexpected runtime errors
 
@@ -783,9 +764,6 @@ class WatchModeController {
         error: err instanceof Error ? err : new Error(String(err)),
         fatal: true, // Runtime errors are considered fatal
       })
-      if (!this.isInitialSync) {
-        this.logWatchStatus()
-      }
       throw err
     }
   }
@@ -798,11 +776,11 @@ class WatchModeController {
     this.keyHandler = new KeyHandler({
       onEsc: async () => {
         await this.syncManager.stop()
-        this.log.info("CC: Sync watch mode stopped.")
+        // this.log.info("CC: Sync watch mode stopped.")
       },
       onCtrlC: async () => {
         await this.syncManager.stop()
-        this.log.info("CC: Sync program terminated.")
+        // this.log.info("CC: Sync program terminated.")
       },
     })
 
@@ -829,7 +807,13 @@ class WatchModeController {
 
       return patterns
     } catch (err) {
-      this.log.error(`Failed to resolve watch patterns: ${err}`)
+      // this.log.error(`Failed to resolve watch patterns: ${err}`)
+      if (this.ui) {
+        this.ui.updateStatus(
+          "error",
+          `Failed to resolve watch patterns: ${err}`
+        )
+      }
       throw err
     }
   }
@@ -857,7 +841,10 @@ class WatchModeController {
         // Error handling is done within performSyncCycle
         // If err is FATAL emit a SyncEvent.SYNC_ERROR with fatal
         // If err is not fatal, inform user and keep watcher going...
-        this.log.warn("Problem occurred during sync")
+        // this.log.warn("Problem occurred during sync")
+        if (this.ui) {
+          this.ui.updateStatus("error", "Problem occurred during sync")
+        }
       }
     })
 
@@ -867,11 +854,6 @@ class WatchModeController {
         fatal: true,
       })
     })
-  }
-
-  private logWatchStatus(): void {
-    this.log.info("Watching for file changes...")
-    this.log.step(theme.bold("[Press ESC to exit...]"))
   }
 
   private async cleanup(): Promise<void> {
@@ -884,7 +866,7 @@ class WatchModeController {
       try {
         await this.watcher.close()
       } catch (err) {
-        this.log.error(`Error closing watcher: ${err}`)
+        console.error(`Error closing watcher: ${err}`)
       }
       this.watcher = null
     }

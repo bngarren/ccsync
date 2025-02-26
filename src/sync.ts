@@ -21,10 +21,11 @@ import {
   normalizePath,
 } from "./utils"
 import { theme } from "./theme"
-import * as p from "@clack/prompts"
 import { KeyHandler } from "./keys"
 import { setTimeout } from "node:timers/promises"
 import { glob } from "glob"
+import { getErrorMessage } from "./errors"
+import { UI } from "./ui"
 
 enum SyncManagerState {
   IDLE,
@@ -37,6 +38,7 @@ enum SyncManagerState {
 
 export class SyncManager {
   private log: Logger
+  private ui: UI | null = null
   private activeModeController:
     | ManualModeController
     | WatchModeController
@@ -202,12 +204,7 @@ export class SyncManager {
       throw new Error("Cannot perform sync when not in RUNNING state")
     }
 
-    const spinner = p.spinner()
-    const result: SyncResult = {
-      successCount: 0,
-      errorCount: 0,
-      missingCount: 0,
-    }
+    // This will hold our file results for UI display
     const fileResults = new Map<
       string,
       Array<{ computerId: string; success: boolean }>
@@ -222,9 +219,25 @@ export class SyncManager {
       fileResults.set(relativePath, [])
     }
 
+    // Update UI status
+    if (this.ui) {
+      this.ui.updateStatus("running", "Syncing files to computers...")
+    }
+
+    const result: SyncResult = {
+      successCount: 0,
+      errorCount: 0,
+      missingCount: validation.missingComputerIds.length,
+    }
+
     // Process each computer
     for (const computer of validation.availableComputers) {
-      spinner.start(`Copying files to computer ${computer.id}`)
+      if (this.ui) {
+        this.ui.updateStatus(
+          "running",
+          `Copying files to computer ${computer.id}...`
+        )
+      }
 
       const syncResult = await this.syncToComputer(
         computer,
@@ -248,7 +261,12 @@ export class SyncManager {
 
       // Log any errors
       if (syncResult.errors.length > 0) {
-        spinner.stop(`Error copying files to computer ${computer.id}:`)
+        if (this.ui) {
+          this.ui.updateStatus(
+            "error",
+            `Error copying files to computer ${computer.id}: ${syncResult.errors[0]}`
+          )
+        }
         syncResult.errors.forEach((error) => this.log.warn(`  ${error}`))
         result.errorCount++
       } else if (syncResult.copiedFiles.length > 0) {
@@ -256,44 +274,30 @@ export class SyncManager {
       }
     }
 
-    spinner.stop("Sync finished.")
+    // Determine overall status
+    let statusMessage = ""
+    let status: "success" | "error" | "partial" = "success"
 
-    // Display final status for each file
-    for (const [filePath, results] of fileResults.entries()) {
-      const file = validation.resolvedFileRules.find(
-        (f) =>
-          path.relative(this.config.sourceRoot, f.sourceAbsolutePath) ===
-          filePath
-      )
-      if (!file) continue
+    if (result.errorCount === 0 && result.missingCount === 0) {
+      status = "success"
+      statusMessage = "Sync completed successfully!"
+    } else if (result.successCount === 0) {
+      status = "error"
+      statusMessage = "Sync failed. No computers were updated."
+    } else {
+      status = "partial"
+      statusMessage = "Partial sync completed with some errors."
+    }
 
-      // Add missing computers as failed results
-      file.computers.forEach((computerId) => {
-        if (validation.missingComputerIds.some((mc) => mc === computerId)) {
-          results.push({ computerId, success: false })
-          result.missingCount++
-        }
+    // Update UI with final status
+    if (this.ui) {
+      this.ui.updateFileResults(validation.resolvedFileRules, fileResults)
+      this.ui.updateStats({
+        success: result.successCount,
+        error: result.errorCount,
+        missing: result.missingCount,
       })
-
-      // Sort and display results
-      const sortedResults = results.sort((a, b) =>
-        a.computerId.localeCompare(b.computerId)
-      )
-
-      const computerStatus = sortedResults
-        .map(
-          (r) =>
-            `${r.computerId}${
-              r.success ? theme.success("✓") : theme.error("✗")
-            }`
-        )
-        .join(" ")
-
-      this.log.info(
-        `  ${theme.success("✓")} ${filePath} ${theme.dim(
-          `→ ${file.targetPath}`
-        )} ${theme.dim("[")}${computerStatus}${theme.dim("]")}`
-      )
+      this.ui.updateStatus(status, statusMessage)
     }
 
     // Cache invalidation for watch mode
@@ -312,20 +316,29 @@ export class SyncManager {
 
     try {
       this.setState(SyncManagerState.STARTING)
-      const manualController = new ManualModeController(this, this.log)
+
+      // Initialize UI for manual mode
+      this.ui = new UI(this.config.sourceRoot, "manual")
+
+      const manualController = new ManualModeController(this, this.log, this.ui)
       this.activeModeController = manualController
 
       // Listen for controller state changes
       manualController.on(SyncEvent.STARTED, () => {
         this.setState(SyncManagerState.RUNNING)
+        if (this.ui) this.ui.start()
       })
 
       // Listen for controller state changes
       manualController.on(SyncEvent.STOPPED, () => {
         this.setState(SyncManagerState.STOPPED)
+        if (this.ui) this.ui.stop()
       })
 
-      manualController.on(SyncEvent.SYNC_ERROR, ({ fatal }) => {
+      manualController.on(SyncEvent.SYNC_ERROR, ({ error, fatal }) => {
+        if (this.ui) {
+          this.ui.updateStatus("error", `Error: ${getErrorMessage(error)}`)
+        }
         if (fatal) {
           this.setState(SyncManagerState.ERROR)
           this.stop()
@@ -335,7 +348,11 @@ export class SyncManager {
       // Start the controller
       manualController.start().catch((error) => {
         this.setState(SyncManagerState.ERROR)
-        this.log.error(`Controller failed to start: ${error}`)
+        if (this.ui)
+          this.ui.updateStatus(
+            "error",
+            `Failed to start: ${getErrorMessage(error)}`
+          )
         this.stop()
       })
 
@@ -401,6 +418,11 @@ export class SyncManager {
     this.setState(SyncManagerState.STOPPING)
 
     try {
+      if (this.ui) {
+        this.ui.stop()
+        this.ui = null
+      }
+
       if (this.activeModeController) {
         await this.activeModeController.stop()
         this.activeModeController = null
@@ -419,7 +441,8 @@ class ManualModeController {
 
   constructor(
     private syncManager: SyncManager,
-    private log: Logger
+    private log: Logger,
+    private ui: UI | null = null
   ) {}
 
   emit<K extends keyof ManualSyncEvents>(
@@ -458,20 +481,16 @@ class ManualModeController {
 
   async start(): Promise<void> {
     this.emit(SyncEvent.STARTED) // Signal ready to run
-    this.log.status(`CC: Sync manual mode started at ${getFormattedDate()}`)
 
     try {
       while (this.syncManager.getState() === SyncManagerState.RUNNING) {
         await this.performSyncCycle()
 
-        this.log.step(theme.bold("[Press SPACE to re-sync or ESC to exit...] "))
         await this.waitForUserInput()
       }
     } catch (error) {
-      this.log.error(`Sync error: ${error}`)
-      throw error
-    } finally {
       await this.cleanup()
+      throw error
     }
   }
 
@@ -492,6 +511,9 @@ class ManualModeController {
       // Check if validation has errors
       if (validation.errors.length > 0) {
         // Log the validation errors
+        if (this.ui) {
+          this.ui.stop()
+        }
         this.log.error(`Could not continue due to the following errors:`)
         validation.errors.forEach((error) =>
           this.log.error(`${validation.errors.length > 1 ? "• " : ""}${error}`)
@@ -511,27 +533,6 @@ class ManualModeController {
 
       const { successCount, errorCount, missingCount } =
         await this.syncManager.performSync(validation)
-
-      const fDate = theme.gray(`@ ${getFormattedDate()}`)
-      const totalFails = errorCount + missingCount
-
-      if (totalFails === 0) {
-        this.log.success(`Successful sync. ${fDate}`)
-      } else if (
-        totalFails ===
-        validation.availableComputers.length +
-          validation.missingComputerIds.length
-      ) {
-        this.log.error(`Sync failed. ${fDate}`)
-      } else {
-        this.log.warn(`Partial sync. ${fDate}`)
-      }
-
-      this.log.verbose(
-        `Sync completed with ${successCount}/${
-          successCount + errorCount
-        } computers updated.`
-      )
 
       this.emit(SyncEvent.SYNC_COMPLETE, {
         successCount,
@@ -565,12 +566,12 @@ class ManualModeController {
       },
       onEsc: async () => {
         await this.syncManager.stop()
-        this.log.info("CC: Sync manual mode stopped.")
+        // this.log.info("CC: Sync manual mode stopped.")
       },
       onCtrlC: async () => {
         await this.syncManager.stop()
         continueCallback()
-        this.log.info("CC:Sync program terminated.")
+        // this.log.info("CC:Sync program terminated.")
       },
     })
 

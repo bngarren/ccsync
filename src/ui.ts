@@ -1,4 +1,4 @@
-import { setInterval, clearInterval } from "node:timers"
+import { setInterval, clearInterval, setTimeout } from "node:timers"
 
 import logUpdate from "log-update"
 import figures from "figures"
@@ -59,14 +59,20 @@ interface UIState {
   message?: string
 }
 
+// Minimal interval between renders (ms)
+const MIN_RENDER_INTERVAL = 50
+
 export class UI {
   private state: UIState
   private timer: ReturnType<typeof setInterval> | null = null
   private isActive = false
   private sourceRoot: string
   private isRendering = false // lock to prevent concurrent renders
-  private pendingRender = false // Flag to track if render was requested during another render
-  private initialRender = true
+  private lastRenderTime = 0 // Timestamp of last render
+  private renderTimer: ReturnType<typeof setTimeout> | null = null // Timer for debounced rendering
+  private pendingStateUpdates: Partial<UIState> = {}
+  private hasPendingUpdates = false
+  private syncsComplete = 0
 
   constructor(sourceRoot: string, mode: "watch" | "manual") {
     // super();
@@ -92,17 +98,9 @@ export class UI {
     process.on("exit", cleanup)
   }
 
-  // Clear the entire screen and reset cursor - only on first render
+  // Clear the entire screen
   private clearScreen() {
-    if (this.initialRender) {
-      try {
-        // Use logUpdate's clear instead of raw ANSI codes to prevent flickering
-        logUpdate.clear()
-        this.initialRender = false
-      } catch (error) {
-        console.error("Error clearing screen:", error)
-      }
-    }
+    console.clear()
   }
 
   start(): void {
@@ -114,19 +112,25 @@ export class UI {
 
     this.isActive = true
     this.isRendering = false
-    this.pendingRender = false
-    this.initialRender = true
+    this.hasPendingUpdates = false
+    this.pendingStateUpdates = {}
+    this.syncsComplete = 0
 
     this.clearScreen()
-    logUpdate.clear()
-
-    // initial render
-    this.render()
 
     // Start a refresh timer to update elapsed time
     this.timer = setInterval(() => {
-      if (this.isActive) this.render()
+      if (this.isActive) this.renderDynamicElements()
     }, 1000)
+
+    console.log(
+      theme.primary(
+        `CC: Sync - ${this.state.mode.toUpperCase()} mode started at ${this.state.lastUpdated.toLocaleString()}\n`
+      )
+    )
+
+    // Initial render of dynamic elements
+    this.renderDynamicElements()
   }
 
   stop(): void {
@@ -136,38 +140,71 @@ export class UI {
       this.timer = null
     }
 
-    // Finalize the output (wait a bit to ensure pending operations complete)
-    setTimeout(() => {
-      try {
-        logUpdate.clear()
-        logUpdate.done()
-      } catch (error) {
-        console.error("Error finalizing UI:", error)
-      }
-    }, 50)
+    if (this.renderTimer) {
+      clearTimeout(this.renderTimer)
+      this.renderTimer = null
+    }
+
+    // Final clear of dynamic elements
+    logUpdate.clear()
+    logUpdate.done()
   }
 
+  // Replace the existing updateStatus method
   updateStatus(status: UIState["status"], message?: string): void {
-    this.state.status = status
-    this.state.message = message
-    this.state.lastUpdated = new Date()
-    this.render()
+    const prevStatus = this.state.status
+
+    // When status changes from "running" to a completion state
+    if (
+      prevStatus === "running" &&
+      (status === "success" || status === "error" || status === "partial")
+    ) {
+      // First clear any dynamic content
+      logUpdate.clear()
+
+      // Then update the state
+      this.state = {
+        ...this.state,
+        status,
+        message: message !== undefined ? message : this.state.message,
+        lastUpdated: new Date(),
+      }
+
+      // Log the static output
+      this.logSyncSummary()
+
+      // After logging static content, re-render dynamic elements
+      this.renderDynamicElements()
+      this.syncsComplete++
+    } else {
+      // For other status changes (including to "running"), use normal state updates
+      this.queueStateUpdate({
+        status,
+        message: message !== undefined ? message : this.state.message,
+        lastUpdated: new Date(),
+      })
+    }
   }
 
   updateStats(stats: Partial<CounterStats>): void {
-    this.state.stats = {
+    const updatedStats = {
       ...this.state.stats,
       ...stats,
-      total: (stats.success || 0) + (stats.error || 0) + (stats.missing || 0),
     }
-    this.render()
+
+    updatedStats.total =
+      (stats.success || this.state.stats.success) +
+      (stats.error || this.state.stats.error) +
+      (stats.missing || this.state.stats.missing)
+
+    this.queueStateUpdate({ stats: updatedStats })
   }
 
   updateFileResults(
     resolvedFiles: ResolvedFileRule[],
     fileResults: Map<string, Array<{ computerId: string; success: boolean }>>
   ): void {
-    this.state.fileResults = []
+    const newFileResults: FileResult[] = []
 
     for (const [filePath, results] of fileResults.entries()) {
       const file = resolvedFiles.find(
@@ -175,7 +212,7 @@ export class UI {
       )
 
       if (file) {
-        this.state.fileResults.push({
+        newFileResults.push({
           path: filePath,
           targetPath: file.targetPath,
           results: results.sort((a, b) =>
@@ -185,8 +222,10 @@ export class UI {
       }
     }
 
-    this.state.lastUpdated = new Date()
-    this.render()
+    this.queueStateUpdate({
+      fileResults: newFileResults,
+      lastUpdated: new Date(),
+    })
   }
 
   clear(): void {
@@ -232,88 +271,141 @@ export class UI {
     return `${Math.floor(elapsed / 3600)}h ${Math.floor((elapsed % 3600) / 60)}m ago`
   }
 
-  private renderHeader(): string {
-    return (
-      "\n\n" +
-      theme.bold(
-        theme.highlight(`  CC: Sync - ${this.state.mode.toUpperCase()} mode`)
-      )
-    )
-  }
-
-  private renderResultsBox(): string {
+  private renderHeaderLine(): string {
     const { success, error, missing, total } = this.state.stats
 
-    // const content =
-    //   theme.success(`${symbols.check} Success: ${success}  `).padEnd(20) +
-    //   theme.error(`${symbols.cross} Error: ${error}  `).padEnd(20) +
-    //   theme.warning(`${symbols.warning} Missing: ${missing}`).padEnd(20)
-    // theme.normal(`Total Computers: ${total}`)
+    const date = this.state.lastUpdated.toLocaleString()
 
-    const pluralComputer = pluralize("computer")(total)
-
-    const content =
-      theme.dim(
-        `@${this.state.lastUpdated.toLocaleString()} (${this.formatElapsedTime()})\n\n`
-      ) +
-      theme.normal(
-        `Attempted to sync to ${theme.bold(total)} ${pluralComputer}:\n\n`
-      ) +
-      theme[success > 0 ? "success" : "normal"](`Success: ${success}  `) +
-      theme[error > 0 ? "error" : "normal"](`Error: ${error}  `) +
-      theme[missing > 0 ? "warning" : "normal"](`Missing: ${missing}`)
-
-    return boxen(content, {
-      padding: 1,
-      margin: { top: 2, bottom: 1, left: 1, right: 1 },
-      borderStyle: "round",
-      borderColor: "blue",
-      title: `Sync Results`,
-      titleAlignment: "center",
-      width: 45,
-      textAlignment: "center",
-    })
+    return theme.bold(
+      `#${this.syncsComplete + 1} [${this.state.mode.toUpperCase()}] [${date}] [Attempted to sync to ${total} ${pluralize("computer")(total)}] ` +
+        `${theme.success(`Success: ${success}`)}. ` +
+        `${error > 0 ? theme.error(`Error: ${error}`) : `Error: ${error}`}` +
+        (missing > 0 ? `. ${theme.warning(`Missing: ${missing}`)}` : "")
+    )
   }
 
   private renderFileResults(): string {
     if (this.state.fileResults.length === 0) {
-      return theme.dim("\nNo files synced yet.")
+      return theme.dim("  No files synced yet.")
     }
 
-    let output = theme.heading("\nFILE SYNC RESULTS:")
+    // Reorganize data by computer
+    const computerMap = new Map<
+      string,
+      {
+        totalFiles: number
+        successFiles: number
+        fileDetails: Array<{
+          sourcePath: string
+          targetPath: string
+          success: boolean
+        }>
+      }
+    >()
 
+    // Process and organize file results by computer
     for (const file of this.state.fileResults) {
-      // Calculate summary stats for this file
-      const successCount = file.results.filter((r) => r.success).length
-      const totalCount = file.results.length
-      const summaryColor =
-        successCount === totalCount
-          ? theme.success
-          : successCount === 0
-            ? theme.error
-            : theme.warning
+      for (const result of file.results) {
+        if (!computerMap.has(result.computerId)) {
+          computerMap.set(result.computerId, {
+            totalFiles: 0,
+            successFiles: 0,
+            fileDetails: [],
+          })
+        }
 
-      output +=
-        "\n" +
-        theme.primary(file.path) +
-        " " +
-        theme.dim(`→ ${file.targetPath}`) +
-        " " +
-        summaryColor(`(${successCount}/${totalCount})`)
+        const computerData = computerMap.get(result.computerId)!
+        computerData.totalFiles++
 
-      // Render computer IDs and their statuses
-      const computerStatuses = file.results
-        .map((r) =>
-          r.success
-            ? theme.success(`${r.computerId}${symbols.check}`)
-            : theme.error(`${r.computerId}${symbols.cross}`)
-        )
-        .join(" ")
+        if (result.success) {
+          computerData.successFiles++
+        }
 
-      output += " " + theme.dim("[") + computerStatuses + theme.dim("]")
+        computerData.fileDetails.push({
+          sourcePath: file.path,
+          targetPath: file.targetPath,
+          success: result.success,
+        })
+      }
+    }
+
+    // Sort computers numerically if possible
+    const sortedComputers = Array.from(computerMap.keys()).sort((a, b) => {
+      const numA = parseInt(a, 10)
+      const numB = parseInt(b, 10)
+
+      if (!isNaN(numA) && !isNaN(numB)) {
+        return numA - numB
+      }
+      return a.localeCompare(b)
+    })
+
+    let output = ""
+
+    // Generate output for each computer with simplified file list
+    for (const computerId of sortedComputers) {
+      const data = computerMap.get(computerId)!
+      const fileCount = `(${data.successFiles}/${data.totalFiles})`
+
+      output += `\n  Computer ${computerId} ${theme.dim(fileCount)}: `
+
+      // Group files by target path for cleaner display
+      const filesByTarget = new Map<string, boolean>()
+
+      data.fileDetails.forEach((file) => {
+        // Store success status for each target path
+        // If we have multiple files for the same target, consider it successful
+        // only if all files succeeded
+        const currentSuccess = filesByTarget.get(file.targetPath)
+        if (currentSuccess === undefined) {
+          filesByTarget.set(file.targetPath, file.success)
+        } else {
+          filesByTarget.set(file.targetPath, currentSuccess && file.success)
+        }
+      })
+
+      // Format the file list with target paths
+      const targetPaths = Array.from(filesByTarget.entries()).map(
+        ([targetPath, success]) => {
+          return success ? theme.success(targetPath) : theme.error(targetPath)
+        }
+      )
+
+      output += targetPaths.join(", ")
     }
 
     return output
+  }
+
+  private getStatusMessage(): string {
+    // Use custom message if available, otherwise default based on status
+    const message = this.state.message || this.getDefaultStatusMessage()
+
+    const messageColor =
+      this.state.status === "error"
+        ? theme.error
+        : this.state.status === "partial"
+          ? theme.warning
+          : this.state.status === "success"
+            ? theme.success
+            : theme.info
+
+    return messageColor(message)
+  }
+
+  private getDefaultStatusMessage(): string {
+    switch (this.state.status) {
+      case "success":
+        return "Sync completed successfully."
+      case "error":
+        return "Sync failed. No computers were updated."
+      case "partial":
+        return "Partial sync completed with some errors."
+      case "running":
+        return "Sync in progress..."
+      default:
+        return "Waiting to sync..."
+    }
   }
 
   private renderControls(): string {
@@ -322,76 +414,106 @@ export class UI {
       { key: "ESC", desc: "Exit" },
     ].filter((c) => !c.mode || c.mode === this.state.mode)
 
-    return (
-      "\n\n" +
-      boxen(
-        controls
-          .map((c) => `${theme.keyHint(c.key)} ${theme.normal(c.desc)}`)
-          .join("   "),
-        {
-          padding: 0.5,
-          margin: { left: 1 },
-          borderStyle: "round",
-          borderColor: "cyan",
-          title: "Controls",
-          titleAlignment: "center",
-        }
-      )
+    return boxen(
+      controls
+        .map((c) => `${theme.keyHint(c.key)} ${theme.normal(c.desc)}`)
+        .join("   "),
+      {
+        padding: 0.5,
+        margin: { top: 1, left: 0 },
+        borderStyle: "round",
+        borderColor: "cyan",
+        title: "Controls",
+        titleAlignment: "center",
+      }
     )
   }
 
-  private renderMessage(): string {
-    if (!this.state.message) return ""
-
-    const messageColor =
-      this.state.status === "error"
-        ? theme.error
-        : this.state.status === "partial"
-          ? theme.warning
-          : theme.info
-
-    return "\n" + messageColor(this.state.message)
-  }
-
-  private render(): void {
+  private queueStateUpdate(update: Partial<UIState>): void {
     if (!this.isActive) return
 
-    // If already rendering, mark as pending and return
+    // Merge the update with any pending updates
+    this.pendingStateUpdates = { ...this.pendingStateUpdates, ...update }
+    this.hasPendingUpdates = true
+
+    // Queue a render to apply these updates
+    this.queueRender()
+  }
+
+  private applyPendingUpdates(): void {
+    if (!this.hasPendingUpdates) return
+
+    // Apply all pending updates to the state
+    this.state = { ...this.state, ...this.pendingStateUpdates }
+
+    // Reset pending updates
+    this.pendingStateUpdates = {}
+    this.hasPendingUpdates = false
+  }
+
+  private queueRender(): void {
+    if (!this.isActive) return
+
+    // If already rendering, mark that another render is needed
     if (this.isRendering) {
-      this.pendingRender = true
       return
     }
 
-    // Set lock to prevent concurrent renders
+    // If a render is already queued, don't queue another one
+    if (this.renderTimer) return
+
+    // Determine delay before next render
+    const now = Date.now()
+    const timeSinceLastRender = now - this.lastRenderTime
+    const delay = Math.max(0, MIN_RENDER_INTERVAL - timeSinceLastRender)
+
+    // Queue the render with appropriate delay
+    this.renderTimer = setTimeout(() => {
+      this.renderTimer = null
+      this.renderDynamicElements()
+    }, delay)
+  }
+
+  // This logs the sync results to the console and doesn't use logUpdate
+  private logSyncSummary(): void {
+    // Force apply any pending updates first
+    this.applyPendingUpdates()
+
+    const header = this.renderHeaderLine()
+    const fileResults = this.renderFileResults()
+    const statusMessage = this.getStatusMessage()
+
+    // Log the static output
+    console.log("\n" + header)
+    console.log(fileResults)
+    console.log("\n" + statusMessage)
+    console.log(theme.dim("─".repeat(process.stdout.columns || 80))) // Separator line
+  }
+
+  // This renders the dynamic elements that change frequently with logUpdate
+  private renderDynamicElements(): void {
+    if (!this.isActive) return
+
     this.isRendering = true
-    this.pendingRender = false
 
     try {
-      this.clearScreen()
+      // Apply any pending state updates
+      this.applyPendingUpdates()
 
-      const output =
-        this.renderHeader() +
-        this.renderResultsBox() +
-        this.renderFileResults() +
-        this.renderMessage() +
-        this.renderControls()
+      // Only show status indicator if we're in running state
+      const statusIndicator =
+        this.state.status === "running"
+          ? `\n${symbols.line} ${this.getStatusMessage()} ${theme.dim(`(${this.formatElapsedTime()})`)}`
+          : ""
 
-      // Update the terminal once with complete content
-      logUpdate(output)
+      // Render controls and status
+      logUpdate(this.renderControls() + statusIndicator)
 
-      this.initialRender = false
+      this.lastRenderTime = Date.now()
     } catch (error) {
-      // Prevent rendering errors from breaking the application
       console.error("UI rendering error:", error)
     } finally {
-      // Release the lock
       this.isRendering = false
-
-      // If a render was requested while rendering, do it now
-      if (this.pendingRender && this.isActive) {
-        // Small delay to prevent too frequent updates and flickering
-        setTimeout(() => this.render(), 10)
-      }
     }
   }
 }

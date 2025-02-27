@@ -209,12 +209,19 @@ export class SyncManager {
     >()
 
     // Initialize results map
-    for (const file of validation.resolvedFileRules) {
+    for (const rule of validation.resolvedFileRules) {
       const relativePath = path.relative(
         this.config.sourceRoot,
-        file.sourceAbsolutePath
+        rule.sourceAbsolutePath
       )
-      fileResults.set(relativePath, [])
+      // For each file, add missing computers
+      for (const missingId of validation.missingComputerIds) {
+        if (rule.computers.includes(missingId)) {
+          const results = fileResults.get(relativePath) ?? []
+          results.push({ computerId: missingId, success: false })
+          fileResults.set(relativePath, results)
+        }
+      }
     }
 
     // Update UI status
@@ -706,6 +713,14 @@ class WatchModeController {
         this.changedFiles.add(relativePath)
         this.syncManager.invalidateCache()
         // this.log.status(`File changed: ${changedPath}`)
+
+        // Update UI without triggering a full re-render
+        if (this.ui) {
+          this.ui.updateStatus(
+            "running",
+            `Syncing changed file: ${path.basename(changedPath)}`
+          )
+        }
       }
 
       // Perform validation

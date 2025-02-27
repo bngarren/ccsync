@@ -4,7 +4,7 @@ import {
   validateMinecraftSave,
   findMinecraftComputers,
   copyFilesToComputer,
-  validateFileSync,
+  resolveSyncRules,
   getComputerShortPath,
   normalizePath,
   toSystemPath,
@@ -364,7 +364,7 @@ describe("File Operations", () => {
           shortPath: getComputerShortPath(testSaveName, "1"),
         },
       ]
-      const validation = await validateFileSync(config, computers)
+      const validation = await resolveSyncRules(config, computers)
 
       expect(validation.resolvedFileRules).toHaveLength(2)
       expect(validation.availableComputers).toHaveLength(1)
@@ -387,7 +387,7 @@ describe("File Operations", () => {
           shortPath: getComputerShortPath(testSaveName, "1"),
         },
       ]
-      const validation = await validateFileSync(config, computers)
+      const validation = await resolveSyncRules(config, computers)
 
       expect(validation.resolvedFileRules).toHaveLength(0)
       expect(validation.errors).toHaveLength(1)
@@ -412,7 +412,7 @@ describe("File Operations", () => {
       ]
       const changedFiles = new Set(["program.lua"])
 
-      const validation = await validateFileSync(config, computers, changedFiles)
+      const validation = await resolveSyncRules(config, computers, changedFiles)
 
       expect(validation.resolvedFileRules).toHaveLength(1)
       expect(validation.resolvedFileRules[0].sourceAbsolutePath).toContain(
@@ -483,6 +483,8 @@ describe("File Operations", () => {
 
         const result = await copyFilesToComputer([resolvedFile], targetComputer)
         // THEN files should be copied with normalized paths
+
+        testLog(result.errors)
 
         expect(result.errors).toHaveLength(0)
         expect(result.copiedFiles).toHaveLength(1)
@@ -983,7 +985,7 @@ describe("File Operations", () => {
       },
     ]
 
-    const validation = await validateFileSync(config, computers)
+    const validation = await resolveSyncRules(config, computers)
 
     // testLog({
     //   ruleCount: validation.resolvedFileRules.length,
@@ -1001,7 +1003,7 @@ describe("File Operations", () => {
 
     // Verify glob pattern resolution
     const apiFiles = validation.resolvedFileRules.filter((f) =>
-      normalizePath(f.targetPath).startsWith("/apis")
+      normalizePath(f.target.path).startsWith("/apis")
     )
     expect(apiFiles).toHaveLength(2)
     expect(apiFiles[0].computers).toEqual(["1", "2", "3"]) // network group
@@ -1014,7 +1016,7 @@ describe("File Operations", () => {
 
     // Verify multiple group resolution
     const startupFile = validation.resolvedFileRules.find(
-      (f) => normalizePath(f.targetPath) === "/startup.lua"
+      (f) => normalizePath(f.target.path) === "/startup.lua"
     )
     expect(startupFile?.computers).toEqual(["1", "2", "3", "4", "5"]) // both groups
   })
@@ -1039,7 +1041,7 @@ describe("File Operations", () => {
         shortPath: getComputerShortPath(testSaveName, "1"),
       },
     ]
-    const validation = await validateFileSync(config, computers)
+    const validation = await resolveSyncRules(config, computers)
 
     expect(validation.errors).toHaveLength(1)
     expect(validation.errors[0]).toContain("nonexistent_group")
@@ -1082,7 +1084,7 @@ describe("File Operations", () => {
       },
     ]
 
-    const validation = await validateFileSync(config, computers)
+    const validation = await resolveSyncRules(config, computers)
 
     const programFile = validation.resolvedFileRules[0]
     expect(programFile.computers).toEqual(["1", "2", "3"])

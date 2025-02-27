@@ -3,8 +3,7 @@ import { setInterval, clearInterval, setTimeout } from "node:timers"
 import logUpdate from "log-update"
 import figures from "figures"
 import chalk from "chalk"
-import type { ResolvedFileRule } from "./types"
-import path from "node:path"
+import type { ComputerSyncResult } from "./types"
 import boxen from "boxen"
 import { pluralize } from "./utils"
 
@@ -44,17 +43,11 @@ interface CounterStats {
   total: number
 }
 
-interface FileResult {
-  path: string
-  targetPath: string
-  results: Array<{ computerId: string; success: boolean }>
-}
-
 interface UIState {
   mode: "watch" | "manual"
   status: "idle" | "running" | "success" | "error" | "partial"
   stats: CounterStats
-  fileResults: FileResult[]
+  computerResults: ComputerSyncResult[]
   lastUpdated: Date
   message?: string
 }
@@ -74,6 +67,10 @@ export class UI {
   private hasPendingUpdates = false
   private syncsComplete = 0
 
+  // Add a class property to track the spinner animation
+  private spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+  private spinnerIndex = 0
+
   constructor(sourceRoot: string, mode: "watch" | "manual") {
     // super();
     this.sourceRoot = sourceRoot
@@ -81,7 +78,7 @@ export class UI {
       mode,
       status: "idle",
       stats: { success: 0, error: 0, missing: 0, total: 0 },
-      fileResults: [],
+      computerResults: [],
       lastUpdated: new Date(),
     }
 
@@ -115,19 +112,25 @@ export class UI {
     this.hasPendingUpdates = false
     this.pendingStateUpdates = {}
     this.syncsComplete = 0
+    this.spinnerIndex = 0
 
     this.clearScreen()
 
-    // Start a refresh timer to update elapsed time
+    // Start a refresh timer to update elapsed time and spinner
     this.timer = setInterval(() => {
-      if (this.isActive) this.renderDynamicElements()
-    }, 1000)
+      if (this.isActive) {
+        // Update spinner index
+        this.spinnerIndex = (this.spinnerIndex + 1) % this.spinnerFrames.length
+        this.renderDynamicElements()
+      }
+    }, 100)
 
     console.log(
       theme.primary(
-        `CC: Sync - ${this.state.mode.toUpperCase()} mode started at ${this.state.lastUpdated.toLocaleString()}\n`
+        `\nCC: Sync - ${this.state.mode.toUpperCase()} mode started at ${this.state.lastUpdated.toLocaleString()}`
       )
     )
+    console.log(theme.primary("─".repeat(process.stdout.columns || 80)) + "\n")
 
     // Initial render of dynamic elements
     this.renderDynamicElements()
@@ -200,30 +203,9 @@ export class UI {
     this.queueStateUpdate({ stats: updatedStats })
   }
 
-  updateFileResults(
-    resolvedFiles: ResolvedFileRule[],
-    fileResults: Map<string, Array<{ computerId: string; success: boolean }>>
-  ): void {
-    const newFileResults: FileResult[] = []
-
-    for (const [filePath, results] of fileResults.entries()) {
-      const file = resolvedFiles.find(
-        (f) => path.relative(this.sourceRoot, f.sourceAbsolutePath) === filePath
-      )
-
-      if (file) {
-        newFileResults.push({
-          path: filePath,
-          targetPath: file.targetPath,
-          results: results.sort((a, b) =>
-            a.computerId.localeCompare(b.computerId)
-          ),
-        })
-      }
-    }
-
+  updateComputerResults(computerResults: ComputerSyncResult[]): void {
     this.queueStateUpdate({
-      fileResults: newFileResults,
+      computerResults,
       lastUpdated: new Date(),
     })
   }
@@ -276,107 +258,105 @@ export class UI {
 
     const date = this.state.lastUpdated.toLocaleString()
 
+    let resultStats = ""
+
+    if (success > 0 && error === 0 && missing === 0) {
+      resultStats = `${theme.success(`Success.`)}`
+    } else {
+      resultStats =
+        `${theme.success(`Success: ${success}`)} ` +
+        `${error > 0 ? theme.error(`Error: ${error}`) : ""} ` +
+        (missing > 0 ? `${theme.warning(`Missing: ${missing}`)}` : "")
+    }
+
     return theme.bold(
       `#${this.syncsComplete + 1} [${this.state.mode.toUpperCase()}] [${date}] [Attempted to sync to ${total} ${pluralize("computer")(total)}] ` +
-        `${theme.success(`Success: ${success}`)}. ` +
-        `${error > 0 ? theme.error(`Error: ${error}`) : `Error: ${error}`}` +
-        (missing > 0 ? `. ${theme.warning(`Missing: ${missing}`)}` : "")
+        resultStats
     )
   }
 
-  private renderFileResults(): string {
-    if (this.state.fileResults.length === 0) {
+  private renderComputerResults(): string {
+    if (this.state.computerResults.length === 0) {
       return theme.dim("  No files synced yet.")
     }
 
-    // Reorganize data by computer
-    const computerMap = new Map<
-      string,
-      {
-        totalFiles: number
-        successFiles: number
-        fileDetails: Array<{
-          sourcePath: string
-          targetPath: string
-          success: boolean
-        }>
-      }
-    >()
-
-    // Process and organize file results by computer
-    for (const file of this.state.fileResults) {
-      for (const result of file.results) {
-        if (!computerMap.has(result.computerId)) {
-          computerMap.set(result.computerId, {
-            totalFiles: 0,
-            successFiles: 0,
-            fileDetails: [],
-          })
-        }
-
-        const computerData = computerMap.get(result.computerId)!
-        computerData.totalFiles++
-
-        if (result.success) {
-          computerData.successFiles++
-        }
-
-        computerData.fileDetails.push({
-          sourcePath: file.path,
-          targetPath: file.targetPath,
-          success: result.success,
-        })
-      }
-    }
-
     // Sort computers numerically if possible
-    const sortedComputers = Array.from(computerMap.keys()).sort((a, b) => {
-      const numA = parseInt(a, 10)
-      const numB = parseInt(b, 10)
+    const sortedComputers = [...this.state.computerResults].sort((a, b) => {
+      const numA = parseInt(a.computerId, 10)
+      const numB = parseInt(b.computerId, 10)
 
       if (!isNaN(numA) && !isNaN(numB)) {
         return numA - numB
       }
-      return a.localeCompare(b)
+      return a.computerId.localeCompare(b.computerId)
     })
 
     let output = ""
 
-    // Generate output for each computer with simplified file list
-    for (const computerId of sortedComputers) {
-      const data = computerMap.get(computerId)!
-      const fileCount = `(${data.successFiles}/${data.totalFiles})`
+    // Generate output for each computer
+    for (const computer of sortedComputers) {
+      // Determine computer status icon
+      let statusIcon
+      let statusColor
 
-      output += `\n  Computer ${computerId} ${theme.dim(fileCount)}: `
+      if (!computer.exists) {
+        statusIcon = symbols.cross
+        statusColor = theme.error
+      } else if (computer.files.length === 0) {
+        statusIcon = symbols.warning
+        statusColor = theme.warning
+      } else {
+        const allSuccess = computer.files.every((f) => f.success)
+        const anySuccess = computer.files.some((f) => f.success)
 
-      // Group files by target path for cleaner display
-      const filesByTarget = new Map<string, boolean>()
-
-      data.fileDetails.forEach((file) => {
-        // Store success status for each target path
-        // If we have multiple files for the same target, consider it successful
-        // only if all files succeeded
-        const currentSuccess = filesByTarget.get(file.targetPath)
-        if (currentSuccess === undefined) {
-          filesByTarget.set(file.targetPath, file.success)
+        if (allSuccess) {
+          statusIcon = symbols.check
+          statusColor = theme.success
+        } else if (anySuccess) {
+          statusIcon = symbols.warning
+          statusColor = theme.warning
         } else {
-          filesByTarget.set(file.targetPath, currentSuccess && file.success)
+          statusIcon = symbols.cross
+          statusColor = theme.error
         }
+      }
+
+      // Start line with status icon and computer ID
+      output += `  ${statusColor(statusIcon)} Computer ${computer.computerId}: `
+
+      // Summarize success/fail counts
+      const successCount = computer.files.filter((f) => f.success).length
+      const totalCount = computer.files.length
+      output += theme.dim(`(${successCount}/${totalCount}) `)
+
+      if (!computer.exists) {
+        output += theme.warning("Missing computer")
+        continue
+      }
+
+      if (computer.files.length === 0) {
+        output += theme.dim("No files synced")
+        continue
+      }
+
+      // Format file targets on same line
+      const fileTargets = computer.files.map((file) => {
+        const fileIcon = file.success ? symbols.check : symbols.cross
+        const iconColor = file.success ? theme.success : theme.error
+
+        // Just use the targetPath directly since it's already been properly
+        // formatted in performSync to include the filename for directory targets
+        const displayPath =
+          file.targetPath === "/" ? "/<error>" : file.targetPath
+
+        return `${iconColor(fileIcon)} ${file.success ? displayPath : theme.dim(displayPath)}`
       })
 
-      // Format the file list with target paths
-      const targetPaths = Array.from(filesByTarget.entries()).map(
-        ([targetPath, success]) => {
-          return success ? theme.success(targetPath) : theme.error(targetPath)
-        }
-      )
-
-      output += targetPaths.join(", ")
+      output += fileTargets.join(" | ") + "\n"
     }
 
     return output
   }
-
   private getStatusMessage(): string {
     // Use custom message if available, otherwise default based on status
     const message = this.state.message || this.getDefaultStatusMessage()
@@ -390,7 +370,9 @@ export class UI {
             ? theme.success
             : theme.info
 
-    return messageColor(message)
+    return this.state.status !== "success"
+      ? messageColor("\n" + "  " + message)
+      : ""
   }
 
   private getDefaultStatusMessage(): string {
@@ -400,7 +382,7 @@ export class UI {
       case "error":
         return "Sync failed. No computers were updated."
       case "partial":
-        return "Partial sync completed with some errors."
+        return "Not all files were synced. See above output."
       case "running":
         return "Sync in progress..."
       default:
@@ -408,23 +390,32 @@ export class UI {
     }
   }
 
-  private renderControls(): string {
+  private renderControls(title = "Controls"): string {
     const controls = [
       { key: "SPACE", desc: "Re-sync", mode: "manual" },
       { key: "ESC", desc: "Exit" },
     ].filter((c) => !c.mode || c.mode === this.state.mode)
+
+    // Add spinner to title
+    const spinner = this.spinnerFrames[this.spinnerIndex]
+    const titleWithSpinner = `${spinner} ${title}`
+
+    if (this.state.status === "running") {
+      return ""
+    }
 
     return boxen(
       controls
         .map((c) => `${theme.keyHint(c.key)} ${theme.normal(c.desc)}`)
         .join("   "),
       {
-        padding: 0.5,
-        margin: { top: 1, left: 0 },
+        padding: 1,
+        margin: { top: 1, left: 1 },
         borderStyle: "round",
         borderColor: "cyan",
-        title: "Controls",
+        title: titleWithSpinner,
         titleAlignment: "center",
+        textAlignment: "center",
       }
     )
   }
@@ -480,13 +471,13 @@ export class UI {
     this.applyPendingUpdates()
 
     const header = this.renderHeaderLine()
-    const fileResults = this.renderFileResults()
+    const computerResults = this.renderComputerResults()
     const statusMessage = this.getStatusMessage()
 
     // Log the static output
     console.log("\n" + header)
-    console.log(fileResults)
-    console.log("\n" + statusMessage)
+    console.log(computerResults)
+    console.log(statusMessage)
     console.log(theme.dim("─".repeat(process.stdout.columns || 80))) // Separator line
   }
 
@@ -502,12 +493,15 @@ export class UI {
 
       // Only show status indicator if we're in running state
       const statusIndicator =
-        this.state.status === "running"
-          ? `\n${symbols.line} ${this.getStatusMessage()} ${theme.dim(`(${this.formatElapsedTime()})`)}`
-          : ""
+        this.state.status === "running" ? `\n${this.getStatusMessage()}` : ""
+
+      const controlsTitle =
+        this.state.mode === "manual"
+          ? "Awaiting user input..."
+          : "Watching for file changes..."
 
       // Render controls and status
-      logUpdate(this.renderControls() + statusIndicator)
+      logUpdate(statusIndicator + this.renderControls(controlsTitle))
 
       this.lastRenderTime = Date.now()
     } catch (error) {

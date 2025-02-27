@@ -3,7 +3,11 @@ import * as fs from "node:fs/promises"
 import path from "path"
 import type { Config } from "./config"
 import { glob } from "glob"
-import type { Computer, ResolvedFileRule, ValidationResult } from "./types"
+import type {
+  Computer,
+  ResolvedFileRule,
+  ValidationResult as ResolveSyncRulesResult,
+} from "./types"
 import { isNodeError } from "./errors"
 
 // ---- Language ----
@@ -399,14 +403,16 @@ export function resolveComputerReferences(
 }
 
 /**
- * Using the config file, will resolve sync rules into viable files ({@link ResolvedFileRule}) and validates the configuration
+ * Using the config file, will resolve sync rules into viable files ({@link ResolvedFileRule}) and their available or missing computers that are intended targets.
+ *
+ * For each sync rule, this function will first find all source files that match the `rule.source` pattern/glob. If `selectedFiles` parameter is passed, i.e. from files changed during watch mode, only these files--rather than all of the rule's matched files--will be resolved. Next, all computer ID's will be resolved for this rule--expanding computer groups into a distinct set of comptuer ID's. Finally a {@link ResolveSyncRulesResult} is returned.
  */
-export async function validateFileSync(
+export async function resolveSyncRules(
   config: Config,
   computers: Computer[],
-  changedFiles?: Set<string>
-): Promise<ValidationResult> {
-  const validation: ValidationResult = {
+  selectedFiles?: Set<string>
+): Promise<ResolveSyncRulesResult> {
+  const resolvedResult: ResolveSyncRulesResult = {
     resolvedFileRules: [],
     availableComputers: [],
     missingComputerIds: [],
@@ -427,19 +433,19 @@ export async function validateFileSync(
       ).map((sf) => normalizePath(sf))
 
       // Filter by changed files if in watch mode
-      const relevantFiles = changedFiles
+      const filesToResolve = selectedFiles
         ? sourceFiles.filter((file) => {
             const relPath = normalizePath(
               path.relative(config.sourceRoot, file)
             )
-            return Array.from(changedFiles).some(
+            return Array.from(selectedFiles).some(
               (changed) => normalizePath(changed) === relPath
             )
           })
         : sourceFiles
 
-      if (relevantFiles.length === 0) {
-        validation.errors.push(
+      if (filesToResolve.length === 0) {
+        resolvedResult.errors.push(
           `No matching files found for: '${toSystemPath(rule.source)}'`
         )
         continue
@@ -453,13 +459,13 @@ export async function validateFileSync(
 
       if (errors.length > 0) {
         errors.forEach((e) => {
-          validation.errors.push(e)
+          resolvedResult.errors.push(e)
         })
         // allow continued processing even if we didnt fully resolve all computer references
       }
 
       if (computerIds.length === 0) {
-        validation.errors.push(
+        resolvedResult.errors.push(
           `No target computers specified for: '${toSystemPath(rule.source)}'`
         )
         continue
@@ -468,18 +474,24 @@ export async function validateFileSync(
       const missingIds = computerIds.filter(
         (id) => !computers.some((c) => c.id === id)
       )
-      validation.missingComputerIds.push(...missingIds)
+      resolvedResult.missingComputerIds.push(...missingIds)
 
       // Create resolved file entries
-      for (const sourcePath of relevantFiles) {
-        validation.resolvedFileRules.push({
+      for (const sourcePath of filesToResolve) {
+        const normalizedTargetPath = normalizePath(rule.target)
+        const isDirectory = !pathIsLikelyFile(normalizedTargetPath)
+
+        resolvedResult.resolvedFileRules.push({
           sourceAbsolutePath: normalizePath(sourcePath),
           // Calculated relative to sourceRoot
           sourceRelativePath: normalizePath(
             path.relative(config.sourceRoot, sourcePath)
           ),
           flatten: !isRecursiveGlob(rule.source) || rule.flatten,
-          targetPath: normalizePath(rule.target),
+          target: {
+            type: isDirectory ? "directory" : "file",
+            path: normalizedTargetPath,
+          },
           computers: computerIds,
         })
       }
@@ -488,34 +500,34 @@ export async function validateFileSync(
       const matchingComputers = computers.filter((c) =>
         computerIds.includes(c.id)
       )
-      validation.availableComputers.push(...matchingComputers)
+      resolvedResult.availableComputers.push(...matchingComputers)
     } catch (err) {
       // Handle the main errors glob can throw
       if (isNodeError(err)) {
         switch (err.code) {
           case "ENOENT":
-            validation.errors.push(
+            resolvedResult.errors.push(
               `Source directory not found: ${toSystemPath(config.sourceRoot)}`
             )
             break
           case "EACCES":
-            validation.errors.push(
+            resolvedResult.errors.push(
               `Permission denied reading source directory: ${toSystemPath(config.sourceRoot)}`
             )
             break
           case "EMFILE":
-            validation.errors.push(
+            resolvedResult.errors.push(
               "Too many open files. Try reducing the number of glob patterns."
             )
             break
           default:
-            validation.errors.push(
+            resolvedResult.errors.push(
               `Error processing '${toSystemPath(rule.source)}': ${err.message}`
             )
         }
       } else {
         // Handle glob pattern/config errors
-        validation.errors.push(
+        resolvedResult.errors.push(
           `Invalid pattern '${toSystemPath(rule.source)}': ${err instanceof Error ? err.message : String(err)}`
         )
       }
@@ -523,16 +535,18 @@ export async function validateFileSync(
   }
 
   // Deduplicate target computers
-  validation.availableComputers = [...new Set(validation.availableComputers)]
+  resolvedResult.availableComputers = [
+    ...new Set(resolvedResult.availableComputers),
+  ]
 
-  return validation
+  return resolvedResult
 }
 
 /**
  * Copies files to a specific computer
  */
 export async function copyFilesToComputer(
-  resolvedFiles: ResolvedFileRule[],
+  resolvedFileRules: ResolvedFileRule[],
   computerPath: string
 ) {
   const copiedFiles = []
@@ -547,7 +561,7 @@ export async function copyFilesToComputer(
   // Normalize the computer path
   const normalizedComputerPath = normalizePath(computerPath)
 
-  for (const file of resolvedFiles) {
+  for (const rule of resolvedFileRules) {
     // DEBUG
     // console.log("\n--- Processing file ---")
     // console.log("Source absolute path:", file.sourceAbsolutePath)
@@ -555,35 +569,37 @@ export async function copyFilesToComputer(
     // console.log("Flatten?", file.flatten)
     // console.log("Target path:", file.targetPath)
 
-    // Normalize target path
-    const normalizedTarget = normalizePath(file.targetPath.replace(/^\//, ""))
+    const isTargetDirectory = rule.target.type === "directory"
+    const normalizedTargetPath = normalizePath(rule.target.path)
 
-    // Determine if target is a directory:
-    const isTargetDirectory = !pathIsLikelyFile(normalizedTarget)
+    // console.log({ normalizedTargetPath, isTargetDirectory })
 
     // For directory targets, maintain source directory structure
     let targetDirPath: string
     let targetFileName: string
 
     if (isTargetDirectory) {
-      if (file.flatten) {
-        targetDirPath = path.join(computerPath, normalizedTarget)
+      if (rule.flatten) {
+        targetDirPath = path.join(computerPath, normalizedTargetPath)
       } else {
-        const sourceDir = path.dirname(file.sourceRelativePath)
+        const sourceDir = path.dirname(rule.sourceRelativePath)
         targetDirPath =
           sourceDir === "."
-            ? path.join(computerPath, normalizedTarget)
-            : path.join(computerPath, normalizedTarget, sourceDir)
+            ? path.join(computerPath, normalizedTargetPath)
+            : path.join(computerPath, normalizedTargetPath, sourceDir)
         // console.log("Keeping source dir structure on copy:", {
         //   sourceDir,
         //   targetDirPath,
         // })
       }
-      targetFileName = path.basename(file.sourceRelativePath)
+      targetFileName = path.basename(rule.sourceRelativePath)
     } else {
       // For file targets, use specified path
-      targetDirPath = path.join(computerPath, path.dirname(normalizedTarget))
-      targetFileName = path.basename(normalizedTarget)
+      targetDirPath = path.join(
+        computerPath,
+        path.dirname(normalizedTargetPath)
+      )
+      targetFileName = path.basename(normalizedTargetPath)
     }
 
     // Construct and normalize the full target path
@@ -603,19 +619,19 @@ export async function copyFilesToComputer(
       normalizePath(relativeToComputer).startsWith("..") ||
       path.isAbsolute(relativeToComputer)
     ) {
-      skippedFiles.push(file.sourceAbsolutePath)
+      skippedFiles.push(rule.sourceAbsolutePath)
       errors.push(
-        `Security violation: Target path '${toSystemPath(file.targetPath)}' attempts to write outside the computer directory`
+        `Security violation: Target path '${toSystemPath(rule.target.path)}' attempts to write outside the computer directory`
       )
       continue
     }
 
     // First ensure source file exists and is a file
-    const sourceStats = await fs.stat(toSystemPath(file.sourceAbsolutePath)) // use systemm-specific path here
+    const sourceStats = await fs.stat(toSystemPath(rule.sourceAbsolutePath)) // use systemm-specific path here
     if (!sourceStats.isFile()) {
-      skippedFiles.push(file.sourceAbsolutePath)
+      skippedFiles.push(rule.sourceAbsolutePath)
       errors.push(
-        `Source is not a file: ${toSystemPath(file.sourceAbsolutePath)}`
+        `Source is not a file: ${toSystemPath(rule.sourceAbsolutePath)}`
       )
       continue
     }
@@ -624,7 +640,7 @@ export async function copyFilesToComputer(
     try {
       const targetDirStats = await fs.stat(toSystemPath(targetDirPath))
       if (!targetDirStats.isDirectory()) {
-        skippedFiles.push(file.sourceAbsolutePath)
+        skippedFiles.push(rule.sourceAbsolutePath)
         errors.push(
           `Cannot create directory '${toSystemPath(path.basename(targetDirPath))}' because a file with that name already exists`
         )
@@ -635,7 +651,7 @@ export async function copyFilesToComputer(
       try {
         await fs.mkdir(toSystemPath(targetDirPath), { recursive: true })
       } catch (mkdirErr) {
-        skippedFiles.push(file.sourceAbsolutePath)
+        skippedFiles.push(rule.sourceAbsolutePath)
         errors.push(`Failed to create directory: ${mkdirErr}`)
         continue
       }
@@ -644,7 +660,7 @@ export async function copyFilesToComputer(
     try {
       // Copy the file using system-specific paths for fs operations
       await fs.copyFile(
-        toSystemPath(file.sourceAbsolutePath),
+        toSystemPath(rule.sourceAbsolutePath),
         toSystemPath(targetFilePath)
       )
 
@@ -655,15 +671,15 @@ export async function copyFilesToComputer(
           `Failed to create target file: ${toSystemPath(targetFilePath)}`
         )
       } else {
-        copiedFiles.push(file.sourceAbsolutePath)
+        copiedFiles.push(rule.sourceAbsolutePath)
       }
     } catch (err) {
-      skippedFiles.push(file.sourceAbsolutePath)
+      skippedFiles.push(rule.sourceAbsolutePath)
 
       if (isNodeError(err)) {
         if (err.code === "ENOENT") {
           errors.push(
-            `Source file not found: ${toSystemPath(file.sourceAbsolutePath)}`
+            `Source file not found: ${toSystemPath(rule.sourceAbsolutePath)}`
           )
         } else if (err.code === "EACCES") {
           errors.push(`Permission denied: ${err.message}`)

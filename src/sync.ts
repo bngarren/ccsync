@@ -11,11 +11,12 @@ import {
   type WatchSyncEvents,
   SyncEvent,
   type ResolvedFileRule,
+  type ComputerSyncResult,
 } from "./types"
 import {
   validateMinecraftSave,
   findMinecraftComputers,
-  validateFileSync,
+  resolveSyncRules,
   copyFilesToComputer,
   normalizePath,
 } from "./utils"
@@ -138,7 +139,7 @@ export class SyncManager {
           : undefined
 
       // Validate the file sync rules
-      const validation = await validateFileSync(
+      const validation = await resolveSyncRules(
         this.config,
         computers,
         changedFiles
@@ -202,25 +203,51 @@ export class SyncManager {
       throw new Error("Cannot perform sync when not in RUNNING state")
     }
 
-    // This will hold our file results for UI display
-    const fileResults = new Map<
-      string,
-      Array<{ computerId: string; success: boolean }>
-    >()
+    const computerResults: ComputerSyncResult[] = []
 
-    // Initialize results map
+    const allComputerIds = new Set<string>()
+
+    // First create entries for all computers
     for (const rule of validation.resolvedFileRules) {
-      const relativePath = path.relative(
-        this.config.sourceRoot,
-        rule.sourceAbsolutePath
-      )
-      // For each file, add missing computers
-      for (const missingId of validation.missingComputerIds) {
-        if (rule.computers.includes(missingId)) {
-          const results = fileResults.get(relativePath) ?? []
-          results.push({ computerId: missingId, success: false })
-          fileResults.set(relativePath, results)
+      for (const computerId of rule.computers) {
+        // Create computer if it doesn't exist yet
+        if (!allComputerIds.has(computerId)) {
+          allComputerIds.add(computerId)
+
+          // Check if this is a missing computer
+          const isExisting = validation.availableComputers.some(
+            (c) => c.id === computerId
+          )
+
+          computerResults.push({
+            computerId,
+            exists: isExisting,
+            files: [],
+          })
         }
+
+        // Get the computer result
+        const computerResult = computerResults.find(
+          (cr) => cr.computerId === computerId
+        )!
+
+        // Prepare target path based on target type
+        let targetPath = rule.target.path
+
+        // If target is a directory, append the source filename
+        if (rule.target.type === "directory") {
+          const sourceFilename = path.basename(rule.sourceAbsolutePath)
+          targetPath = path.join(targetPath, sourceFilename)
+          targetPath = normalizePath(targetPath)
+        }
+
+        // Add file entry with explicit type information
+        computerResult.files.push({
+          targetPath,
+          targetType: rule.target.type,
+          sourcePath: rule.sourceAbsolutePath,
+          success: false, // Mark all as unsuccessful initially
+        })
       }
     }
 
@@ -242,20 +269,40 @@ export class SyncManager {
         validation.resolvedFileRules
       )
 
-      // Record results for each file
-      syncResult.copiedFiles.forEach((filePath) => {
-        const relativePath = path.relative(this.config.sourceRoot, filePath)
-        const results = fileResults.get(relativePath) ?? []
-        results.push({ computerId: computer.id, success: true })
-        fileResults.set(relativePath, results)
-      })
+      // Find this computer in our results array
+      const computerResult = computerResults.find(
+        (cr) => cr.computerId === computer.id
+      )
+      if (!computerResult) continue // Should never happen but TypeScript needs this check
 
-      syncResult.skippedFiles.forEach((filePath) => {
-        const relativePath = path.relative(this.config.sourceRoot, filePath)
-        const results = fileResults.get(relativePath) ?? []
-        results.push({ computerId: computer.id, success: false })
-        fileResults.set(relativePath, results)
-      })
+      // Process all copied files (successes)
+      for (const filePath of syncResult.copiedFiles) {
+        // Find the rule for this file to get target path
+        const rule = validation.resolvedFileRules.find(
+          (rule) =>
+            rule.sourceAbsolutePath === filePath &&
+            rule.computers.includes(computer.id)
+        )
+
+        if (rule) {
+          // Build the complete target path including filename
+          let targetPath = rule.target.path
+
+          if (rule.target.type === "directory") {
+            const filename = path.basename(filePath)
+            targetPath = path.join(targetPath, filename)
+            targetPath = normalizePath(targetPath)
+          }
+
+          // Find and update the file entry
+          const fileEntry = computerResult.files.find(
+            (f) => f.targetPath === targetPath
+          )
+          if (fileEntry) {
+            fileEntry.success = true
+          }
+        }
+      }
 
       // Log any errors
       if (syncResult.errors.length > 0) {
@@ -273,18 +320,18 @@ export class SyncManager {
     }
 
     // Determine overall status
-    let statusMessage = ""
+    const statusMessage = ""
     let status: "success" | "error" | "partial" = "success"
 
     if (result.errorCount === 0 && result.missingCount === 0) {
       status = "success"
-      statusMessage = "Sync completed successfully!"
+      // statusMessage = "Sync completed successfully!"
     } else if (result.successCount === 0) {
       status = "error"
-      statusMessage = "Sync failed. No computers were updated."
+      // statusMessage = "Sync failed. No computers were updated."
     } else {
       status = "partial"
-      statusMessage = "Partial sync completed with some errors."
+      // statusMessage = "Partial sync completed with some errors."
     }
 
     // Update UI with final status
@@ -294,7 +341,7 @@ export class SyncManager {
         error: result.errorCount,
         missing: result.missingCount,
       })
-      this.ui.updateFileResults(validation.resolvedFileRules, fileResults)
+      this.ui.updateComputerResults(computerResults)
       this.ui.updateStatus(status, statusMessage)
     }
 
@@ -305,6 +352,7 @@ export class SyncManager {
 
     return result
   }
+
   async startManualMode(): Promise<ManualModeController> {
     if (this.state !== SyncManagerState.IDLE) {
       throw new Error(

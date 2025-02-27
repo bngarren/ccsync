@@ -18,11 +18,35 @@ export enum SyncMode {
  * A resolved file rule has been validated such that a file exists at the source path.
  */
 export interface ResolvedFileRule {
-  sourceAbsolutePath: string // Absolute path to source file
-  sourceRelativePath: string // Relative path to source file from source root
-  flatten?: boolean // Flatten if non-recursive or explicitly set
-  targetPath: string // Relative path on computer
-  computers: string[] // Resolved list of computer IDs (not group names)
+  /**
+   * Absolute path to source file
+   */
+  sourceAbsolutePath: string
+  /**
+   * Relative path to source file from source root
+   */
+  sourceRelativePath: string
+  /**
+   * This flag will dictate _how_ the source files are copied to the target. If _false_ **and** a _recursive glob pattern_ is used for `source`, then the files will be copied to the target directory maintaining their source directory structure. The default is _true_, in which source files are copied to a single target directory.
+   */
+  flatten?: boolean
+  /**
+   * Explicit target structure defining where files should be copied
+   */
+  target: {
+    /**
+     * Type of target destination - either a directory or specific file
+     */
+    type: TargetType
+    /**
+     * Normalized path (without trailing slash for directories)
+     */
+    path: string
+  }
+  /**
+   * Resolved list of computer IDs (not group names)
+   */
+  computers: string[]
 }
 
 // Represents a computer in the Minecraft save
@@ -114,4 +138,23 @@ export function createTypedEmitter<T extends Record<string, any>>() {
       emitter.off(event as string, listener)
     },
   }
+}
+
+export type TargetType = "directory" | "file"
+
+/**
+ * Represents a sync result for a specific computer
+ * Used for UI display
+ */
+export interface ComputerSyncResult {
+  computerId: string
+  exists: boolean
+  files: Array<{
+    // Store full target path for UI display
+    targetPath: string
+    targetType: TargetType
+    // Include source path for potential filename resolution
+    sourcePath: string
+    success: boolean
+  }>
 }

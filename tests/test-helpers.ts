@@ -3,7 +3,11 @@ import path from "path"
 import os from "os"
 import crypto from "crypto"
 import type { Computer, ResolvedFileRule } from "../src/types"
-import { getComputerShortPath, isRecursiveGlob } from "../src/utils"
+import {
+  getComputerShortPath,
+  isRecursiveGlob,
+  pathIsLikelyFile,
+} from "../src/utils"
 import * as p from "@clack/prompts"
 import { mock } from "bun:test"
 import { DEFAULT_CONFIG, type SyncRule } from "../src/config"
@@ -177,7 +181,7 @@ interface CreateResolvedFileOptions {
   sourceRoot: string // Root of source files, per the config.sourceRoot
   sourcePath: string // Path relative to sourceRoot
   flatten?: boolean // Whether to flatten sources files into target dir
-  targetPath: string // Target path on computer
+  targetPath: string
   computers: string | string[] // Computer IDs or array of IDs
 }
 
@@ -199,11 +203,17 @@ export function createResolvedFile(
     ? opts.computers
     : [opts.computers]
 
+  // Determine if target is likely a directory
+  const isDirectory = !pathIsLikelyFile(opts.targetPath)
+
   return {
     sourceAbsolutePath: path.resolve(sourceRoot, opts.sourcePath),
     sourceRelativePath: opts.sourcePath,
     flatten: opts.flatten || true,
-    targetPath: opts.targetPath,
+    target: {
+      type: isDirectory ? "directory" : "file",
+      path: opts.targetPath,
+    },
     computers,
   }
 }
@@ -215,15 +225,15 @@ export function createResolvedFiles(
   sourceRoot: string,
   rules: SyncRule[]
 ): ResolvedFileRule[] {
-  return rules.map((rule) =>
-    createResolvedFile({
+  return rules.map((rule) => {
+    return createResolvedFile({
       sourceRoot,
       sourcePath: rule.source,
       flatten: !isRecursiveGlob(rule.source) || rule.flatten,
       targetPath: rule.target,
       computers: rule.computers,
     })
-  )
+  })
 }
 
 /**

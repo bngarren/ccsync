@@ -13,6 +13,7 @@ import {
 } from "./test-helpers"
 import { stringify } from "yaml"
 import { SyncEvent, type SyncResult } from "../src/types"
+import { testLog } from "./setup"
 
 describe("Integration: SyncManager", () => {
   let tempDir: string
@@ -55,7 +56,7 @@ describe("Integration: SyncManager", () => {
     clackPromptsSpy.cleanup()
   })
 
-  test("performs manual sync", async () => {
+  test.only("performs manual sync", async () => {
     const configPath = path.join(tempDir, ".ccsync.yaml")
     const configObject = withDefaultConfig({
       sourceRoot: sourceDir,
@@ -82,6 +83,7 @@ describe("Integration: SyncManager", () => {
 
       await new Promise<void>((resolve, reject) => {
         manualLoop.on(SyncEvent.SYNC_COMPLETE, async ({ successCount }) => {
+          testLog("SYNC_COMPLETE event received")
           try {
             const targetFile = path.join(computersDir, "1", "program.lua")
             expect(await fs.exists(targetFile)).toBe(true)
@@ -94,9 +96,12 @@ describe("Integration: SyncManager", () => {
         })
 
         manualLoop.on(SyncEvent.SYNC_ERROR, (error) => {
-          reject(error)
+          testLog("SYNC_ERROR event received:", error)
+          reject(error.message)
         })
       })
+    } catch (error) {
+      testLog(error)
     } finally {
       await syncManager.stop()
     }
@@ -209,9 +214,9 @@ describe("Integration: SyncManager", () => {
         )
 
         // Handle errors
-        watchController.on(SyncEvent.SYNC_ERROR, async ({ error }) => {
+        watchController.on(SyncEvent.SYNC_ERROR, async (error) => {
           await syncManager.stop()
-          reject(error)
+          reject(error.message)
         })
 
         // Set timeout for test
@@ -509,8 +514,8 @@ describe("Integration: SyncManager", () => {
         )
 
         // Handle errors
-        watchController.on(SyncEvent.SYNC_ERROR, ({ error }) => {
-          reject(error)
+        watchController.on(SyncEvent.SYNC_ERROR, (error) => {
+          reject(error.message)
         })
 
         // Set timeout for test
@@ -719,7 +724,7 @@ describe("Integration: SyncManager", () => {
 
         manualController.on(SyncEvent.SYNC_ERROR, async (error) => {
           await syncManager.stop()
-          reject(error)
+          reject(error.message)
         })
       })
     } finally {

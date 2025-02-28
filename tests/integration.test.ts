@@ -10,10 +10,10 @@ import {
   createTestFiles,
   spyOnClackPrompts,
   createTestComputer,
+  waitForEvent,
 } from "./test-helpers"
 import { stringify } from "yaml"
 import { SyncEvent, type SyncResult } from "../src/types"
-import { testLog } from "./setup"
 
 describe("Integration: SyncManager", () => {
   let tempDir: string
@@ -79,29 +79,22 @@ describe("Integration: SyncManager", () => {
 
     try {
       // Start manual mode and wait for first sync
-      const manualLoop = await syncManager.startManualMode()
+      const manualController = await syncManager.startManualMode()
 
-      await new Promise<void>((resolve, reject) => {
-        manualLoop.on(SyncEvent.SYNC_COMPLETE, async ({ successCount }) => {
-          testLog("SYNC_COMPLETE event received")
-          try {
-            const targetFile = path.join(computersDir, "1", "program.lua")
-            expect(await fs.exists(targetFile)).toBe(true)
-            expect(successCount).toBe(1)
-            await manualLoop.stop()
-            resolve()
-          } catch (err) {
-            reject(err)
-          }
-        })
+      const syncResult = await waitForEvent<SyncResult>(
+        manualController,
+        SyncEvent.SYNC_COMPLETE
+      )
 
-        manualLoop.on(SyncEvent.SYNC_ERROR, (error) => {
-          testLog("SYNC_ERROR event received:", error)
-          reject(error.message)
-        })
-      })
-    } catch (error) {
-      testLog(error)
+      // Verify results
+      const targetFile = path.join(computersDir, "1", "program.lua")
+      expect(await fs.exists(targetFile)).toBe(true)
+      expect(syncResult.successCount).toBe(1)
+      const content = await fs.readFile(
+        path.join(computersDir, "1", "program.lua"),
+        "utf8"
+      )
+      expect(content).toBe("print('Hello')")
     } finally {
       await syncManager.stop()
     }
@@ -134,100 +127,51 @@ describe("Integration: SyncManager", () => {
 
     const watchController = await syncManager.startWatchMode()
     try {
-      await new Promise<void>((resolve, reject) => {
-        // Track test phases
-        let initialSyncCompleted = false
-        let fileChangeDetected = false
-        let fileChangeSynced = false
+      const initialSyncResult = await waitForEvent<SyncResult>(
+        watchController,
+        SyncEvent.INITIAL_SYNC_COMPLETE
+      )
 
-        // Listen for initial sync completion
-        watchController.on(
-          SyncEvent.INITIAL_SYNC_COMPLETE,
-          async ({ successCount, errorCount, missingCount }) => {
-            try {
-              initialSyncCompleted = true
+      // Verify initial sync results
+      expect(initialSyncResult.successCount).toBe(2) // Both computers synced
+      expect(initialSyncResult.errorCount).toBe(0)
+      expect(initialSyncResult.missingCount).toBe(0)
 
-              // Verify initial sync results
-              expect(successCount).toBe(2) // Both computers synced
-              expect(errorCount).toBe(0)
-              expect(missingCount).toBe(0)
+      // Verify files were copied
+      expect(await fs.exists(path.join(computersDir, "1", "program.lua"))).toBe(
+        true
+      )
+      expect(await fs.exists(path.join(computersDir, "2", "program.lua"))).toBe(
+        true
+      )
 
-              // Verify files were copied
-              expect(
-                await fs.exists(path.join(computersDir, "1", "program.lua"))
-              ).toBe(true)
-              expect(
-                await fs.exists(path.join(computersDir, "2", "program.lua"))
-              ).toBe(true)
+      // Modify source file to trigger watch
+      await fs.writeFile(
+        path.join(sourceDir, "program.lua"),
+        "print('Updated')"
+      )
 
-              // Modify source file to trigger watch
-              await fs.writeFile(
-                path.join(sourceDir, "program.lua"),
-                "print('Updated')"
-              )
-              fileChangeDetected = true
-            } catch (err) {
-              reject(err)
-            }
-          }
-        )
+      const triggeredSyncResult = await waitForEvent<SyncResult>(
+        watchController,
+        SyncEvent.SYNC_COMPLETE
+      )
 
-        // Listen for file change sync
-        watchController.on(
-          SyncEvent.SYNC_COMPLETE,
-          async ({ successCount, errorCount, missingCount }) => {
-            if (
-              !initialSyncCompleted ||
-              !fileChangeDetected ||
-              fileChangeSynced
-            ) {
-              return // Only handle the first file change after initial sync
-            }
+      // Verify sync results
+      expect(triggeredSyncResult.successCount).toBe(2)
+      expect(triggeredSyncResult.errorCount).toBe(0)
+      expect(triggeredSyncResult.missingCount).toBe(0)
 
-            try {
-              fileChangeSynced = true
-
-              // Verify sync results
-              expect(successCount).toBe(2)
-              expect(errorCount).toBe(0)
-              expect(missingCount).toBe(0)
-
-              // Verify updated content was copied
-              const content1 = await fs.readFile(
-                path.join(computersDir, "1", "program.lua"),
-                "utf8"
-              )
-              const content2 = await fs.readFile(
-                path.join(computersDir, "2", "program.lua"),
-                "utf8"
-              )
-              expect(content1).toBe("print('Updated')")
-              expect(content2).toBe("print('Updated')")
-
-              // Test complete
-              await syncManager.stop()
-              resolve()
-            } catch (err) {
-              reject(err)
-            }
-          }
-        )
-
-        // Handle errors
-        watchController.on(SyncEvent.SYNC_ERROR, async (error) => {
-          await syncManager.stop()
-          reject(error.message)
-        })
-
-        // Set timeout for test
-        const timeout = setTimeout(async () => {
-          await syncManager.stop()
-          reject(new Error("Test timeout - watch events not received"))
-        }, 5000)
-
-        // Clean up timeout on success
-        process.once("beforeExit", () => clearTimeout(timeout))
-      })
+      // Verify updated content was copied
+      const content1 = await fs.readFile(
+        path.join(computersDir, "1", "program.lua"),
+        "utf8"
+      )
+      const content2 = await fs.readFile(
+        path.join(computersDir, "2", "program.lua"),
+        "utf8"
+      )
+      expect(content1).toBe("print('Updated')")
+      expect(content2).toBe("print('Updated')")
     } finally {
       await syncManager.stop()
     }

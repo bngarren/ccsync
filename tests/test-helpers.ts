@@ -2,7 +2,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises"
 import path from "path"
 import os from "os"
 import crypto from "crypto"
-import type { Computer, ResolvedFileRule } from "../src/types"
+import { SyncEvent, type Computer, type ResolvedFileRule } from "../src/types"
 import {
   getComputerShortPath,
   isRecursiveGlob,
@@ -12,6 +12,7 @@ import * as p from "@clack/prompts"
 import { mock } from "bun:test"
 import { DEFAULT_CONFIG, type SyncRule } from "../src/config"
 import * as yaml from "yaml"
+import type { IAppError } from "../src/errors"
 
 /**
  * Creates a new tmp directory in the operating system's default directory for temporary files.
@@ -69,10 +70,10 @@ export async function createTestComputer(
  *
  * ```
  * /targetDir
- *   - program.lua
- *   - startup.lua
+ *   - program.lua // "print('Hello')"
+ *   - startup.lua // "print('Startup')"
  *   /lib
- *     - utils.lua
+ *     - utils.lua // "-- Utils"
  * ```
  *
  * @param targetDir
@@ -289,4 +290,52 @@ export class TempCleaner {
     }
     this.tempDirs.clear()
   }
+}
+
+/**
+ * Creates a promise that resolves when an event is emitted or rejects on error/timeout
+ */
+export function waitForEvent<T>(
+  emitter: {
+    on: (event: any, callback: any) => void
+    off: (event: any, callback: any) => void
+  },
+  awaitedEvent: SyncEvent,
+  timeoutMs = 5000
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    // Set timeout to avoid test hanging
+    const timeout = setTimeout(() => {
+      cleanup()
+      reject(
+        new Error(
+          `Timed out waiting for ${SyncEvent[awaitedEvent]} after ${timeoutMs}ms`
+        )
+      )
+    }, timeoutMs)
+
+    // Success handler
+    const handleSuccess = (data: T) => {
+      cleanup()
+      resolve(data)
+    }
+
+    // Error handler
+    const handleError = (error: IAppError) => {
+      cleanup()
+      reject(new Error(`Operation failed: ${error.message}`))
+    }
+
+    // Clean up listeners
+    // The specific event listeners (handleSuccess and handleError) are removed so they don't continue to listen for events after the promise has settled
+    const cleanup = () => {
+      clearTimeout(timeout)
+      emitter.off(awaitedEvent, handleSuccess)
+      emitter.off(SyncEvent.SYNC_ERROR, handleError)
+    }
+
+    // Register listeners
+    emitter.on(awaitedEvent, handleSuccess)
+    emitter.on(SyncEvent.SYNC_ERROR, handleError)
+  })
 }

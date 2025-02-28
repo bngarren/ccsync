@@ -159,8 +159,9 @@ export class UI {
 
     // When status changes from "running" to a completion state
     if (
-      prevStatus === "running" &&
-      (status === "success" || status === "error" || status === "partial")
+      prevStatus === "running" ||
+      (prevStatus === "idle" &&
+        (status === "success" || status === "error" || status === "partial"))
     ) {
       // First clear any dynamic content
       logUpdate.clear()
@@ -264,7 +265,7 @@ export class UI {
       resultStats = `${theme.success(`Success.`)}`
     } else {
       resultStats =
-        `${theme.success(`Success: ${success}`)} ` +
+        `${success > 0 ? theme.success(`Success: ${success}`) : ""} ` +
         `${error > 0 ? theme.error(`Error: ${error}`) : ""} ` +
         (missing > 0 ? `${theme.warning(`Missing: ${missing}`)}` : "")
     }
@@ -277,7 +278,7 @@ export class UI {
 
   private renderComputerResults(): string {
     if (this.state.computerResults.length === 0) {
-      return theme.dim("  No files synced yet.")
+      return theme.dim("  No files synced.")
     }
 
     // Sort computers numerically if possible
@@ -475,7 +476,7 @@ export class UI {
     const statusMessage = this.getStatusMessage()
 
     // Log the static output
-    console.log("\n" + header)
+    console.log(header)
     console.log(computerResults)
     console.log(statusMessage)
     console.log(theme.dim("─".repeat(process.stdout.columns || 80))) // Separator line

@@ -295,7 +295,7 @@ export class UI {
     let output = ""
 
     // Generate output for each computer
-    for (const computer of sortedComputers) {
+    const computerOutputs = sortedComputers.map((computer) => {
       // Determine computer status icon
       let statusIcon
       let statusColor
@@ -323,21 +323,19 @@ export class UI {
       }
 
       // Start line with status icon and computer ID
-      output += `  ${statusColor(statusIcon)} Computer ${computer.computerId}: `
+      let computerOutput = `  ${statusColor(statusIcon)} Computer ${computer.computerId}: `
 
       // Summarize success/fail counts
       const successCount = computer.files.filter((f) => f.success).length
       const totalCount = computer.files.length
-      output += theme.dim(`(${successCount}/${totalCount}) `)
+      computerOutput += theme.dim(`(${successCount}/${totalCount}) `)
 
       if (!computer.exists) {
-        output += theme.warning("Missing computer")
-        continue
+        return computerOutput + theme.warning("Missing computer")
       }
 
       if (computer.files.length === 0) {
-        output += theme.dim("No files synced")
-        continue
+        return computerOutput + theme.dim("No files synced")
       }
 
       // Format file targets on same line
@@ -353,8 +351,11 @@ export class UI {
         return `${iconColor(fileIcon)} ${file.success ? displayPath : theme.dim(displayPath)}`
       })
 
-      output += fileTargets.join(" | ") + "\n"
-    }
+      return computerOutput + fileTargets.join(" | ")
+    })
+
+    // Join all computer outputs with newlines
+    output += computerOutputs.join("\n")
 
     return output
   }

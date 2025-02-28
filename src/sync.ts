@@ -190,7 +190,7 @@ export class SyncManager {
     }
 
     const copyResult = await copyFilesToComputer(filesToCopy, computer.path)
-    await setTimeout(250) // Small delay between computers
+    await setTimeout(100) // Small delay between computers
 
     return {
       computerId: computer.id,
@@ -262,7 +262,17 @@ export class SyncManager {
       missingCount: validation.missingComputerIds.length,
     }
 
-    // Process each computer
+    /**
+     * Execute the actual sync operation for each available computer:
+     * 1. Copy the files to each computer according to resolved rules
+     * 2. Track successful and failed file transfers
+     * 3. //TODO Handle duplicate rule scenarios (multiple rules targeting the same file)
+     * 4. Update UI with results for each computer
+     * 5. Aggregate results to determine overall sync status
+     *
+     * This is the core synchronization process where file transfers actually occur
+     * and success/failure is determined for the operation.
+     */
     for (const computer of validation.availableComputers) {
       const syncResult = await this.syncToComputer(
         computer,
@@ -277,14 +287,14 @@ export class SyncManager {
 
       // Process all copied files (successes)
       for (const filePath of syncResult.copiedFiles) {
-        // Find the rule for this file to get target path
-        const rule = validation.resolvedFileRules.find(
+        // Process ALL rules that match this file
+        const matchingRules = validation.resolvedFileRules.filter(
           (rule) =>
             rule.sourceAbsolutePath === filePath &&
             rule.computers.includes(computer.id)
         )
 
-        if (rule) {
+        for (const rule of matchingRules) {
           // Build the complete target path including filename
           let targetPath = rule.target.path
 
@@ -295,10 +305,11 @@ export class SyncManager {
           }
 
           // Find and update the file entry
-          const fileEntry = computerResult.files.find(
-            (f) => f.targetPath === targetPath
+          const fileEntries = computerResult.files.filter(
+            (f) => f.targetPath === targetPath && f.sourcePath === filePath
           )
-          if (fileEntry) {
+
+          for (const fileEntry of fileEntries) {
             fileEntry.success = true
           }
         }
@@ -312,7 +323,7 @@ export class SyncManager {
             `Error copying files to computer ${computer.id}: ${syncResult.errors[0]}`
           )
         }
-        syncResult.errors.forEach((error) => this.log.warn(`  ${error}`))
+        syncResult.errors.forEach((error) => console.log(`  ${error}`))
         result.errorCount++
       } else if (syncResult.copiedFiles.length > 0) {
         result.successCount++

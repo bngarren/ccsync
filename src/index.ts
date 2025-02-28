@@ -154,7 +154,7 @@ async function handleFatalError(
 }
 
 async function main() {
-  console.clear()
+  // console.clear()
 
   p.intro(`${color.magentaBright(`CC: Sync`)}`)
 

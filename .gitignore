@@ -20,7 +20,7 @@ logs
 .LSOverride
 
 # personal dev
-consolidated.md
+consolidated*.md
 notes.md
 TODO
 prompts.txt

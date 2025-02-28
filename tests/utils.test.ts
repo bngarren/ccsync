@@ -484,8 +484,6 @@ describe("File Operations", () => {
         const result = await copyFilesToComputer([resolvedFile], targetComputer)
         // THEN files should be copied with normalized paths
 
-        testLog(result.errors)
-
         expect(result.errors).toHaveLength(0)
         expect(result.copiedFiles).toHaveLength(1)
 

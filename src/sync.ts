@@ -401,9 +401,7 @@ export class SyncManager {
         console.error(error)
       })
 
-      try {
-        await manualController.start()
-      } catch (error) {
+      manualController.start().catch(async (error) => {
         // Controller start failed - this is a fatal error
         this.setState(SyncManagerState.ERROR)
 
@@ -415,7 +413,7 @@ export class SyncManager {
           "SyncManager.startManualMode",
           error
         )
-      }
+      })
       return manualController
     } catch (error) {
       this.setState(SyncManagerState.ERROR)
@@ -476,9 +474,8 @@ export class SyncManager {
         }
       })
 
-      try {
-        await watchController.start()
-      } catch (error) {
+      // Start the watch controller (do NOT await it!)
+      watchController.start().catch(async (error) => {
         // Controller start failed - this is a fatal error
         this.setState(SyncManagerState.ERROR)
 
@@ -490,7 +487,7 @@ export class SyncManager {
           "SyncManager.startWatchMode",
           error
         )
-      }
+      })
 
       return watchController
     } catch (error) {
@@ -511,6 +508,7 @@ export class SyncManager {
    * Stops the controller and UI
    */
   async stop(): Promise<void> {
+    console.log("SyncManager stop() called")
     if (
       this.state === SyncManagerState.STOPPED ||
       this.state === SyncManagerState.STOPPING
@@ -518,6 +516,7 @@ export class SyncManager {
       return
 
     this.setState(SyncManagerState.STOPPING)
+    console.log("SyncManager stopping")
 
     try {
       if (this.ui) {
@@ -677,6 +676,8 @@ class ManualModeController {
               "ManualModeController.performSyncCycle",
               error
             )
+
+      console.log(appError)
 
       // Emit the error event
       this.emit(SyncEvent.SYNC_ERROR, appError)

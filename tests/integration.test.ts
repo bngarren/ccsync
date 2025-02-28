@@ -56,7 +56,7 @@ describe("Integration: SyncManager", () => {
     clackPromptsSpy.cleanup()
   })
 
-  test.only("performs manual sync", async () => {
+  test("performs manual sync", async () => {
     const configPath = path.join(tempDir, ".ccsync.yaml")
     const configObject = withDefaultConfig({
       sourceRoot: sourceDir,

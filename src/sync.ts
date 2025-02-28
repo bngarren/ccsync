@@ -1,10 +1,8 @@
 import { watch } from "chokidar"
 import path from "node:path"
 import type { Config } from "./config"
-import { createLogger, type Logger } from "./log"
 import {
   type Computer,
-  type ValidationResult,
   type SyncResult,
   createTypedEmitter,
   type ManualSyncEvents,
@@ -27,6 +25,13 @@ import { setTimeout } from "node:timers/promises"
 import { glob } from "glob"
 import { AppError, ErrorSeverity, getErrorMessage } from "./errors"
 import { UI, UIMessageType } from "./ui"
+import {
+  createEmptySyncPlan,
+  createSyncPlanIssue,
+  SyncPlanIssueCategory,
+  SyncPlanIssueSeverity,
+  type SyncPlan,
+} from "./syncplan"
 
 enum SyncManagerState {
   IDLE,
@@ -38,17 +43,12 @@ enum SyncManagerState {
 }
 
 export class SyncManager {
-  private log: Logger
   private ui: UI | null = null
   private activeModeController:
     | ManualModeController
     | WatchModeController
     | null = null
-  private lastValidation: Readonly<{
-    validation: Readonly<ValidationResult>
-    computers: ReadonlyArray<Computer>
-    timestamp: number
-  }> | null = null
+  private lastSyncPlan: Readonly<SyncPlan> | null = null
 
   // STATE
   private state: SyncManagerState = SyncManagerState.IDLE
@@ -60,9 +60,7 @@ export class SyncManager {
     // );
   }
 
-  constructor(private config: Config) {
-    this.log = createLogger({ verbose: config.advanced.verbose })
-  }
+  constructor(private config: Config) {}
 
   // Public state query methods
   public isRunning(): boolean {
@@ -75,97 +73,221 @@ export class SyncManager {
 
   // Cache management
   private isCacheValid(): boolean {
-    if (!this.lastValidation?.timestamp) return false
-    if (this.activeModeController instanceof WatchModeController) return false
+    if (!this.lastSyncPlan?.timestamp) return false
 
-    const timeSinceLastValidation = Date.now() - this.lastValidation.timestamp
-    this.log.verbose(`Time since last validation: ${timeSinceLastValidation}ms`)
-    const isValid = timeSinceLastValidation < this.config.advanced.cache_ttl
-    this.log.verbose(`Cache valid? ${isValid}`)
+    // Always invalidate cache in watch mode for file changes
+    if (this.activeModeController instanceof WatchModeController) {
+      const controller = this.activeModeController
+      // Only invalidate if there are actual file changes
+      const changedFiles = controller.getChangedFiles()
+      if (changedFiles && changedFiles.size > 0) return false
+    }
+
+    const timeSinceLastPlan = Date.now() - this.lastSyncPlan.timestamp
+
+    // Check if we're within the TTL
+    const isValid = timeSinceLastPlan < this.config.advanced.cache_ttl
 
     return isValid
   }
 
   public invalidateCache(): void {
-    this.lastValidation = null
+    //this.log.verbose("Sync plan cache invalidated")
+    this.lastSyncPlan = null
   }
 
-  // Core validation and sync methods
-  public async runValidation(forceRefresh = false): Promise<ValidationResult> {
-    if (!forceRefresh && this.isCacheValid()) {
-      if (this.lastValidation?.validation) {
-        this.log.verbose("Using cached validation results")
-        return this.lastValidation.validation
-      }
+  /**
+   * Creates a sync plan that maps source files to target computers
+   * This replaces the old runValidation method with a more structured approach
+   */
+  public async createSyncPlan(forceRefresh = false): Promise<SyncPlan> {
+    // Check cache first
+    if (!forceRefresh && this.isCacheValid() && this.lastSyncPlan) {
+      return this.lastSyncPlan
     }
 
-    const result: ValidationResult = {
-      resolvedFileRules: [],
-      availableComputers: [],
-      missingComputerIds: [],
-      errors: [],
-    }
+    // Create a base sync plan
+    const plan = createEmptySyncPlan()
 
     try {
-      // Validate save directory
-      const saveDirValidation = await validateMinecraftSave(
-        this.config.minecraftSavePath
-      )
-      if (!saveDirValidation.isValid) {
-        result.errors.push(...saveDirValidation.errors)
-        return result
+      // Step 1: Validate save directory
+      try {
+        const saveDirValidation = await validateMinecraftSave(
+          this.config.minecraftSavePath
+        )
+
+        if (!saveDirValidation.isValid) {
+          // Add save directory issues to the plan
+          saveDirValidation.errors.forEach((error) => {
+            plan.issues.push(
+              createSyncPlanIssue(
+                error,
+                SyncPlanIssueCategory.SAVE_DIRECTORY,
+                SyncPlanIssueSeverity.ERROR,
+                { source: "validateMinecraftSave" }
+              )
+            )
+          })
+
+          if (saveDirValidation.missingFiles?.length > 0) {
+            plan.issues.push(
+              createSyncPlanIssue(
+                `Missing files in save directory: ${saveDirValidation.missingFiles.join(", ")}`,
+                SyncPlanIssueCategory.SAVE_DIRECTORY,
+                SyncPlanIssueSeverity.WARNING,
+                {
+                  source: "validateMinecraftSave",
+                  suggestion:
+                    "Ensure this is a valid Minecraft save with ComputerCraft installed",
+                }
+              )
+            )
+          }
+
+          plan.isValid = false
+          return plan
+        }
+      } catch (err) {
+        plan.issues.push(
+          createSyncPlanIssue(
+            `Failed to validate save directory: ${err instanceof Error ? err.message : String(err)}`,
+            SyncPlanIssueCategory.SAVE_DIRECTORY,
+            SyncPlanIssueSeverity.ERROR,
+            { source: "createSyncPlan" }
+          )
+        )
+        plan.isValid = false
+        return plan
       }
 
-      // Discover computers
+      // Step 2: Discover computers
       let computers: Computer[] = []
       try {
         computers = await findMinecraftComputers(this.config.minecraftSavePath)
+
+        if (computers.length === 0) {
+          plan.issues.push(
+            createSyncPlanIssue(
+              "No computers found in the save directory",
+              SyncPlanIssueCategory.COMPUTER,
+              SyncPlanIssueSeverity.WARNING,
+              {
+                source: "findMinecraftComputers",
+                suggestion:
+                  "Create a computer in-game first, or if using a test environment, add a dummy file to a computer directory",
+              }
+            )
+          )
+        }
       } catch (err) {
-        result.errors.push(
-          `Failed to find computers: ${err instanceof Error ? err.message : String(err)}`
+        plan.issues.push(
+          createSyncPlanIssue(
+            `Failed to find computers: ${err instanceof Error ? err.message : String(err)}`,
+            SyncPlanIssueCategory.COMPUTER,
+            SyncPlanIssueSeverity.ERROR,
+            { source: "createSyncPlan" }
+          )
         )
-        return result
+        plan.isValid = false
+        return plan
       }
 
-      if (computers.length === 0) {
-        result.errors.push(
-          "No computers found in the save directory. Try adding a dummy file to a computer and then re-run CC:Sync."
-        )
-        return result
-      }
-
-      // Get changed files from watch mode if applicable
+      // Step 3: Get changed files from watch mode if applicable
       const changedFiles =
         this.activeModeController instanceof WatchModeController
           ? this.activeModeController.getChangedFiles()
           : undefined
 
-      // Validate the file sync rules
-      const validation = await resolveSyncRules(
-        this.config,
-        computers,
-        changedFiles
+      // Step 4: Resolve sync rules
+      try {
+        const ruleResolution = await resolveSyncRules(
+          this.config,
+          computers,
+          changedFiles
+        )
+
+        // Add resolved files to the plan
+        plan.resolvedFileRules = ruleResolution.resolvedFileRules
+        plan.availableComputers = ruleResolution.availableComputers
+        plan.missingComputerIds = ruleResolution.missingComputerIds
+
+        // Add any errors as issues
+        if (ruleResolution.errors.length > 0) {
+          ruleResolution.errors.forEach((error) => {
+            // Determine if this is a fatal error or just a warning
+            // Errors about missing files are warnings, configuration issues are errors
+            const isFatal =
+              error.includes("cannot be accessed") ||
+              error.includes("Invalid pattern") ||
+              error.includes("Permission denied")
+
+            plan.issues.push(
+              createSyncPlanIssue(
+                error,
+                SyncPlanIssueCategory.RULE,
+                isFatal
+                  ? SyncPlanIssueSeverity.ERROR
+                  : SyncPlanIssueSeverity.WARNING,
+                { source: "resolveSyncRules" }
+              )
+            )
+          })
+        }
+
+        // Add missing computers as warnings
+        if (ruleResolution.missingComputerIds.length > 0) {
+          plan.issues.push(
+            createSyncPlanIssue(
+              `Missing computers: ${ruleResolution.missingComputerIds.join(", ")}`,
+              SyncPlanIssueCategory.COMPUTER,
+              SyncPlanIssueSeverity.WARNING,
+              {
+                source: "resolveSyncRules",
+                suggestion:
+                  "These computers were referenced in rules but not found in the save directory",
+              }
+            )
+          )
+        }
+      } catch (err) {
+        plan.issues.push(
+          createSyncPlanIssue(
+            `Failed to resolve sync rules: ${err instanceof Error ? err.message : String(err)}`,
+            SyncPlanIssueCategory.RULE,
+            SyncPlanIssueSeverity.ERROR,
+            { source: "createSyncPlan" }
+          )
+        )
+        plan.isValid = false
+        return plan
+      }
+
+      // Determine if the plan is valid (no ERROR severity issues)
+      plan.isValid = !plan.issues.some(
+        (issue) => issue.severity === SyncPlanIssueSeverity.ERROR
       )
 
-      // If validation has errors, return them
-      if (validation.errors.length > 0) {
-        return validation
+      // Cache successful plan
+      if (plan.isValid) {
+        this.lastSyncPlan = { ...plan, timestamp: Date.now() }
+      } else {
+        this.lastSyncPlan = null
       }
 
-      // Cache successful validation results
-      this.lastValidation = {
-        validation,
-        computers,
-        timestamp: Date.now(),
-      }
-      return validation
+      return plan
     } catch (err) {
-      // For unexpected errors (not validation errors), add to result
-      result.errors.push(
-        `Unexpected validation error: ${err instanceof Error ? err.message : String(err)}`
+      // Handle unexpected errors
+      plan.issues.push(
+        createSyncPlanIssue(
+          `Unexpected error creating sync plan: ${err instanceof Error ? err.message : String(err)}`,
+          SyncPlanIssueCategory.OTHER,
+          SyncPlanIssueSeverity.ERROR,
+          { source: "createSyncPlan" }
+        )
       )
-      this.lastValidation = null
-      return result
+      plan.isValid = false
+      this.lastSyncPlan = null
+      return plan
     }
   }
 
@@ -200,7 +322,7 @@ export class SyncManager {
     }
   }
 
-  public async performSync(validation: ValidationResult): Promise<SyncResult> {
+  public async performSync(syncPlan: SyncPlan): Promise<SyncResult> {
     if (this.state !== SyncManagerState.RUNNING) {
       throw new Error("Cannot perform sync when not in RUNNING state")
     }
@@ -210,14 +332,14 @@ export class SyncManager {
     const allComputerIds = new Set<string>()
 
     // First create entries for all computers
-    for (const rule of validation.resolvedFileRules) {
+    for (const rule of syncPlan.resolvedFileRules) {
       for (const computerId of rule.computers) {
         // Create computer if it doesn't exist yet
         if (!allComputerIds.has(computerId)) {
           allComputerIds.add(computerId)
 
           // Check if this is a missing computer
-          const isExisting = validation.availableComputers.some(
+          const isExisting = syncPlan.availableComputers.some(
             (c) => c.id === computerId
           )
 
@@ -256,7 +378,7 @@ export class SyncManager {
     const result: SyncResult = {
       successCount: 0,
       errorCount: 0,
-      missingCount: validation.missingComputerIds.length,
+      missingCount: syncPlan.missingComputerIds.length,
     }
 
     // Record warnings during sync for UI display
@@ -273,10 +395,10 @@ export class SyncManager {
      * This is the core synchronization process where file transfers actually occur
      * and success/failure is determined for the operation.
      */
-    for (const computer of validation.availableComputers) {
+    for (const computer of syncPlan.availableComputers) {
       const syncResult = await this.syncToComputer(
         computer,
-        validation.resolvedFileRules
+        syncPlan.resolvedFileRules
       )
 
       // Find this computer in our results array
@@ -288,7 +410,7 @@ export class SyncManager {
       // Process all copied files (successes)
       for (const filePath of syncResult.copiedFiles) {
         // Process ALL rules that match this file
-        const matchingRules = validation.resolvedFileRules.filter(
+        const matchingRules = syncPlan.resolvedFileRules.filter(
           (rule) =>
             rule.sourceAbsolutePath === filePath &&
             rule.computers.includes(computer.id)
@@ -344,8 +466,8 @@ export class SyncManager {
     }
 
     // Handle missing computers as warnings
-    if (validation.missingComputerIds.length > 0) {
-      const missingMessage = `Missing computers: ${validation.missingComputerIds.join(", ")}`
+    if (syncPlan.missingComputerIds.length > 0) {
+      const missingMessage = `Missing computers: ${syncPlan.missingComputerIds.join(", ")}`
       warningMessages.push(missingMessage)
 
       if (this.ui) {
@@ -400,7 +522,7 @@ export class SyncManager {
       // Initialize UI for manual mode
       this.ui = new UI(this.config.sourceRoot, SyncMode.MANUAL)
 
-      const manualController = new ManualModeController(this, this.log, this.ui)
+      const manualController = new ManualModeController(this, this.ui)
       this.activeModeController = manualController
 
       // Listen for controller state changes
@@ -474,7 +596,6 @@ export class SyncManager {
       const watchController = new WatchModeController(
         this,
         this.config,
-        this.log,
         this.ui
       )
       this.activeModeController = watchController
@@ -577,7 +698,6 @@ class ManualModeController {
 
   constructor(
     private syncManager: SyncManager,
-    private log: Logger,
     private ui: UI | null = null
   ) {}
 
@@ -668,33 +788,46 @@ class ManualModeController {
     this.ui?.startSyncOperation()
 
     try {
-      const validation = await this.syncManager.runValidation()
-      this.emit(SyncEvent.SYNC_VALIDATION, validation)
+      const syncPlan = await this.syncManager.createSyncPlan()
+      this.emit(SyncEvent.SYNC_PLANNED, syncPlan)
 
-      // console.log("ManualModeController>performSyncCycle", { validation })
-
-      // Check if validation has errors
-      if (validation.errors.length > 0) {
-        // Add each validation error as an error message
-        if (this.ui) {
-          validation.errors.forEach((error) => {
-            this.ui?.addMessage(UIMessageType.ERROR, error)
+      // Add each error message to UI
+      if (this.ui) {
+        syncPlan.issues
+          .filter((issue) => issue.severity === SyncPlanIssueSeverity.ERROR)
+          .forEach((issue) => {
+            this.ui?.addMessage(UIMessageType.ERROR, issue.message)
           })
-          this.ui.completeOperation(SyncOperationResult.ERROR)
-        }
 
+        // Also add warnings
+        syncPlan.issues
+          .filter((issue) => issue.severity === SyncPlanIssueSeverity.WARNING)
+          .forEach((issue) => {
+            this.ui?.addMessage(UIMessageType.WARNING, issue.message)
+          })
+      }
+
+      // Check if the plan has critical issues
+      if (!syncPlan.isValid) {
         // Create an AppError and emit it
+        const errorMessages = syncPlan.issues
+          .filter((issue) => issue.severity === SyncPlanIssueSeverity.ERROR)
+          .map((issue) => issue.message)
+          .join(", ")
+
         const validationError = AppError.error(
-          "Validation failed: " + validation.errors.join(", "),
-          "ManualModeController.validation"
+          "Sync plan creation failed: " + errorMessages,
+          "ManualModeController.createSyncPlan"
         )
         this.emit(SyncEvent.SYNC_ERROR, validationError)
+
+        this.ui?.completeOperation(SyncOperationResult.ERROR)
 
         return // Stop here, don't proceed with sync
       }
 
       const { successCount, errorCount, missingCount } =
-        await this.syncManager.performSync(validation)
+        await this.syncManager.performSync(syncPlan)
 
       this.emit(SyncEvent.SYNC_COMPLETE, {
         successCount,
@@ -789,7 +922,6 @@ class WatchModeController {
   constructor(
     private syncManager: SyncManager,
     private config: Config,
-    private log: Logger,
     private ui: UI | null = null
   ) {}
 
@@ -910,33 +1042,47 @@ class WatchModeController {
         }
       }
 
-      // Perform validation
-      const validation = await this.syncManager.runValidation(true)
-      this.emit(SyncEvent.SYNC_VALIDATION, validation)
+      const syncPlan = await this.syncManager.createSyncPlan()
+      this.emit(SyncEvent.SYNC_PLANNED, syncPlan)
 
-      // Check if validation has errors
-      if (validation.errors.length > 0) {
-        // Add each validation error as an error message
-        if (this.ui) {
-          validation.errors.forEach((error) => {
-            this.ui?.addMessage(UIMessageType.ERROR, error)
+      // Add each error message to UI
+      if (this.ui) {
+        syncPlan.issues
+          .filter((issue) => issue.severity === SyncPlanIssueSeverity.ERROR)
+          .forEach((issue) => {
+            this.ui?.addMessage(UIMessageType.ERROR, issue.message)
           })
-          this.ui.completeOperation(SyncOperationResult.ERROR)
-        }
 
+        // Also add warnings
+        syncPlan.issues
+          .filter((issue) => issue.severity === SyncPlanIssueSeverity.WARNING)
+          .forEach((issue) => {
+            this.ui?.addMessage(UIMessageType.WARNING, issue.message)
+          })
+      }
+
+      // Check if the plan has critical issues
+      if (!syncPlan.isValid) {
         // Create an AppError and emit it
-        const validationError = AppError.fatal(
-          "Validation failed: " + validation.errors.join(", "),
-          "WatchModeController.validation"
+        const errorMessages = syncPlan.issues
+          .filter((issue) => issue.severity === SyncPlanIssueSeverity.ERROR)
+          .map((issue) => issue.message)
+          .join(", ")
+
+        const validationError = AppError.error(
+          "Sync plan creation failed: " + errorMessages,
+          "ManualModeController.createSyncPlan"
         )
         this.emit(SyncEvent.SYNC_ERROR, validationError)
 
-        return // Don't proceed with sync
+        this.ui?.completeOperation(SyncOperationResult.ERROR)
+
+        return // Stop here, don't proceed with sync
       }
 
       // Perform sync
       const { successCount, errorCount, missingCount } =
-        await this.syncManager.performSync(validation)
+        await this.syncManager.performSync(syncPlan)
 
       // Emit appropriate event based on sync type
       if (this.isInitialSync) {

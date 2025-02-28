@@ -229,13 +229,25 @@ export class UI {
     })
   }
 
-  startSyncOperation(): void {
-    this.queueStateUpdate({
+  /**
+   *
+   * In contrast to other UI methods, we don't _queue_ the UIState updates here, we peform them synchronously so that the calling code is assured it has a clean, expected state before beginning another sync operation.
+   */
+  startSyncOperation(
+    options: { clearMessages: boolean } = { clearMessages: true }
+  ): void {
+    const updates: Partial<UIState> = {
       status: UIStatus.SYNCING,
       operationResult: SyncOperationResult.NONE,
-      messages: [],
       lastUpdated: new Date(),
-    })
+    }
+
+    if (options.clearMessages) {
+      updates.messages = []
+    }
+
+    // Apply updates synchronously
+    this.state = { ...this.state, ...updates }
   }
 
   // Complete an operation and log results

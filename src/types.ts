@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events"
 import type { IAppError } from "./errors"
+import type { SyncPlan } from "./syncplan"
 
 export enum SyncMode {
   MANUAL = "manual",
@@ -102,7 +103,7 @@ export interface SyncResult {
 export enum SyncEvent {
   STARTED,
   STOPPED,
-  SYNC_VALIDATION,
+  SYNC_PLANNED,
   SYNC_COMPLETE,
   SYNC_ERROR,
   INITIAL_SYNC_COMPLETE,
@@ -114,7 +115,7 @@ export enum SyncEvent {
 
 type CommonSyncEvents = {
   [SyncEvent.STARTED]: void
-  [SyncEvent.SYNC_VALIDATION]: ValidationResult
+  [SyncEvent.SYNC_PLANNED]: SyncPlan
   [SyncEvent.SYNC_COMPLETE]: SyncResult
   [SyncEvent.SYNC_ERROR]: IAppError
   [SyncEvent.STOPPED]: void

@@ -38,7 +38,7 @@ rules:
 # Advanced configuration options
 advanced:
   # Enable verbose logging
-  verbose: false
+  verbose: true
 
   # How long to cache validation results (milliseconds)
   # Lower = more accurate but more CPU intensive, Higher = faster but may miss changes

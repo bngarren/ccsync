@@ -53,14 +53,14 @@ function displaySyncPlanIssues(syncPlan: SyncPlan, ui: UI | null): void {
   syncPlan.issues
     .filter((issue) => issue.severity === SyncPlanIssueSeverity.ERROR)
     .forEach((issue) => {
-      ui.addMessage(UIMessageType.ERROR, issue.message)
+      ui.addMessage(UIMessageType.ERROR, issue.message, issue.suggestion)
     })
 
   // Display warnings
   syncPlan.issues
     .filter((issue) => issue.severity === SyncPlanIssueSeverity.WARNING)
     .forEach((issue) => {
-      ui.addMessage(UIMessageType.WARNING, issue.message)
+      ui.addMessage(UIMessageType.WARNING, issue.message, issue.suggestion)
     })
 }
 
@@ -359,6 +359,8 @@ export class SyncManager {
 
     const allComputerIds = new Set<string>()
 
+    let totalAttemptedFiles = 0
+
     // First create entries for all computers
     for (const fileRule of syncPlan.resolvedFileRules) {
       for (const computerId of fileRule.computers) {
@@ -400,6 +402,7 @@ export class SyncManager {
           sourcePath: fileRule.sourceAbsolutePath,
           success: false, // Mark all as unsuccessful initially
         })
+        totalAttemptedFiles++
       }
     }
 
@@ -493,16 +496,6 @@ export class SyncManager {
       }
     }
 
-    // Handle missing computers as warnings
-    if (syncPlan.missingComputerIds.length > 0) {
-      const missingMessage = `Missing computers: ${syncPlan.missingComputerIds.join(", ")}`
-      warningMessages.push(missingMessage)
-
-      if (this.ui) {
-        this.ui.addMessage(UIMessageType.WARNING, missingMessage)
-      }
-    }
-
     // Determine overall operation result
     let operationResult = SyncOperationResult.SUCCESS
 
@@ -517,7 +510,7 @@ export class SyncManager {
     // Update UI with final results
     if (this.ui) {
       this.ui.updateOperationStats({
-        totalFiles: syncPlan.resolvedFileRules.length,
+        totalFiles: totalAttemptedFiles,
         totalComputers: allComputerIds.size,
       })
       this.ui.updateComputerResults(computerResults)
@@ -1009,7 +1002,6 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
 
       // Update UI to show sync is starting
       if (this.ui) {
-        this.ui.startSyncOperation()
         this.ui.addMessage(
           UIMessageType.INFO,
           `File changed: ${path.basename(changedPath)}`
@@ -1024,20 +1016,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       this.emit(SyncEvent.SYNC_PLANNED, syncPlan)
 
       // Add each error message to UI
-      if (this.ui) {
-        syncPlan.issues
-          .filter((issue) => issue.severity === SyncPlanIssueSeverity.ERROR)
-          .forEach((issue) => {
-            this.ui?.addMessage(UIMessageType.ERROR, issue.message)
-          })
-
-        // Also add warnings
-        syncPlan.issues
-          .filter((issue) => issue.severity === SyncPlanIssueSeverity.WARNING)
-          .forEach((issue) => {
-            this.ui?.addMessage(UIMessageType.WARNING, issue.message)
-          })
-      }
+      displaySyncPlanIssues(syncPlan, this.ui)
 
       // Check if the plan has critical issues
       if (!syncPlan.isValid) {
@@ -1059,23 +1038,14 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       }
 
       // Perform sync
-      const { successCount, errorCount, missingCount } =
-        await this.syncManager.performSync(syncPlan)
+      const syncResult = await this.syncManager.performSync(syncPlan)
 
       // Emit appropriate event based on sync type
       if (this.isInitialSync) {
         this.isInitialSync = false
-        this.emit(SyncEvent.INITIAL_SYNC_COMPLETE, {
-          successCount,
-          errorCount,
-          missingCount,
-        })
+        this.emit(SyncEvent.INITIAL_SYNC_COMPLETE, syncResult)
       } else {
-        this.emit(SyncEvent.SYNC_COMPLETE, {
-          successCount,
-          errorCount,
-          missingCount,
-        })
+        this.emit(SyncEvent.SYNC_COMPLETE, syncResult)
         // Clear changed files after successful non-initial sync
         this.changedFiles.clear()
       }

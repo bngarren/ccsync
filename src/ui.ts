@@ -72,6 +72,7 @@ export enum UIMessageType {
 export interface UIMessage {
   type: UIMessageType
   content: string
+  suggestion?: string
   timestamp: Date
 }
 
@@ -101,8 +102,6 @@ export class UI {
   private isRendering = false // lock to prevent concurrent renders
   private lastRenderTime = 0 // Timestamp of last render
   private renderTimer: ReturnType<typeof setTimeout> | null = null // Timer for debounced rendering
-  private pendingStateUpdates: Partial<UIState> = {}
-  private hasPendingUpdates = false
   private syncsComplete = 0
 
   // Add a class property to track the spinner animation
@@ -152,8 +151,6 @@ export class UI {
 
     this.isActive = true
     this.isRendering = false
-    this.hasPendingUpdates = false
-    this.pendingStateUpdates = {}
     this.syncsComplete = 0
     this.spinnerIndex = 0
 
@@ -196,39 +193,47 @@ export class UI {
     logUpdate.done()
   }
 
-  /**
-   * Update the UI's status
-   */
+  private updateState(update: Partial<UIState>): void {
+    if (!this.isActive) return
+
+    // Apply updates immediately to the state
+    this.state = { ...this.state, ...update }
+
+    // Queue a render with debouncing preserved
+    this.queueRender()
+  }
+
   updateUIStatus(newStatus: UIStatus): void {
-    this.queueStateUpdate({ status: newStatus, lastUpdated: new Date() })
+    this.updateState({ status: newStatus, lastUpdated: new Date() })
   }
 
   updateOperationResult(result: SyncOperationResult): void {
-    this.queueStateUpdate({ operationResult: result, lastUpdated: new Date() })
+    this.updateState({ operationResult: result, lastUpdated: new Date() })
   }
 
   updateOperationStats(stats: OperationStats): void {
-    this.queueStateUpdate({ operationsStats: stats })
+    this.updateState({ operationsStats: stats })
   }
 
-  addMessage(type: UIMessageType, content: string): void {
+  addMessage(type: UIMessageType, content: string, suggestion?: string): void {
     const message: UIMessage = {
       type,
       content,
+      suggestion,
       timestamp: new Date(),
     }
 
     // Clone the current messages array and add the new message
     const messages = [...this.state.messages, message]
-    this.queueStateUpdate({ messages, lastUpdated: new Date() })
+    this.updateState({ messages, lastUpdated: new Date() })
   }
 
   clearMessages(): void {
-    this.queueStateUpdate({ messages: [], lastUpdated: new Date() })
+    this.updateState({ messages: [], lastUpdated: new Date() })
   }
 
   setReady(): void {
-    this.queueStateUpdate({
+    this.updateState({
       status: UIStatus.READY,
       lastUpdated: new Date(),
     })
@@ -277,7 +282,7 @@ export class UI {
   }
 
   updateComputerResults(computerResults: ComputerSyncResult[]): void {
-    this.queueStateUpdate({
+    this.updateState({
       computerResults,
       lastUpdated: new Date(),
     })
@@ -333,19 +338,11 @@ export class UI {
 
     let result = ""
 
-    switch (this.state.operationResult) {
-      case SyncOperationResult.SUCCESS:
-        result = theme.success("Success.")
-        break
-      case SyncOperationResult.WARNING:
-        result = `${theme.success("Success")} ${theme.warning("(with warnings)")}`
-        break
-      case SyncOperationResult.PARTIAL:
-        result = theme.warning("Some files were not synced.")
-        break
-      default:
-        result = ""
-        break
+    if (
+      this.state.operationResult === SyncOperationResult.SUCCESS &&
+      this.state.messages.every((m) => m.type === UIMessageType.INFO)
+    ) {
+      result = theme.success("Success.")
     }
 
     return theme.bold(
@@ -459,25 +456,37 @@ export class UI {
 
     // Render errors first
     if (byType[UIMessageType.ERROR].length > 0) {
-      output.push(theme.error("\n  Errors:"))
+      output.push(theme.error("\n"))
       byType[UIMessageType.ERROR].forEach((msg) => {
-        output.push(theme.error(`  ${symbols.cross} ${msg.content}`))
+        output.push(
+          theme.error(
+            `  ${symbols.cross} ${msg.content} ${msg.suggestion ? theme.dim(`- ${msg.suggestion}`) : ""}`
+          )
+        )
       })
     }
 
     // Then warnings
     if (byType[UIMessageType.WARNING].length > 0) {
-      output.push(theme.warning("\n  Warnings:"))
+      output.push(theme.warning("\n"))
       byType[UIMessageType.WARNING].forEach((msg) => {
-        output.push(theme.warning(`  ${symbols.warning} ${msg.content}`))
+        output.push(
+          theme.warning(
+            `  ${symbols.warning} ${msg.content} ${msg.suggestion ? theme.dim(`- ${msg.suggestion}`) : ""}`
+          )
+        )
       })
     }
 
     // Finally info messages
     if (byType[UIMessageType.INFO].length > 0) {
-      output.push(theme.info("\n  Info:"))
+      output.push(theme.info("\n"))
       byType[UIMessageType.INFO].forEach((msg) => {
-        output.push(theme.info(`  ${symbols.info} ${msg.content}`))
+        output.push(
+          theme.info(
+            `  ${symbols.info} ${msg.content} ${msg.suggestion ? theme.dim(`- ${msg.suggestion}`) : ""}`
+          )
+        )
       })
     }
 
@@ -515,38 +524,11 @@ export class UI {
     )
   }
 
-  private queueStateUpdate(update: Partial<UIState>): void {
-    if (!this.isActive) return
-
-    // Merge the update with any pending updates
-    this.pendingStateUpdates = { ...this.pendingStateUpdates, ...update }
-    this.hasPendingUpdates = true
-
-    // Queue a render to apply these updates
-    this.queueRender()
-  }
-
-  private applyPendingUpdates(): void {
-    if (!this.hasPendingUpdates) return
-
-    // Apply all pending updates to the state
-    this.state = { ...this.state, ...this.pendingStateUpdates }
-
-    // Reset pending updates
-    this.pendingStateUpdates = {}
-    this.hasPendingUpdates = false
-  }
-
   private queueRender(): void {
     if (!this.isActive) return
 
-    // If already rendering, mark that another render is needed
-    if (this.isRendering) {
-      return
-    }
-
-    // If a render is already queued, don't queue another one
-    if (this.renderTimer) return
+    // If already rendering, don't queue another render
+    if (this.isRendering || this.renderTimer) return
 
     // Determine delay before next render
     const now = Date.now()
@@ -562,9 +544,6 @@ export class UI {
 
   // This logs the sync results to the console and doesn't use logUpdate
   private logSyncSummary(): void {
-    // Force apply any pending updates first
-    this.applyPendingUpdates()
-
     const header = this.renderHeaderLine()
     const computerResults = this.renderComputerResults()
     const messages = this.renderMessages()
@@ -583,9 +562,6 @@ export class UI {
     this.isRendering = true
 
     try {
-      // Apply any pending state updates
-      this.applyPendingUpdates()
-
       // Status indicator shows activity when syncing
       let statusIndicator = ""
       if (this.state.status === UIStatus.SYNCING) {

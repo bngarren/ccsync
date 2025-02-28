@@ -24,11 +24,11 @@ rules:
   # Sync to a specific computer:
   - source: "*.lua" # File in your sourceRoot
     target: "/test" # Where to put it on the computer
-    computers: ["1"] # Computer IDs to sync to
+    computers: ["monitors"] # Computer IDs to sync to
 
-  - source: "c.lua" # File in your sourceRoot
-    target: "/test" # Where to put it on the computer
-    computers: ["1"] # Computer IDs to sync to
+  # - source: "c.lua" # File in your sourceRoot
+  #   target: "/test" # Where to put it on the computer
+  #   computers: ["1"] # Computer IDs to sync to
   #
   # Sync to a group of computers:
   # - source: "lib/*.lua"      # Glob patterns supported

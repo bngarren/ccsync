@@ -12,6 +12,7 @@ import {
   SyncEvent,
   type ResolvedFileRule,
   type ComputerSyncResult,
+  SyncMode,
 } from "./types"
 import {
   validateMinecraftSave,
@@ -379,7 +380,7 @@ export class SyncManager {
       this.setState(SyncManagerState.STARTING)
 
       // Initialize UI for manual mode
-      this.ui = new UI(this.config.sourceRoot, "manual")
+      this.ui = new UI(this.config.sourceRoot, SyncMode.MANUAL)
 
       const manualController = new ManualModeController(this, this.log, this.ui)
       this.activeModeController = manualController
@@ -450,7 +451,7 @@ export class SyncManager {
       this.setState(SyncManagerState.STARTING)
 
       // Initialize UI for watch mode
-      this.ui = new UI(this.config.sourceRoot, "watch")
+      this.ui = new UI(this.config.sourceRoot, SyncMode.WATCH)
 
       const watchController = new WatchModeController(
         this,

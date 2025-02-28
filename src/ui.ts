@@ -3,7 +3,7 @@ import { setInterval, clearInterval, setTimeout } from "node:timers"
 import logUpdate from "log-update"
 import figures from "figures"
 import chalk from "chalk"
-import type { ComputerSyncResult } from "./types"
+import type { ComputerSyncResult, SyncMode } from "./types"
 import boxen from "boxen"
 import { pluralize } from "./utils"
 
@@ -71,7 +71,7 @@ export class UI {
   private spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
   private spinnerIndex = 0
 
-  constructor(sourceRoot: string, mode: "watch" | "manual") {
+  constructor(sourceRoot: string, mode: SyncMode) {
     // super();
     this.sourceRoot = sourceRoot
     this.state = {
@@ -495,7 +495,7 @@ export class UI {
 
       // Only show status indicator if we're in running state
       const statusIndicator =
-        this.state.status === "running" ? `\n${this.getStatusMessage()}` : ""
+        this.state.status === "running" ? `${this.getStatusMessage()}` : ""
 
       const controlsTitle =
         this.state.mode === "manual"

@@ -13,6 +13,7 @@ import {
   type ResolvedFileRule,
   type ComputerSyncResult,
   SyncMode,
+  SyncOperationResult,
 } from "./types"
 import {
   validateMinecraftSave,
@@ -25,7 +26,7 @@ import { KeyHandler } from "./keys"
 import { setTimeout } from "node:timers/promises"
 import { glob } from "glob"
 import { AppError, ErrorSeverity, getErrorMessage } from "./errors"
-import { UI } from "./ui"
+import { UI, UIMessageType } from "./ui"
 
 enum SyncManagerState {
   IDLE,
@@ -252,16 +253,14 @@ export class SyncManager {
       }
     }
 
-    // Update UI status
-    if (this.ui) {
-      this.ui.updateStatus("running", "Syncing files to computers...")
-    }
-
     const result: SyncResult = {
       successCount: 0,
       errorCount: 0,
       missingCount: validation.missingComputerIds.length,
     }
+
+    // Record warnings during sync for UI display
+    const warningMessages: string[] = []
 
     /**
      * Execute the actual sync operation for each available computer:
@@ -316,37 +315,56 @@ export class SyncManager {
         }
       }
 
-      // Log any errors
+      // Handle errors
       if (syncResult.errors.length > 0) {
-        if (this.ui) {
-          this.ui.updateStatus(
-            "error",
-            `Error copying files to computer ${computer.id}: ${syncResult.errors[0]}`
-          )
-        }
-        syncResult.errors.forEach((error) => console.log(`  ${error}`))
         result.errorCount++
+
+        // Report each error to the UI
+        if (this.ui) {
+          syncResult.errors.forEach((error) => {
+            this.ui?.addMessage(
+              UIMessageType.ERROR,
+              `Error copying to computer ${computer.id}: ${error}`
+            )
+          })
+        }
       } else if (syncResult.copiedFiles.length > 0) {
         result.successCount++
       }
+
+      // Handle skipped files as warnings
+      if (syncResult.skippedFiles.length > 0) {
+        const skipMessage = `Skipped ${syncResult.skippedFiles.length} file(s) for computer ${computer.id}`
+        warningMessages.push(skipMessage)
+
+        if (this.ui) {
+          this.ui.addMessage(UIMessageType.WARNING, skipMessage)
+        }
+      }
     }
 
-    // Determine overall status
-    const statusMessage = ""
-    let status: "success" | "error" | "partial" = "success"
+    // Handle missing computers as warnings
+    if (validation.missingComputerIds.length > 0) {
+      const missingMessage = `Missing computers: ${validation.missingComputerIds.join(", ")}`
+      warningMessages.push(missingMessage)
 
-    if (result.errorCount === 0 && result.missingCount === 0) {
-      status = "success"
-      // statusMessage = "Sync completed successfully!"
-    } else if (result.successCount === 0) {
-      status = "error"
-      // statusMessage = "Sync failed. No computers were updated."
-    } else {
-      status = "partial"
-      // statusMessage = "Partial sync completed with some errors."
+      if (this.ui) {
+        this.ui.addMessage(UIMessageType.WARNING, missingMessage)
+      }
     }
 
-    // Update UI with final status
+    // Determine overall operation result
+    let operationResult = SyncOperationResult.SUCCESS
+
+    if (result.errorCount > 0 && result.successCount === 0) {
+      operationResult = SyncOperationResult.ERROR
+    } else if (result.errorCount > 0) {
+      operationResult = SyncOperationResult.PARTIAL
+    } else if (warningMessages.length > 0) {
+      operationResult = SyncOperationResult.WARNING
+    }
+
+    // Update UI with final results
     if (this.ui) {
       this.ui.updateStats({
         success: result.successCount,
@@ -354,7 +372,7 @@ export class SyncManager {
         missing: result.missingCount,
       })
       this.ui.updateComputerResults(computerResults)
-      this.ui.updateStatus(status, statusMessage)
+      this.ui.completeOperation(operationResult)
     }
 
     // Cache invalidation for watch mode
@@ -400,7 +418,7 @@ export class SyncManager {
       // High level controller functions should emit a SYNC_ERROR when they catch thrown errors from subordinate functions
       manualController.on(SyncEvent.SYNC_ERROR, async (error) => {
         if (this.ui) {
-          this.ui.updateStatus("error", error.message)
+          this.ui.addMessage(UIMessageType.ERROR, error.message)
         } else {
           console.error(error)
         }
@@ -474,7 +492,7 @@ export class SyncManager {
 
       watchController.on(SyncEvent.SYNC_ERROR, async (error) => {
         if (this.ui) {
-          this.ui.updateStatus("error", error.message)
+          this.ui.addMessage(UIMessageType.ERROR, error.message)
         } else {
           console.error(error)
         }
@@ -605,6 +623,9 @@ class ManualModeController {
 
       while (this.syncManager.getState() === SyncManagerState.RUNNING) {
         await this.performSyncCycle()
+
+        this.ui?.setReady()
+
         await this.waitForUserInput()
       }
     } catch (error) {
@@ -643,6 +664,9 @@ class ManualModeController {
       )
     }
 
+    // Update UI status
+    this.ui?.startSyncOperation()
+
     try {
       const validation = await this.syncManager.runValidation()
       this.emit(SyncEvent.SYNC_VALIDATION, validation)
@@ -651,13 +675,16 @@ class ManualModeController {
 
       // Check if validation has errors
       if (validation.errors.length > 0) {
-        // this.log.error(`Could not continue due to the following errors:`)
-        // validation.errors.forEach((error) =>
-        //   this.log.error(`${validation.errors.length > 1 ? "• " : ""}${error}`)
-        // )
+        // Add each validation error as an error message
+        if (this.ui) {
+          validation.errors.forEach((error) => {
+            this.ui?.addMessage(UIMessageType.ERROR, error)
+          })
+          this.ui.completeOperation(SyncOperationResult.ERROR)
+        }
 
         // Create an AppError and emit it
-        const validationError = AppError.fatal(
+        const validationError = AppError.error(
           "Validation failed: " + validation.errors.join(", "),
           "ManualModeController.validation"
         )
@@ -814,6 +841,8 @@ class WatchModeController {
 
       if (this.syncManager.getState() !== SyncManagerState.RUNNING) return
 
+      this.ui?.setReady()
+
       // Keep running until state changes
       while (this.syncManager.getState() === SyncManagerState.RUNNING) {
         await new Promise((resolve) => setTimeout(100, resolve))
@@ -858,6 +887,9 @@ class WatchModeController {
       )
     }
 
+    // Update UI status
+    this.ui?.startSyncOperation()
+
     try {
       // If this is triggered by a file change, update the changedFiles set
       if (changedPath) {
@@ -868,11 +900,12 @@ class WatchModeController {
         this.syncManager.invalidateCache()
         // this.log.status(`File changed: ${changedPath}`)
 
-        // Update UI without triggering a full re-render
+        // Update UI to show sync is starting
         if (this.ui) {
-          this.ui.updateStatus(
-            "running",
-            `Syncing changed file: ${path.basename(changedPath)}`
+          this.ui.startSyncOperation()
+          this.ui.addMessage(
+            UIMessageType.INFO,
+            `File changed: ${path.basename(changedPath)}`
           )
         }
       }
@@ -883,11 +916,13 @@ class WatchModeController {
 
       // Check if validation has errors
       if (validation.errors.length > 0) {
-        // Log the validation errors
-        // this.log.error(`Validation failed:`)
-        // validation.errors.forEach((error) =>
-        //   this.log.error(`${validation.errors.length > 1 ? "• " : ""}${error}`)
-        // )
+        // Add each validation error as an error message
+        if (this.ui) {
+          validation.errors.forEach((error) => {
+            this.ui?.addMessage(UIMessageType.ERROR, error)
+          })
+          this.ui.completeOperation(SyncOperationResult.ERROR)
+        }
 
         // Create an AppError and emit it
         const validationError = AppError.fatal(
@@ -920,6 +955,8 @@ class WatchModeController {
         // Clear changed files after successful non-initial sync
         this.changedFiles.clear()
       }
+      // Set back to ready state after operation completes
+      this.ui?.setReady()
     } catch (error) {
       // Convert to AppError if it isn't already
       const appError =
@@ -998,10 +1035,6 @@ class WatchModeController {
         error
       )
 
-      if (this.ui) {
-        this.ui.updateStatus("error", appError.message)
-      }
-
       throw appError
     }
   }
@@ -1023,6 +1056,9 @@ class WatchModeController {
         if (this.syncManager.getState() !== SyncManagerState.RUNNING) {
           return
         }
+
+        // Update UI status
+        this.ui?.startSyncOperation()
 
         try {
           await this.performSyncCycle(changedPath)

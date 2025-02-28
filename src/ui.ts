@@ -3,7 +3,11 @@ import { setInterval, clearInterval, setTimeout } from "node:timers"
 import logUpdate from "log-update"
 import figures from "figures"
 import chalk from "chalk"
-import type { ComputerSyncResult, SyncMode } from "./types"
+import {
+  SyncOperationResult,
+  type ComputerSyncResult,
+  type SyncMode,
+} from "./types"
 import boxen from "boxen"
 import { pluralize } from "./utils"
 
@@ -36,6 +40,41 @@ const symbols = {
   ellipsis: figures.ellipsis,
 }
 
+export enum UIStatus {
+  /**
+   * No controller active, initial state
+   */
+  IDLE = "idle",
+  /**
+   * Controller active, awaiting user input
+   */
+  READY = "ready",
+  /**
+   * // Active sync operation (file(s) copying) in progress
+   */
+  SYNCING = "syncing",
+  /**
+   * // Fatal error, application stopping
+   */
+  TERMINATED = "terminated",
+}
+
+/**
+ * Types of UI notifications that can be presented to the user
+ */
+export enum UIMessageType {
+  INFO = "info",
+  WARNING = "warning",
+  ERROR = "error",
+}
+
+// A message with type and content
+export interface UIMessage {
+  type: UIMessageType
+  content: string
+  timestamp: Date
+}
+
 interface CounterStats {
   success: number
   error: number
@@ -44,12 +83,13 @@ interface CounterStats {
 }
 
 interface UIState {
-  mode: "watch" | "manual"
-  status: "idle" | "running" | "success" | "error" | "partial"
+  mode: SyncMode
+  status: UIStatus
+  operationResult: SyncOperationResult
   stats: CounterStats
   computerResults: ComputerSyncResult[]
   lastUpdated: Date
-  message?: string
+  messages: UIMessage[]
 }
 
 // Minimal interval between renders (ms)
@@ -76,10 +116,12 @@ export class UI {
     this.sourceRoot = sourceRoot
     this.state = {
       mode,
-      status: "idle",
+      status: UIStatus.IDLE,
+      operationResult: SyncOperationResult.NONE,
       stats: { success: 0, error: 0, missing: 0, total: 0 },
       computerResults: [],
       lastUpdated: new Date(),
+      messages: [],
     }
 
     this.setupTerminationHandlers()
@@ -133,7 +175,7 @@ export class UI {
     console.log(theme.primary("─".repeat(process.stdout.columns || 80)) + "\n")
 
     // Initial render of dynamic elements
-    this.renderDynamicElements()
+    // this.renderDynamicElements()
   }
 
   stop(): void {
@@ -153,41 +195,68 @@ export class UI {
     logUpdate.done()
   }
 
-  // Replace the existing updateStatus method
-  updateStatus(status: UIState["status"], message?: string): void {
-    const prevStatus = this.state.status
+  /**
+   * Update the UI's status
+   */
+  updateUIStatus(newStatus: UIStatus): void {
+    this.queueStateUpdate({ status: newStatus, lastUpdated: new Date() })
+  }
 
-    // When status changes from "running" to a completion state
-    if (
-      prevStatus === "running" ||
-      (prevStatus === "idle" &&
-        (status === "success" || status === "error" || status === "partial"))
-    ) {
-      // First clear any dynamic content
-      logUpdate.clear()
+  updateOperationResult(result: SyncOperationResult): void {
+    this.queueStateUpdate({ operationResult: result, lastUpdated: new Date() })
+  }
 
-      // Then update the state
-      this.state = {
-        ...this.state,
-        status,
-        message: message !== undefined ? message : this.state.message,
-        lastUpdated: new Date(),
-      }
-
-      // Log the static output
-      this.logSyncSummary()
-
-      // After logging static content, re-render dynamic elements
-      this.renderDynamicElements()
-      this.syncsComplete++
-    } else {
-      // For other status changes (including to "running"), use normal state updates
-      this.queueStateUpdate({
-        status,
-        message: message !== undefined ? message : this.state.message,
-        lastUpdated: new Date(),
-      })
+  addMessage(type: UIMessageType, content: string): void {
+    const message: UIMessage = {
+      type,
+      content,
+      timestamp: new Date(),
     }
+
+    // Clone the current messages array and add the new message
+    const messages = [...this.state.messages, message]
+    this.queueStateUpdate({ messages, lastUpdated: new Date() })
+  }
+
+  clearMessages(): void {
+    this.queueStateUpdate({ messages: [], lastUpdated: new Date() })
+  }
+
+  setReady(): void {
+    this.queueStateUpdate({
+      status: UIStatus.READY,
+      lastUpdated: new Date(),
+    })
+  }
+
+  startSyncOperation(): void {
+    this.queueStateUpdate({
+      status: UIStatus.SYNCING,
+      operationResult: SyncOperationResult.NONE,
+      messages: [],
+      lastUpdated: new Date(),
+    })
+  }
+
+  // Complete an operation and log results
+  completeOperation(result: SyncOperationResult): void {
+    // First clear any dynamic content
+    logUpdate.clear()
+
+    // Then update the state
+    this.state = {
+      ...this.state,
+      status: UIStatus.READY,
+      operationResult: result,
+      lastUpdated: new Date(),
+    }
+
+    // Log the static output
+    this.logSyncSummary()
+
+    // After logging static content, re-render dynamic elements
+    this.renderDynamicElements()
+    this.syncsComplete++
   }
 
   updateStats(stats: Partial<CounterStats>): void {
@@ -215,31 +284,31 @@ export class UI {
     logUpdate.clear()
   }
 
-  private getStatusColor() {
-    switch (this.state.status) {
-      case "success":
+  private getResultColor() {
+    switch (this.state.operationResult) {
+      case SyncOperationResult.SUCCESS:
         return theme.success
-      case "error":
+      case SyncOperationResult.ERROR:
         return theme.error
-      case "partial":
+      case SyncOperationResult.WARNING:
         return theme.warning
-      case "running":
-        return theme.info
+      case SyncOperationResult.PARTIAL:
+        return theme.warning
       default:
         return theme.normal
     }
   }
 
-  private getStatusSymbol(): string {
-    switch (this.state.status) {
-      case "success":
+  private getResultSymbol(): string {
+    switch (this.state.operationResult) {
+      case SyncOperationResult.SUCCESS:
         return symbols.check
-      case "error":
+      case SyncOperationResult.ERROR:
         return symbols.cross
-      case "partial":
+      case SyncOperationResult.WARNING:
         return symbols.warning
-      case "running":
-        return symbols.line
+      case SyncOperationResult.PARTIAL:
+        return symbols.warning
       default:
         return symbols.info
     }
@@ -359,37 +428,50 @@ export class UI {
 
     return output
   }
-  private getStatusMessage(): string {
-    // Use custom message if available, otherwise default based on status
-    const message = this.state.message || this.getDefaultStatusMessage()
 
-    const messageColor =
-      this.state.status === "error"
-        ? theme.error
-        : this.state.status === "partial"
-          ? theme.warning
-          : this.state.status === "success"
-            ? theme.success
-            : theme.info
-
-    return this.state.status !== "success"
-      ? messageColor("\n" + "  " + message)
-      : ""
-  }
-
-  private getDefaultStatusMessage(): string {
-    switch (this.state.status) {
-      case "success":
-        return "Sync completed successfully."
-      case "error":
-        return "Sync failed. No computers were updated."
-      case "partial":
-        return "Not all files were synced. See above output."
-      case "running":
-        return "Sync in progress..."
-      default:
-        return "Waiting to sync..."
+  private renderMessages(): string {
+    if (this.state.messages.length === 0) {
+      return ""
     }
+
+    // Group messages by type
+    const byType: Record<UIMessageType, UIMessage[]> = {
+      [UIMessageType.ERROR]: [],
+      [UIMessageType.WARNING]: [],
+      [UIMessageType.INFO]: [],
+    }
+
+    this.state.messages.forEach((msg) => {
+      byType[msg.type].push(msg)
+    })
+
+    const output: string[] = []
+
+    // Render errors first
+    if (byType[UIMessageType.ERROR].length > 0) {
+      output.push(theme.error("\n  Errors:"))
+      byType[UIMessageType.ERROR].forEach((msg) => {
+        output.push(theme.error(`  ${symbols.cross} ${msg.content}`))
+      })
+    }
+
+    // Then warnings
+    if (byType[UIMessageType.WARNING].length > 0) {
+      output.push(theme.warning("\n  Warnings:"))
+      byType[UIMessageType.WARNING].forEach((msg) => {
+        output.push(theme.warning(`  ${symbols.warning} ${msg.content}`))
+      })
+    }
+
+    // Finally info messages
+    if (byType[UIMessageType.INFO].length > 0) {
+      output.push(theme.info("\n  Info:"))
+      byType[UIMessageType.INFO].forEach((msg) => {
+        output.push(theme.info(`  ${symbols.info} ${msg.content}`))
+      })
+    }
+
+    return output.join("\n")
   }
 
   private renderControls(title = "Controls"): string {
@@ -402,7 +484,8 @@ export class UI {
     const spinner = this.spinnerFrames[this.spinnerIndex]
     const titleWithSpinner = `${spinner} ${title}`
 
-    if (this.state.status === "running") {
+    // Only show controls box when in READY status
+    if (this.state.status !== UIStatus.READY) {
       return ""
     }
 
@@ -474,12 +557,12 @@ export class UI {
 
     const header = this.renderHeaderLine()
     const computerResults = this.renderComputerResults()
-    const statusMessage = this.getStatusMessage()
+    const messages = this.renderMessages()
 
     // Log the static output
     console.log(header)
     console.log(computerResults)
-    console.log(statusMessage)
+    console.log(messages)
     console.log(theme.dim("─".repeat(process.stdout.columns || 80))) // Separator line
   }
 
@@ -493,9 +576,13 @@ export class UI {
       // Apply any pending state updates
       this.applyPendingUpdates()
 
-      // Only show status indicator if we're in running state
-      const statusIndicator =
-        this.state.status === "running" ? `${this.getStatusMessage()}` : ""
+      // Status indicator shows activity when syncing
+      let statusIndicator = ""
+      if (this.state.status === UIStatus.SYNCING) {
+        statusIndicator = theme.info(
+          `\n  ${this.spinnerFrames[this.spinnerIndex]} Syncing files to computers...`
+        )
+      }
 
       const controlsTitle =
         this.state.mode === "manual"

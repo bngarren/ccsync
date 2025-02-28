@@ -70,6 +70,29 @@ export interface ValidationResult {
   errors: string[]
 }
 
+export enum SyncOperationResult {
+  /**
+   * No sync operation completed yet
+   */
+  NONE = "none",
+  /**
+   * All files synced successfully
+   */
+  SUCCESS = "success",
+  /**
+   * All files synced successfully with warnings
+   */
+  WARNING = "warning",
+  /**
+   * Sync operation failed with errors
+   */
+  ERROR = "error",
+  /**
+   * Some files synced successfully, some failed
+   */
+  PARTIAL = "partial",
+}
+
 export interface SyncResult {
   successCount: number
   errorCount: number

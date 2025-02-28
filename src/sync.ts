@@ -12,6 +12,7 @@ import {
   type ComputerSyncResult,
   SyncMode,
   SyncOperationResult,
+  type BaseControllerEvents,
 } from "./types"
 import {
   validateMinecraftSave,
@@ -40,6 +41,37 @@ enum SyncManagerState {
   STOPPING,
   STOPPED,
   ERROR,
+}
+
+/**
+ * Utility function to display sync plan issues in the UI
+ */
+function displaySyncPlanIssues(syncPlan: SyncPlan, ui: UI | null): void {
+  if (!ui) return
+
+  // Display errors
+  syncPlan.issues
+    .filter((issue) => issue.severity === SyncPlanIssueSeverity.ERROR)
+    .forEach((issue) => {
+      ui.addMessage(UIMessageType.ERROR, issue.message)
+    })
+
+  // Display warnings
+  syncPlan.issues
+    .filter((issue) => issue.severity === SyncPlanIssueSeverity.WARNING)
+    .forEach((issue) => {
+      ui.addMessage(UIMessageType.WARNING, issue.message)
+    })
+}
+
+/**
+ * Utility function to extract error messages from sync plan issues
+ */
+function getSyncPlanErrorMessage(syncPlan: SyncPlan): string {
+  return syncPlan.issues
+    .filter((issue) => issue.severity === SyncPlanIssueSeverity.ERROR)
+    .map((issue) => issue.message)
+    .join(", ")
 }
 
 export class SyncManager {
@@ -72,23 +104,14 @@ export class SyncManager {
   }
 
   // Cache management
-  private isCacheValid(): boolean {
+  private isCacheValid(changedFiles?: Set<string>): boolean {
     if (!this.lastSyncPlan?.timestamp) return false
 
-    // Always invalidate cache in watch mode for file changes
-    if (this.activeModeController instanceof WatchModeController) {
-      const controller = this.activeModeController
-      // Only invalidate if there are actual file changes
-      const changedFiles = controller.getChangedFiles()
-      if (changedFiles && changedFiles.size > 0) return false
-    }
+    // If there are changed files, invalidate the cache
+    if (changedFiles && changedFiles.size > 0) return false
 
     const timeSinceLastPlan = Date.now() - this.lastSyncPlan.timestamp
-
-    // Check if we're within the TTL
-    const isValid = timeSinceLastPlan < this.config.advanced.cache_ttl
-
-    return isValid
+    return timeSinceLastPlan < this.config.advanced.cache_ttl
   }
 
   public invalidateCache(): void {
@@ -100,9 +123,14 @@ export class SyncManager {
    * Creates a sync plan that maps source files to target computers
    * This replaces the old runValidation method with a more structured approach
    */
-  public async createSyncPlan(forceRefresh = false): Promise<SyncPlan> {
+  public async createSyncPlan(options?: {
+    forceRefresh?: boolean
+    changedFiles?: Set<string>
+  }): Promise<SyncPlan> {
+    const { forceRefresh = false, changedFiles } = options || {}
+
     // Check cache first
-    if (!forceRefresh && this.isCacheValid() && this.lastSyncPlan) {
+    if (!forceRefresh && this.isCacheValid(changedFiles) && this.lastSyncPlan) {
       return this.lastSyncPlan
     }
 
@@ -332,8 +360,8 @@ export class SyncManager {
     const allComputerIds = new Set<string>()
 
     // First create entries for all computers
-    for (const rule of syncPlan.resolvedFileRules) {
-      for (const computerId of rule.computers) {
+    for (const fileRule of syncPlan.resolvedFileRules) {
+      for (const computerId of fileRule.computers) {
         // Create computer if it doesn't exist yet
         if (!allComputerIds.has(computerId)) {
           allComputerIds.add(computerId)
@@ -356,11 +384,11 @@ export class SyncManager {
         )!
 
         // Prepare target path based on target type
-        let targetPath = rule.target.path
+        let targetPath = fileRule.target.path
 
         // If target is a directory, append the source filename
-        if (rule.target.type === "directory") {
-          const sourceFilename = path.basename(rule.sourceAbsolutePath)
+        if (fileRule.target.type === "directory") {
+          const sourceFilename = path.basename(fileRule.sourceAbsolutePath)
           targetPath = path.join(targetPath, sourceFilename)
           targetPath = normalizePath(targetPath)
         }
@@ -368,8 +396,8 @@ export class SyncManager {
         // Add file entry with explicit type information
         computerResult.files.push({
           targetPath,
-          targetType: rule.target.type,
-          sourcePath: rule.sourceAbsolutePath,
+          targetType: fileRule.target.type,
+          sourcePath: fileRule.sourceAbsolutePath,
           success: false, // Mark all as unsuccessful initially
         })
       }
@@ -488,10 +516,9 @@ export class SyncManager {
 
     // Update UI with final results
     if (this.ui) {
-      this.ui.updateStats({
-        success: result.successCount,
-        error: result.errorCount,
-        missing: result.missingCount,
+      this.ui.updateOperationStats({
+        totalFiles: syncPlan.resolvedFileRules.length,
+        totalComputers: allComputerIds.size,
       })
       this.ui.updateComputerResults(computerResults)
       this.ui.completeOperation(operationResult)
@@ -501,8 +528,6 @@ export class SyncManager {
     if (this.activeModeController instanceof WatchModeController) {
       this.invalidateCache()
     }
-
-    console.log("About to return from performSync")
 
     return result
   }
@@ -557,7 +582,6 @@ export class SyncManager {
 
         await this.stop()
 
-        // Convert to SyncErrorData and rethrow
         throw AppError.fatal(
           `Failed to start manual mode: ${getErrorMessage(error)}`,
           "SyncManager.startManualMode",
@@ -692,47 +716,60 @@ export class SyncManager {
   }
 }
 
-class ManualModeController {
-  private keyHandler: KeyHandler | null = null
-  protected events = createTypedEmitter<ManualSyncEvents>()
+/**
+ * Base controller for common functionality between manual and watch modes
+ */
+abstract class BaseController<T extends BaseControllerEvents> {
+  protected events = createTypedEmitter<T>()
+  protected keyHandler: KeyHandler | null = null
 
   constructor(
-    private syncManager: SyncManager,
-    private ui: UI | null = null
+    protected syncManager: SyncManager,
+    protected ui: UI | null = null
   ) {}
 
-  emit<K extends keyof ManualSyncEvents>(
-    event: K,
-    data?: ManualSyncEvents[K] extends void ? void : ManualSyncEvents[K]
-  ) {
+  emit<K extends keyof T>(event: K, data?: T[K] extends void ? void : T[K]) {
     return this.events.emit(event, data)
   }
 
-  on<K extends keyof ManualSyncEvents>(
+  on<K extends keyof T>(
     event: K,
-    listener: ManualSyncEvents[K] extends void
-      ? () => void
-      : (data: ManualSyncEvents[K]) => void
+    listener: T[K] extends void ? () => void : (data: T[K]) => void
   ) {
     this.events.on(event, listener)
   }
 
-  once<K extends keyof ManualSyncEvents>(
+  once<K extends keyof T>(
     event: K,
-    listener: ManualSyncEvents[K] extends void
-      ? () => void
-      : (data: ManualSyncEvents[K]) => void
+    listener: T[K] extends void ? () => void : (data: T[K]) => void
   ) {
     this.events.once(event, listener)
   }
 
-  off<K extends keyof ManualSyncEvents>(
+  off<K extends keyof T>(
     event: K,
-    listener: ManualSyncEvents[K] extends void
-      ? () => void
-      : (data: ManualSyncEvents[K]) => void
+    listener: T[K] extends void ? () => void : (data: T[K]) => void
   ) {
     this.events.off(event, listener)
+  }
+
+  /**
+   * Base cleanup functionality for controllers
+   */
+  protected async cleanupBase(): Promise<void> {
+    if (this.keyHandler) {
+      this.keyHandler.stop()
+      this.keyHandler = null
+    }
+  }
+
+  abstract start(): Promise<void>
+  abstract stop(): Promise<void>
+}
+
+class ManualModeController extends BaseController<ManualSyncEvents> {
+  constructor(syncManager: SyncManager, ui: UI | null = null) {
+    super(syncManager, ui)
   }
 
   async start(): Promise<void> {
@@ -791,49 +828,27 @@ class ManualModeController {
       const syncPlan = await this.syncManager.createSyncPlan()
       this.emit(SyncEvent.SYNC_PLANNED, syncPlan)
 
-      // Add each error message to UI
-      if (this.ui) {
-        syncPlan.issues
-          .filter((issue) => issue.severity === SyncPlanIssueSeverity.ERROR)
-          .forEach((issue) => {
-            this.ui?.addMessage(UIMessageType.ERROR, issue.message)
-          })
-
-        // Also add warnings
-        syncPlan.issues
-          .filter((issue) => issue.severity === SyncPlanIssueSeverity.WARNING)
-          .forEach((issue) => {
-            this.ui?.addMessage(UIMessageType.WARNING, issue.message)
-          })
-      }
+      // Display issues to UI
+      displaySyncPlanIssues(syncPlan, this.ui)
 
       // Check if the plan has critical issues
       if (!syncPlan.isValid) {
         // Create an AppError and emit it
-        const errorMessages = syncPlan.issues
-          .filter((issue) => issue.severity === SyncPlanIssueSeverity.ERROR)
-          .map((issue) => issue.message)
-          .join(", ")
+        const errorMessages = getSyncPlanErrorMessage(syncPlan)
 
-        const validationError = AppError.error(
+        const syncPlanError = AppError.error(
           "Sync plan creation failed: " + errorMessages,
           "ManualModeController.createSyncPlan"
         )
-        this.emit(SyncEvent.SYNC_ERROR, validationError)
+        this.emit(SyncEvent.SYNC_ERROR, syncPlanError)
 
         this.ui?.completeOperation(SyncOperationResult.ERROR)
 
         return // Stop here, don't proceed with sync
       }
 
-      const { successCount, errorCount, missingCount } =
-        await this.syncManager.performSync(syncPlan)
-
-      this.emit(SyncEvent.SYNC_COMPLETE, {
-        successCount,
-        errorCount,
-        missingCount,
-      })
+      const syncResult = await this.syncManager.performSync(syncPlan)
+      this.emit(SyncEvent.SYNC_COMPLETE, syncResult)
     } catch (error) {
       // Convert to AppError if it isn't already
       const appError =
@@ -897,16 +912,12 @@ class ManualModeController {
   }
 
   private async cleanup(): Promise<void> {
-    if (this.keyHandler) {
-      this.keyHandler.stop()
-      this.keyHandler = null
-    }
+    await this.cleanupBase()
   }
 }
 
-class WatchModeController {
+class WatchModeController extends BaseController<WatchSyncEvents> {
   private watcher: ReturnType<typeof watch> | null = null
-  private keyHandler: KeyHandler | null = null
   /**
    * Files being watched or tracked for file changes
    */
@@ -917,46 +928,13 @@ class WatchModeController {
   private changedFiles: Set<string> = new Set()
 
   private isInitialSync = true
-  protected events = createTypedEmitter<WatchSyncEvents>()
 
   constructor(
-    private syncManager: SyncManager,
+    syncManager: SyncManager,
     private config: Config,
-    private ui: UI | null = null
-  ) {}
-
-  emit<K extends keyof WatchSyncEvents>(
-    event: K,
-    data?: WatchSyncEvents[K] extends void ? void : WatchSyncEvents[K]
+    ui: UI | null = null
   ) {
-    return this.events.emit(event, data)
-  }
-
-  on<K extends keyof WatchSyncEvents>(
-    event: K,
-    listener: WatchSyncEvents[K] extends void
-      ? () => void
-      : (data: WatchSyncEvents[K]) => void
-  ) {
-    this.events.on(event, listener)
-  }
-
-  once<K extends keyof WatchSyncEvents>(
-    event: K,
-    listener: WatchSyncEvents[K] extends void
-      ? () => void
-      : (data: WatchSyncEvents[K]) => void
-  ) {
-    this.events.once(event, listener)
-  }
-
-  off<K extends keyof WatchSyncEvents>(
-    event: K,
-    listener: WatchSyncEvents[K] extends void
-      ? () => void
-      : (data: WatchSyncEvents[K]) => void
-  ) {
-    this.events.off(event, listener)
+    super(syncManager, ui)
   }
 
   async start(): Promise<void> {
@@ -1022,27 +1000,27 @@ class WatchModeController {
     // Update UI status
     this.ui?.startSyncOperation()
 
-    try {
-      // If this is triggered by a file change, update the changedFiles set
-      if (changedPath) {
-        const relativePath = normalizePath(
-          path.relative(this.config.sourceRoot, changedPath)
+    // If this is triggered by a file change, update the changedFiles set
+    if (changedPath) {
+      const relativePath = normalizePath(
+        path.relative(this.config.sourceRoot, changedPath)
+      )
+      this.changedFiles.add(relativePath)
+
+      // Update UI to show sync is starting
+      if (this.ui) {
+        this.ui.startSyncOperation()
+        this.ui.addMessage(
+          UIMessageType.INFO,
+          `File changed: ${path.basename(changedPath)}`
         )
-        this.changedFiles.add(relativePath)
-        this.syncManager.invalidateCache()
-        // this.log.status(`File changed: ${changedPath}`)
-
-        // Update UI to show sync is starting
-        if (this.ui) {
-          this.ui.startSyncOperation()
-          this.ui.addMessage(
-            UIMessageType.INFO,
-            `File changed: ${path.basename(changedPath)}`
-          )
-        }
       }
+    }
 
-      const syncPlan = await this.syncManager.createSyncPlan()
+    try {
+      const syncPlan = await this.syncManager.createSyncPlan({
+        changedFiles: this.isInitialSync ? undefined : this.changedFiles,
+      })
       this.emit(SyncEvent.SYNC_PLANNED, syncPlan)
 
       // Add each error message to UI
@@ -1069,11 +1047,11 @@ class WatchModeController {
           .map((issue) => issue.message)
           .join(", ")
 
-        const validationError = AppError.error(
+        const syncPlanError = AppError.error(
           "Sync plan creation failed: " + errorMessages,
           "ManualModeController.createSyncPlan"
         )
-        this.emit(SyncEvent.SYNC_ERROR, validationError)
+        this.emit(SyncEvent.SYNC_ERROR, syncPlanError)
 
         this.ui?.completeOperation(SyncOperationResult.ERROR)
 
@@ -1250,10 +1228,7 @@ class WatchModeController {
   }
 
   private async cleanup(): Promise<void> {
-    if (this.keyHandler) {
-      this.keyHandler.stop()
-      this.keyHandler = null
-    }
+    await this.cleanupBase()
 
     if (this.watcher) {
       try {

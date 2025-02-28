@@ -113,20 +113,20 @@ export enum SyncEvent {
   WATCHER_ERROR,
 }
 
-type CommonSyncEvents = {
+export type BaseControllerEvents = {
+  [SyncEvent.STOPPED]: void
   [SyncEvent.STARTED]: void
   [SyncEvent.SYNC_PLANNED]: SyncPlan
   [SyncEvent.SYNC_COMPLETE]: SyncResult
   [SyncEvent.SYNC_ERROR]: IAppError
-  [SyncEvent.STOPPED]: void
 }
 
 // Event maps for each mode type
-export type ManualSyncEvents = CommonSyncEvents
+export type ManualSyncEvents = BaseControllerEvents
 
 export type WatchSyncEvents = {
   [SyncEvent.INITIAL_SYNC_COMPLETE]: SyncResult
-} & CommonSyncEvents
+} & BaseControllerEvents
 
 // Type-safe event emitter factory
 export function createTypedEmitter<T extends Record<string, any>>() {

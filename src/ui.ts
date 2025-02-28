@@ -75,18 +75,16 @@ export interface UIMessage {
   timestamp: Date
 }
 
-interface CounterStats {
-  success: number
-  error: number
-  missing: number
-  total: number
+export interface OperationStats {
+  totalFiles: number
+  totalComputers: number
 }
 
 interface UIState {
   mode: SyncMode
   status: UIStatus
   operationResult: SyncOperationResult
-  stats: CounterStats
+  operationsStats: OperationStats
   computerResults: ComputerSyncResult[]
   lastUpdated: Date
   messages: UIMessage[]
@@ -118,7 +116,10 @@ export class UI {
       mode,
       status: UIStatus.IDLE,
       operationResult: SyncOperationResult.NONE,
-      stats: { success: 0, error: 0, missing: 0, total: 0 },
+      operationsStats: {
+        totalFiles: 0,
+        totalComputers: 0,
+      },
       computerResults: [],
       lastUpdated: new Date(),
       messages: [],
@@ -206,6 +207,10 @@ export class UI {
     this.queueStateUpdate({ operationResult: result, lastUpdated: new Date() })
   }
 
+  updateOperationStats(stats: OperationStats): void {
+    this.queueStateUpdate({ operationsStats: stats })
+  }
+
   addMessage(type: UIMessageType, content: string): void {
     const message: UIMessage = {
       type,
@@ -271,20 +276,6 @@ export class UI {
     this.syncsComplete++
   }
 
-  updateStats(stats: Partial<CounterStats>): void {
-    const updatedStats = {
-      ...this.state.stats,
-      ...stats,
-    }
-
-    updatedStats.total =
-      (stats.success || this.state.stats.success) +
-      (stats.error || this.state.stats.error) +
-      (stats.missing || this.state.stats.missing)
-
-    this.queueStateUpdate({ stats: updatedStats })
-  }
-
   updateComputerResults(computerResults: ComputerSyncResult[]): void {
     this.queueStateUpdate({
       computerResults,
@@ -336,24 +327,31 @@ export class UI {
   }
 
   private renderHeaderLine(): string {
-    const { success, error, missing, total } = this.state.stats
-
     const date = this.state.lastUpdated.toLocaleString()
 
-    let resultStats = ""
+    const { totalFiles, totalComputers } = this.state.operationsStats
 
-    if (success > 0 && error === 0 && missing === 0) {
-      resultStats = `${theme.success(`Success.`)}`
-    } else {
-      resultStats =
-        `${success > 0 ? theme.success(`Success: ${success}`) : ""} ` +
-        `${error > 0 ? theme.error(`Error: ${error}`) : ""} ` +
-        (missing > 0 ? `${theme.warning(`Missing: ${missing}`)}` : "")
+    let result = ""
+
+    switch (this.state.operationResult) {
+      case SyncOperationResult.SUCCESS:
+        result = theme.success("Success.")
+        break
+      case SyncOperationResult.WARNING:
+        result = `${theme.success("Success")} ${theme.warning("(with warnings)")}`
+        break
+      case SyncOperationResult.PARTIAL:
+        result = theme.warning("Some files were not synced.")
+        break
+      default:
+        result = ""
+        break
     }
 
     return theme.bold(
-      `#${this.syncsComplete + 1} [${this.state.mode.toUpperCase()}] [${date}] [Attempted to sync to ${total} ${pluralize("computer")(total)}] ` +
-        resultStats
+      `#${this.syncsComplete + 1} [${this.state.mode.toUpperCase()}] [${date}] [Attempted to sync ${totalFiles} total ${pluralize("file")(totalFiles)} ${totalComputers === 1 ? "to" : "across"} ${totalComputers} ${pluralize("computer")(totalComputers)}] ` +
+        result +
+        "\n"
     )
   }
 

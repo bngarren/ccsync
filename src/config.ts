@@ -8,7 +8,7 @@ import * as fs from "node:fs/promises"
 
 import { merge } from "ts-deepmerge"
 
-export const CONFIG_VERSION = "2.0"
+export const CONFIG_VERSION = "1.1"
 export const DEFAULT_CONFIG_FILENAME = ".ccsync.yaml"
 export const DEFAULT_CONFIG: Config = {
   version: CONFIG_VERSION,

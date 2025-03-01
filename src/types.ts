@@ -41,7 +41,13 @@ export interface ResolvedFileRule {
      */
     type: TargetType
     /**
-     * Normalized path (without trailing slash for directories)
+     * Raw normalized target path WITHOUT considering 'flatten' flag.
+     *
+     * IMPORTANT: This is NOT the final resolved path that should be used for file operations.
+     * - For 'file' type: This is the complete target path including filename.
+     * - For 'directory' type: This is just the directory path WITHOUT any filename or source structure.
+     *
+     * In general, to ensure you are using the fully resolved path, use the utility function `resolveTargetPath()` which will return the actual path with filename, properly accounting for source structure preservation when 'flatten' is false.
      */
     path: string
   }

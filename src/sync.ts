@@ -20,6 +20,8 @@ import {
   resolveSyncRules,
   copyFilesToComputer,
   normalizePath,
+  pluralize,
+  resolveTargetPath,
 } from "./utils"
 import { KeyHandler } from "./keys"
 import { setTimeout } from "node:timers/promises"
@@ -152,7 +154,10 @@ export class SyncManager {
                 error,
                 SyncPlanIssueCategory.SAVE_DIRECTORY,
                 SyncPlanIssueSeverity.ERROR,
-                { source: "validateMinecraftSave" }
+                {
+                  source: "validateMinecraftSave",
+                  suggestion: `Ensure this is a valid Minecraft at '${saveDirValidation.savePath}'`,
+                }
               )
             )
           })
@@ -165,8 +170,7 @@ export class SyncManager {
                 SyncPlanIssueSeverity.WARNING,
                 {
                   source: "validateMinecraftSave",
-                  suggestion:
-                    "Ensure this is a valid Minecraft save with ComputerCraft installed",
+                  suggestion: `Ensure this is a valid Minecraft at '${saveDirValidation.savePath}'`,
                 }
               )
             )
@@ -263,16 +267,16 @@ export class SyncManager {
         }
 
         // Add missing computers as warnings
-        if (ruleResolution.missingComputerIds.length > 0) {
+        const missing = ruleResolution.missingComputerIds
+        if (missing.length > 0) {
           plan.issues.push(
             createSyncPlanIssue(
-              `Missing computers: ${ruleResolution.missingComputerIds.join(", ")}`,
+              `Missing computers: ${missing.join(", ")}`,
               SyncPlanIssueCategory.COMPUTER,
               SyncPlanIssueSeverity.WARNING,
               {
                 source: "resolveSyncRules",
-                suggestion:
-                  "These computers were referenced in rules but not found in the save directory",
+                suggestion: `${missing.length > 1 ? "These" : "This"} ${pluralize("computer")(missing.length)} ${missing.length > 1 ? "were" : "was"} referenced in rules but not found in the save directory`,
               }
             )
           )
@@ -386,14 +390,7 @@ export class SyncManager {
         )!
 
         // Prepare target path based on target type
-        let targetPath = fileRule.target.path
-
-        // If target is a directory, append the source filename
-        if (fileRule.target.type === "directory") {
-          const sourceFilename = path.basename(fileRule.sourceAbsolutePath)
-          targetPath = path.join(targetPath, sourceFilename)
-          targetPath = normalizePath(targetPath)
-        }
+        const targetPath = resolveTargetPath(fileRule)
 
         // Add file entry with explicit type information
         computerResult.files.push({
@@ -448,14 +445,7 @@ export class SyncManager {
         )
 
         for (const rule of matchingRules) {
-          // Build the complete target path including filename
-          let targetPath = rule.target.path
-
-          if (rule.target.type === "directory") {
-            const filename = path.basename(filePath)
-            targetPath = path.join(targetPath, filename)
-            targetPath = normalizePath(targetPath)
-          }
+          const targetPath = resolveTargetPath(rule)
 
           // Find and update the file entry
           const fileEntries = computerResult.files.filter(

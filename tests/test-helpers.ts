@@ -207,10 +207,12 @@ export function createResolvedFile(
   // Determine if target is likely a directory
   const isDirectory = !pathIsLikelyFile(opts.targetPath)
 
+  const flatten = opts.flatten !== undefined ? opts.flatten : true
+
   return {
     sourceAbsolutePath: path.resolve(sourceRoot, opts.sourcePath),
     sourceRelativePath: opts.sourcePath,
-    flatten: opts.flatten || true,
+    flatten,
     target: {
       type: isDirectory ? "directory" : "file",
       path: opts.targetPath,

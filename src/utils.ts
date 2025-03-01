@@ -543,6 +543,45 @@ export async function resolveSyncRules(
 }
 
 /**
+ * Resolves the complete final target path for a file based on a {@link SyncRule}.
+ *
+ * This function properly handles:
+ * 1. File targets - returns the target path directly
+ * 2. Directory targets with flatten=true - appends only filename to target directory
+ * 3. Directory targets with flatten=false - preserves source directory structure
+ *
+ * @param rule The resolved file rule containing source and target information
+ * @returns Normalized complete target path including filename
+ */
+export function resolveTargetPath(rule: ResolvedFileRule): string {
+  // For file targets, normalize and use the specified path directly
+  if (rule.target.type === "file") {
+    return normalizePath(rule.target.path)
+  }
+
+  // For directory targets
+  const targetDir = normalizePath(rule.target.path)
+  const sourceFilename = path.basename(rule.sourceAbsolutePath)
+
+  // When flattening, just append the filename to the target directory
+  if (rule.flatten !== false) {
+    // Default to true if undefined
+    return normalizePath(path.join(targetDir, sourceFilename))
+  }
+
+  // When not flattening, preserve source directory structure
+  const sourceDir = path.dirname(normalizePath(rule.sourceRelativePath))
+
+  if (sourceDir === "." || sourceDir === "") {
+    // Source file is directly in the source root
+    return normalizePath(path.join(targetDir, sourceFilename))
+  } else {
+    // Source file is in a subdirectory, preserve that structure
+    return normalizePath(path.join(targetDir, sourceDir, sourceFilename))
+  }
+}
+
+/**
  * Copies files to a specific computer
  */
 export async function copyFilesToComputer(
@@ -562,52 +601,14 @@ export async function copyFilesToComputer(
   const normalizedComputerPath = normalizePath(computerPath)
 
   for (const rule of resolvedFileRules) {
-    // DEBUG
-    // console.log("\n--- Processing file ---")
-    // console.log("Source absolute path:", file.sourceAbsolutePath)
-    // console.log("Source relative path:", file.sourceRelativePath)
-    // console.log("Flatten?", file.flatten)
-    // console.log("Target path:", file.targetPath)
+    // Get the resolved target path relative to computer root
+    const relativeTargetPath = resolveTargetPath(rule)
 
-    const isTargetDirectory = rule.target.type === "directory"
-    const normalizedTargetPath = normalizePath(rule.target.path)
+    // Build absolute path by joining with computer path
+    const targetFilePath = path.join(normalizedComputerPath, relativeTargetPath)
 
-    // console.log({ normalizedTargetPath, isTargetDirectory })
-
-    // For directory targets, maintain source directory structure
-    let targetDirPath: string
-    let targetFileName: string
-
-    if (isTargetDirectory) {
-      if (rule.flatten) {
-        targetDirPath = path.join(computerPath, normalizedTargetPath)
-      } else {
-        const sourceDir = path.dirname(rule.sourceRelativePath)
-        targetDirPath =
-          sourceDir === "."
-            ? path.join(computerPath, normalizedTargetPath)
-            : path.join(computerPath, normalizedTargetPath, sourceDir)
-        // console.log("Keeping source dir structure on copy:", {
-        //   sourceDir,
-        //   targetDirPath,
-        // })
-      }
-      targetFileName = path.basename(rule.sourceRelativePath)
-    } else {
-      // For file targets, use specified path
-      targetDirPath = path.join(
-        computerPath,
-        path.dirname(normalizedTargetPath)
-      )
-      targetFileName = path.basename(normalizedTargetPath)
-    }
-
-    // Construct and normalize the full target path
-    const targetFilePath = normalizePath(
-      path.join(targetDirPath, targetFileName)
-    )
-
-    // console.log("Target file path: ", targetFilePath)
+    // Get directory portion for creating folders if needed
+    const targetDirPath = path.dirname(targetFilePath)
 
     // Security check: Ensure the target path stays within the computer directory
     const relativeToComputer = path.relative(

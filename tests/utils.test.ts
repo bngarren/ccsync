@@ -9,6 +9,7 @@ import {
   normalizePath,
   toSystemPath,
   pathsAreEqual,
+  resolveTargetPath,
 } from "../src/utils"
 import path from "path"
 import { mkdir, rm, writeFile } from "node:fs/promises"
@@ -23,6 +24,8 @@ import {
   TempCleaner,
 } from "./test-helpers"
 import { testLog } from "./setup"
+import { getErrorMessage } from "../src/errors"
+import type { ResolvedFileRule } from "../src/types"
 
 // ---- MC SAVE OPERATIONS ----
 describe("Save Directory Validation", () => {
@@ -316,6 +319,204 @@ describe("Path Handling", () => {
       expect(pathsAreEqual(test.path1, test.path2)).toBe(test.shouldMatch)
     }
   })
+
+  describe("resolveTargetPath", () => {
+    test("handles different target types and flatten flags correctly", () => {
+      const tests = [
+        {
+          name: "file target - simple path",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "program.lua",
+            targetPath: "startup.lua", // File target (has extension)
+            computers: "1",
+          }),
+          expected: "startup.lua",
+          description: "file target should use target path directly",
+        },
+        {
+          name: "directory target with flatten=true",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "program.lua",
+            targetPath: "lib/", // Directory target
+            flatten: true,
+            computers: "1",
+          }),
+          expected: "lib/program.lua",
+          description: "should append filename to target directory",
+        },
+        {
+          name: "directory target with flatten=false - root file",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "program.lua", // File at source root
+            targetPath: "lib/",
+            flatten: false, // Don't flatten
+            computers: "1",
+          }),
+          expected: "lib/program.lua",
+          description: "source root file should not add subdirectories",
+        },
+        {
+          name: "directory target with flatten=false - nested file",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "apis/util.lua", // Nested file
+            targetPath: "lib/",
+            flatten: false, // Don't flatten
+            computers: "1",
+          }),
+          expected: "lib/apis/util.lua",
+          description: "should preserve source directory structure",
+        },
+        {
+          name: "directory target with deeply nested source",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "apis/net/http.lua", // Deeply nested
+            targetPath: "lib/",
+            flatten: false,
+            computers: "1",
+          }),
+          expected: "lib/apis/net/http.lua",
+          description: "should preserve deep directory structure",
+        },
+        {
+          name: "absolute target path",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "program.lua",
+            targetPath: "/absolute/path/",
+            computers: "1",
+          }),
+          expected: "/absolute/path/program.lua",
+          description: "should handle absolute target paths",
+        },
+        {
+          name: "Windows-style target path",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "program.lua",
+            targetPath: "windows\\style\\path\\",
+            computers: "1",
+          }),
+          expected: "windows/style/path/program.lua",
+          description: "should normalize Windows path separators",
+        },
+        {
+          name: "mixed separators in target",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "program.lua",
+            targetPath: "mixed/style\\path/",
+            computers: "1",
+          }),
+          expected: "mixed/style/path/program.lua",
+          description: "should normalize mixed path separators",
+        },
+        {
+          name: "path with spaces",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "folder with spaces/file.lua",
+            targetPath: "target with spaces/",
+            flatten: false,
+            computers: "1",
+          }),
+          expected: "target with spaces/folder with spaces/file.lua",
+          description: "should handle paths with spaces",
+        },
+        {
+          name: "unusual characters in paths",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "special-@#$%^-chars/file.lua",
+            targetPath: "output-!&()-/",
+            flatten: false,
+            computers: "1",
+          }),
+          expected: "output-!&()-/special-@#$%^-chars/file.lua",
+          description: "should handle special characters in paths",
+        },
+      ]
+
+      for (const test of tests) {
+        try {
+          const result = resolveTargetPath(test.rule)
+          expect(result).toBe(test.expected)
+        } catch (err) {
+          throw new Error(
+            `Test "${test.name}" failed: ${getErrorMessage(err)}\n${test.description}`
+          )
+        }
+      }
+    })
+
+    test("handles edge cases correctly", () => {
+      const edgeCases = [
+        {
+          name: "empty target path with directory type",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "program.lua",
+            targetPath: "",
+            computers: "1",
+          }),
+          expected: "program.lua",
+          description: "empty directory target should just use filename",
+        },
+        {
+          name: "root target path",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "program.lua",
+            targetPath: "/",
+            computers: "1",
+          }),
+          expected: "/program.lua",
+          description: "root directory target should be handled correctly",
+        },
+        {
+          name: "dot target path",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "program.lua",
+            targetPath: ".",
+            computers: "1",
+          }),
+          expected: "program.lua",
+          description: "current directory target should be handled correctly",
+        },
+        {
+          name: "undefined flatten flag",
+          rule: {
+            sourceAbsolutePath: "/src/program.lua",
+            sourceRelativePath: "program.lua",
+            // flatten is undefined
+            target: {
+              type: "directory",
+              path: "lib/",
+            },
+            computers: ["1"],
+          },
+          expected: "lib/program.lua",
+          description: "undefined flatten should default to true behavior",
+        },
+      ]
+
+      for (const test of edgeCases) {
+        try {
+          const result = resolveTargetPath(test.rule as ResolvedFileRule)
+          expect(result).toBe(test.expected)
+        } catch (err) {
+          throw new Error(
+            `Edge case "${test.name}" failed: ${getErrorMessage(err)}\n${test.description}`
+          )
+        }
+      }
+    })
+  })
 })
 
 // ---- FILE OPERATIONS ----
@@ -346,8 +547,8 @@ describe("File Operations", () => {
     await cleanup.cleanDir(tempDir)
   })
 
-  describe("validateFileSync", () => {
-    test("validates files and returns correct structure", async () => {
+  describe("resolveSyncRules", () => {
+    test("resolves rules and returns correct structure", async () => {
       const config: Config = withDefaultConfig({
         sourceRoot: sourceDir,
         minecraftSavePath: testSaveDir,

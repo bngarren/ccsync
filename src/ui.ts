@@ -452,11 +452,11 @@ export class UI {
       byType[msg.type].push(msg)
     })
 
-    const output: string[] = []
+    const output: string[] = ["\n"]
 
     // Render errors first
     if (byType[UIMessageType.ERROR].length > 0) {
-      output.push(theme.error("\n"))
+      // output.push(theme.error("\n"))
       byType[UIMessageType.ERROR].forEach((msg) => {
         output.push(
           theme.error(
@@ -468,7 +468,7 @@ export class UI {
 
     // Then warnings
     if (byType[UIMessageType.WARNING].length > 0) {
-      output.push(theme.warning("\n"))
+      // output.push(theme.warning("\n"))
       byType[UIMessageType.WARNING].forEach((msg) => {
         output.push(
           theme.warning(
@@ -480,7 +480,7 @@ export class UI {
 
     // Finally info messages
     if (byType[UIMessageType.INFO].length > 0) {
-      output.push(theme.info("\n"))
+      // output.push(theme.info("\n"))
       byType[UIMessageType.INFO].forEach((msg) => {
         output.push(
           theme.info(

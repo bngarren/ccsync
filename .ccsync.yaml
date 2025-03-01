@@ -1,6 +1,11 @@
 # CC:Sync Configuration File
 # This file configures how CC:Sync copies files to your ComputerCraft computers
 
+# IMPORTANT: Recommend using forward slashes (/) in paths, even on Windows.
+# Example: "C:/Users/name/path"
+# Otherwise, backslashes need to be properly escaped: "C:\Users\name\path"
+
+# Config version (do not modify)
 version: "2.0"
 
 # Where your source files are located (relative to this config file)
@@ -38,9 +43,12 @@ rules:
 
 # Advanced configuration options
 advanced:
-  # Enable verbose logging
-  verbose: true
-
+  # Enable logging to file
+  logToFile: true
+  
+  # Log level: silent, trace, debug, info, warn, error, fatal
+  logLevel: "debug"
+  
   # How long to cache validation results (milliseconds)
   # Lower = more accurate but more CPU intensive, Higher = faster but may miss changes
   cache_ttl: 5000

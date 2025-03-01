@@ -12,7 +12,6 @@ import {
 import color from "picocolors"
 import path from "path"
 import { SyncManager } from "./sync"
-import { createLogger } from "./log"
 import { theme } from "./theme"
 import { toTildePath } from "./utils"
 import { type SyncMode } from "./types"
@@ -154,7 +153,7 @@ async function handleFatalError(
 }
 
 async function main() {
-  // console.clear()
+  console.clear()
 
   p.intro(`${color.magentaBright(`CC: Sync`)}`)
 
@@ -173,12 +172,10 @@ async function main() {
       process.exit(0)
     }
 
-    // Init log
-    const log = createLogger({ verbose: config.advanced.verbose })
     const savePath = path.parse(config.minecraftSavePath)
 
     const gracefulExit = () => {
-      p.outro(theme.accent("Goodbye!"))
+      p.outro(theme.info("Goodbye."))
       process.exit(0)
     }
 
@@ -192,7 +189,7 @@ async function main() {
     })
 
     if (p.isCancel(res) || !res) {
-      log.info(
+      p.log.info(
         "If this save instance is incorrect, change the 'minecraftSavePath' in the .ccsync.yaml to point to the one you want."
       )
       gracefulExit()

@@ -528,7 +528,7 @@ export class SyncManager {
       this.setState(SyncManagerState.STARTING)
 
       // Initialize UI for manual mode
-      this.ui = new UI(this.config.sourceRoot, SyncMode.MANUAL)
+      this.ui = new UI(SyncMode.MANUAL)
 
       const manualController = new ManualModeController(this, this.ui)
       this.activeModeController = manualController
@@ -598,7 +598,7 @@ export class SyncManager {
       this.setState(SyncManagerState.STARTING)
 
       // Initialize UI for watch mode
-      this.ui = new UI(this.config.sourceRoot, SyncMode.WATCH)
+      this.ui = new UI(SyncMode.WATCH)
 
       const watchController = new WatchModeController(
         this,

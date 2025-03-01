@@ -89,6 +89,10 @@ interface UIState {
   computerResults: ComputerSyncResult[]
   lastUpdated: Date
   messages: UIMessage[]
+  /**
+   * Past sync outputs
+   */
+  syncHistory: string[]
 }
 
 // Minimal interval between renders (ms)
@@ -98,7 +102,6 @@ export class UI {
   private state: UIState
   private timer: ReturnType<typeof setInterval> | null = null
   private isActive = false
-  private sourceRoot: string
   private isRendering = false // lock to prevent concurrent renders
   private lastRenderTime = 0 // Timestamp of last render
   private renderTimer: ReturnType<typeof setTimeout> | null = null // Timer for debounced rendering
@@ -108,9 +111,8 @@ export class UI {
   private spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
   private spinnerIndex = 0
 
-  constructor(sourceRoot: string, mode: SyncMode) {
+  constructor(mode: SyncMode) {
     // super();
-    this.sourceRoot = sourceRoot
     this.state = {
       mode,
       status: UIStatus.IDLE,
@@ -122,6 +124,7 @@ export class UI {
       computerResults: [],
       lastUpdated: new Date(),
       messages: [],
+      syncHistory: [],
     }
 
     this.setupTerminationHandlers()
@@ -137,9 +140,37 @@ export class UI {
     process.on("exit", cleanup)
   }
 
-  // Clear the entire screen
-  private clearScreen() {
-    console.clear()
+  // Refresh the entire screen including history
+  private refreshScreen(): void {
+    // Instead of using console.clear(), we'll use ANSI escape codes to:
+    // 1. Move cursor to start of screen
+    // 2. Clear everything from cursor to end of screen
+    // This reduces flickering. Thanks Claude!!
+    process.stdout.write("\x1B[1;1H\x1B[0J")
+
+    // Show the persistent header
+    console.log(
+      theme.primary(
+        `\nCC: Sync - ${theme.bold(this.state.mode.toUpperCase())} mode started at ${this.state.lastUpdated.toLocaleString()}`
+      )
+    )
+    console.log(theme.primary("─".repeat(process.stdout.columns || 80)) + "\n")
+
+    // Display history (if any) in plain text
+    for (const pastOutput of this.state.syncHistory) {
+      console.log(this.stripColors(pastOutput))
+    }
+  }
+
+  // Utility to strip ANSI color codes
+  private stripColors(text: string): string {
+    return theme.dim(
+      text.replace(
+        // eslint-disable-next-line no-control-regex
+        /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g,
+        ""
+      )
+    )
   }
 
   start(): void {
@@ -154,7 +185,7 @@ export class UI {
     this.syncsComplete = 0
     this.spinnerIndex = 0
 
-    this.clearScreen()
+    this.refreshScreen()
 
     // Start a refresh timer to update elapsed time and spinner
     this.timer = setInterval(() => {
@@ -164,16 +195,6 @@ export class UI {
         this.renderDynamicElements()
       }
     }, 100)
-
-    console.log(
-      theme.primary(
-        `\nCC: Sync - ${this.state.mode.toUpperCase()} mode started at ${this.state.lastUpdated.toLocaleString()}`
-      )
-    )
-    console.log(theme.primary("─".repeat(process.stdout.columns || 80)) + "\n")
-
-    // Initial render of dynamic elements
-    // this.renderDynamicElements()
   }
 
   stop(): void {
@@ -273,12 +294,33 @@ export class UI {
       lastUpdated: new Date(),
     }
 
-    // Log the static output
-    this.logSyncSummary()
+    // Generate the current log content
+    const header = this.renderHeaderLine()
+    const computerResults = this.renderComputerResults()
+    const messages = this.renderMessages()
+    const separator = theme.dim("─".repeat(process.stdout.columns || 80))
+    const currentOutput = `${header}\n${computerResults}${messages}\n${separator}`
 
+    // Refresh the screen with history and new output
+    this.refreshScreen()
+
+    // Store in history before logging
+    this.addToHistory(currentOutput)
+
+    // Log the new output with colors
+    console.log(currentOutput)
     // After logging static content, re-render dynamic elements
     this.renderDynamicElements()
     this.syncsComplete++
+  }
+
+  private addToHistory(output: string): void {
+    this.state.syncHistory.push(output)
+
+    // Keep only the last 3 entries
+    if (this.state.syncHistory.length >= 3) {
+      this.state.syncHistory.shift()
+    }
   }
 
   updateComputerResults(computerResults: ComputerSyncResult[]): void {
@@ -346,7 +388,7 @@ export class UI {
     }
 
     return theme.bold(
-      `#${this.syncsComplete + 1} [${this.state.mode.toUpperCase()}] [${date}] [Attempted to sync ${totalFiles} total ${pluralize("file")(totalFiles)} ${totalComputers === 1 ? "to" : "across"} ${totalComputers} ${pluralize("computer")(totalComputers)}] ` +
+      `#${this.syncsComplete + 1} [${date}] Attempted to sync ${totalFiles} total ${pluralize("file")(totalFiles)} ${totalComputers === 1 ? "to" : "across"} ${totalComputers} ${pluralize("computer")(totalComputers)} ` +
         result +
         "\n"
     )
@@ -508,19 +550,28 @@ export class UI {
       return ""
     }
 
-    return boxen(
-      controls
-        .map((c) => `${theme.keyHint(c.key)} ${theme.normal(c.desc)}`)
-        .join("   "),
-      {
-        padding: 1,
-        margin: { top: 1, left: 1 },
-        borderStyle: "round",
-        borderColor: "cyan",
-        title: titleWithSpinner,
-        titleAlignment: "center",
+    return (
+      boxen(
+        controls
+          .map((c) => `${theme.keyHint(c.key)} ${theme.normal(c.desc)}`)
+          .join("   "),
+        {
+          padding: 1,
+          margin: { top: 1, left: 1 },
+          borderStyle: "round",
+          borderColor: "cyan",
+          title: titleWithSpinner,
+          titleAlignment: "center",
+          textAlignment: "center",
+        }
+      ) +
+      "\n" +
+      boxen(theme.dim(`Last updated ${this.formatElapsedTime()}.`), {
         textAlignment: "center",
-      }
+        borderColor: "black",
+        dimBorder: true,
+        margin: { left: 5 },
+      })
     )
   }
 

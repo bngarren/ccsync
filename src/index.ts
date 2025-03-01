@@ -155,7 +155,7 @@ async function handleFatalError(
 async function main() {
   console.clear()
 
-  p.intro(`${color.magentaBright(`CC: Sync`)}`)
+  p.intro(`${color.cyanBright(`CC: Sync`)}`)
 
   try {
     // Get the config file

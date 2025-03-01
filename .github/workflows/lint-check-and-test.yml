@@ -1,4 +1,4 @@
-name: Lint, Prettify, and Test
+name: Lint, Check Format, and Test
 
 on:
   workflow_call:

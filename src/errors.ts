@@ -5,6 +5,9 @@ interface NodeError extends Error {
   stack?: string
 }
 
+/**
+ * Returns the error.message or String(error)
+ */
 export const getErrorMessage = (error: unknown) => {
   return error instanceof Error ? error.message : String(Error)
 }

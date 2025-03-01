@@ -10,6 +10,7 @@ import {
 } from "./types"
 import boxen from "boxen"
 import { pluralize } from "./utils"
+import stripAnsi from "strip-ansi"
 
 const theme = {
   primary: chalk.hex("#61AFEF"), // Bright blue
@@ -165,11 +166,12 @@ export class UI {
   // Utility to strip ANSI color codes
   private stripColors(text: string): string {
     return theme.dim(
-      text.replace(
-        // eslint-disable-next-line no-control-regex
-        /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g,
-        ""
-      )
+      // text.replace(
+      //   // eslint-disable-next-line no-control-regex
+      //   /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g,
+      //   ""
+      // )
+      stripAnsi(text)
     )
   }
 

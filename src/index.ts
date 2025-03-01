@@ -172,6 +172,8 @@ async function main() {
       process.exit(0)
     }
 
+    // console.debug(JSON.stringify(config, null, 2))
+
     const savePath = path.parse(config.minecraftSavePath)
 
     const gracefulExit = () => {

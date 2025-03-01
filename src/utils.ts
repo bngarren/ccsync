@@ -9,6 +9,7 @@ import type {
   ValidationResult as ResolveSyncRulesResult,
 } from "./types"
 import { isNodeError } from "./errors"
+import stripAnsi from "strip-ansi"
 
 // ---- Language ----
 export const pluralize = (text: string) => {
@@ -48,16 +49,16 @@ export const toTildePath = (fullPath: string): string => {
 }
 
 export const pathIsLikelyFile = (pathStr: string): boolean => {
-  // Normalize first
-  const normalizedPath = normalizePath(pathStr)
+  // Normalize and sanitize first
+  const processedPath = processPath(pathStr)
 
   // If it has a trailing slash, it's definitely a directory
-  if (normalizedPath.endsWith("/")) {
+  if (processedPath.endsWith("/")) {
     return false
   }
 
   // Get the last segment of the path (after last slash or full path if no slash)
-  const lastSegment = normalizedPath.split("/").pop() || normalizedPath
+  const lastSegment = processedPath.split("/").pop() || processedPath
 
   // If it has a file extension, it's likely a file
   if (lastSegment.includes(".") && !lastSegment.startsWith(".")) {
@@ -69,7 +70,41 @@ export const pathIsLikelyFile = (pathStr: string): boolean => {
 }
 
 /**
+ * Sanitizes a path string by:
+ * 1. Removing ANSI escape sequences
+ * 2. Replacing control characters with forward slashes
+ *
+ * This function ONLY handles problematic characters and does not
+ * modify the path structure (no backslash conversion, etc.)
+ *
+ * @param pathStr The path string to sanitize
+ * @returns A sanitized path string without control chars or ANSI sequences
+ */
+export function sanitizePath(pathStr: string): string {
+  if (typeof pathStr !== "string") {
+    throw new TypeError("Path must be a string")
+  }
+
+  // Return early for empty paths
+  if (!pathStr) return pathStr
+
+  // Step 1: Strip any ANSI escape sequences
+  let sanitized = stripAnsi(pathStr)
+
+  // Step 2:
+  // Replace control characters with forward slashes rather than removing them
+  // to maintain path structure integrity and prevent path segments from merging
+  // This regex targets control characters (0-31, 127) BUT NOT BACKSLASH (which is 92)
+  // eslint-disable-next-line no-control-regex
+  sanitized = sanitized.replace(/[\x00-\x1F\x7F]+/g, "/")
+
+  return sanitized
+}
+
+/**
  * Normalizes a file path to use forward slashes and handles trailing slashes consistently.
+ *
+ * Does NOT handle sanitization of control characters or ANSI sequences. See {@link sanitizePath}.
  *
  * @param filepath The path to normalize
  * @param stripTrailing Whether to remove trailing slash (default: true)
@@ -91,8 +126,8 @@ export const normalizePath = (
   if (filepath === ".") return "."
   if (filepath === "..") return ".."
 
-  // Normalize using Node's path.normalize first (handles . and ..)
-  let normalized = path.normalize(filepath)
+  // Normalize using Node's path.normalize first (handles . and .., and removed duplicate slashes)
+  let normalized = path.posix.normalize(filepath)
 
   // Handle Windows drive letters consistently
   const hasWindowsDrive = /^[A-Z]:/i.test(normalized)
@@ -124,11 +159,31 @@ export const normalizePath = (
 }
 
 /**
+ * Comprehensive path processing function that both sanitizes and normalizes a path.
+ * This is the primary function that should be used when processing paths for most operations.
+ *
+ * Steps performed:
+ * 1. Sanitize (remove ANSI, control chars)
+ * 2. Normalize (handle backslashes, resolves . and .., and removed duplicate slashes)
+ *
+ * @param filepath The path to process
+ * @param stripTrailing Whether to remove trailing slash (default: true)
+ * @returns A fully sanitized and normalized path
+ */
+export function processPath(input: string, stripTrailing = true): string {
+  // First sanitize any problematic characters
+  const sanitized = sanitizePath(input)
+
+  // Then perform standard path normalization
+  return normalizePath(sanitized, stripTrailing)
+}
+
+/**
  * Compares two paths for equality, accounting for platform differences
  */
 export const pathsAreEqual = (path1: string, path2: string): boolean => {
-  const norm1 = normalizePath(path1)
-  const norm2 = normalizePath(path2)
+  const norm1 = processPath(path1)
+  const norm2 = processPath(path2)
 
   // On Windows, paths are case-insensitive
   if (process.platform === "win32") {
@@ -419,30 +474,28 @@ export async function resolveSyncRules(
     errors: [],
   }
 
-  const normalizedSourceRoot = normalizePath(config.sourceRoot)
+  const processedSourceRootPath = processPath(config.sourceRoot)
 
   // Process each sync rule
   for (const rule of config.rules) {
     try {
       // Find all matching source files
-      const sourceFiles = (
-        await glob(rule.source, {
-          cwd: normalizedSourceRoot,
+      const matchedSourceFiles = (
+        await glob(processPath(rule.source, false), {
+          cwd: processedSourceRootPath,
           absolute: true,
         })
-      ).map((sf) => normalizePath(sf))
+      ).map((sf) => processPath(sf))
 
-      // Filter by changed files if in watch mode
+      // Filter for 'selectedFiles', i.e. changed files from watch mode
       const filesToResolve = selectedFiles
-        ? sourceFiles.filter((file) => {
-            const relPath = normalizePath(
-              path.relative(config.sourceRoot, file)
-            )
+        ? matchedSourceFiles.filter((file) => {
+            const relPath = processPath(path.relative(config.sourceRoot, file))
             return Array.from(selectedFiles).some(
-              (changed) => normalizePath(changed) === relPath
+              (changed) => processPath(changed) === relPath
             )
           })
-        : sourceFiles
+        : matchedSourceFiles
 
       if (filesToResolve.length === 0) {
         resolvedResult.errors.push(
@@ -478,13 +531,13 @@ export async function resolveSyncRules(
 
       // Create resolved file entries
       for (const sourcePath of filesToResolve) {
-        const normalizedTargetPath = normalizePath(rule.target)
+        const normalizedTargetPath = processPath(rule.target)
         const isDirectory = !pathIsLikelyFile(normalizedTargetPath)
 
         resolvedResult.resolvedFileRules.push({
-          sourceAbsolutePath: normalizePath(sourcePath),
+          sourceAbsolutePath: processPath(sourcePath),
           // Calculated relative to sourceRoot
-          sourceRelativePath: normalizePath(
+          sourceRelativePath: processPath(
             path.relative(config.sourceRoot, sourcePath)
           ),
           flatten: !isRecursiveGlob(rule.source) || rule.flatten,
@@ -556,28 +609,28 @@ export async function resolveSyncRules(
 export function resolveTargetPath(rule: ResolvedFileRule): string {
   // For file targets, normalize and use the specified path directly
   if (rule.target.type === "file") {
-    return normalizePath(rule.target.path)
+    return processPath(rule.target.path)
   }
 
   // For directory targets
-  const targetDir = normalizePath(rule.target.path)
+  const targetDir = processPath(rule.target.path)
   const sourceFilename = path.basename(rule.sourceAbsolutePath)
 
   // When flattening, just append the filename to the target directory
   if (rule.flatten !== false) {
     // Default to true if undefined
-    return normalizePath(path.join(targetDir, sourceFilename))
+    return processPath(path.join(targetDir, sourceFilename))
   }
 
   // When not flattening, preserve source directory structure
-  const sourceDir = path.dirname(normalizePath(rule.sourceRelativePath))
+  const sourceDir = path.dirname(processPath(rule.sourceRelativePath))
 
   if (sourceDir === "." || sourceDir === "") {
     // Source file is directly in the source root
-    return normalizePath(path.join(targetDir, sourceFilename))
+    return processPath(path.join(targetDir, sourceFilename))
   } else {
     // Source file is in a subdirectory, preserve that structure
-    return normalizePath(path.join(targetDir, sourceDir, sourceFilename))
+    return processPath(path.join(targetDir, sourceDir, sourceFilename))
   }
 }
 

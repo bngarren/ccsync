@@ -6,10 +6,10 @@ import {
   copyFilesToComputer,
   resolveSyncRules,
   getComputerShortPath,
-  normalizePath,
   toSystemPath,
   pathsAreEqual,
   resolveTargetPath,
+  processPath,
 } from "../src/utils"
 import path from "path"
 import { mkdir, rm, writeFile } from "node:fs/promises"
@@ -178,15 +178,15 @@ describe("Path Handling", () => {
       { input: "folder/./subfolder", expected: "folder/subfolder" },
       { input: "folder/../sibling", expected: "sibling" },
       {
-        input: "C:\\Users\\test\\file.txt",
+        input: String.raw`C:\Users\test\file.txt`,
         expected: "C:/Users/test/file.txt",
       },
       {
-        input: "folder\\subfolder\\file.txt",
+        input: String.raw`folder\subfolder\file.txt`,
         expected: "folder/subfolder/file.txt",
       },
       {
-        input: "\\\\networkshare\\folder\\file.txt",
+        input: String.raw`\\networkshare\folder\file.txt`,
         expected: "//networkshare/folder/file.txt",
       },
       {
@@ -197,24 +197,62 @@ describe("Path Handling", () => {
     ]
 
     for (const { input, expected } of tests) {
-      expect(normalizePath(input)).toBe(expected)
+      expect(processPath(input)).toBe(expected)
+    }
+  })
+
+  test("processPath handles Windows backslash paths that might be interpreted as escape sequences", () => {
+    const tests = [
+      {
+        input: String.raw`folder\test\file.lua`,
+        expected: "folder/test/file.lua",
+        description: "basic Windows path",
+      },
+      {
+        input: String.raw`folder\temp\file.lua`,
+        expected: "folder/temp/file.lua",
+        description: "path with potential tab escape sequence",
+      },
+      {
+        input: String.raw`folder\new\file.lua`,
+        expected: "folder/new/file.lua",
+        description: "path with potential newline escape sequence",
+      },
+      {
+        input: String.raw`folder\r\file.lua`,
+        expected: "folder/r/file.lua",
+        description: "path with potential carriage return escape sequence",
+      },
+      {
+        input: String.raw`C:\Program Files\test\file.lua`,
+        expected: "C:/Program Files/test/file.lua",
+        description: "Windows path with spaces",
+      },
+    ]
+
+    for (const { input, expected, description } of tests) {
+      try {
+        expect(processPath(input)).toBe(expected)
+      } catch (err) {
+        throw new Error(`Test case "${description}" failed: ${String(err)}`)
+      }
     }
   })
 
   test("handles mixed path separators", () => {
     const tests = [
       {
-        input: "folder/subfolder\\file.txt",
+        input: String.raw`folder/subfolder\file.txt`,
         expected: "folder/subfolder/file.txt",
       },
       {
-        input: "C:\\Users/test\\documents/file.txt",
+        input: String.raw`C:\Users/test\documents/file.txt`,
         expected: "C:/Users/test/documents/file.txt",
       },
     ]
 
     for (const { input, expected } of tests) {
-      expect(normalizePath(input)).toBe(expected)
+      expect(processPath(input)).toBe(expected)
     }
   })
 
@@ -247,6 +285,7 @@ describe("Path Handling", () => {
         stripTrailing: true,
       },
       // Windows paths
+      // Not using String.raw here as we want to include that trailing slash in the input
       {
         input: "lib\\folder\\",
         target: "lib/folder",
@@ -263,7 +302,7 @@ describe("Path Handling", () => {
 
     for (const { input, target, description, stripTrailing } of tests) {
       try {
-        expect(normalizePath(input, stripTrailing)).toBe(target)
+        expect(processPath(input, stripTrailing)).toBe(target)
       } catch (err) {
         throw new Error(`Failed: ${description}`)
       }
@@ -290,14 +329,14 @@ describe("Path Handling", () => {
     ]
 
     for (const { input, expected } of tests) {
-      expect(normalizePath(input)).toBe(expected)
+      expect(processPath(input)).toBe(expected)
     }
   })
 
   test("handles empty and invalid inputs", () => {
-    expect(normalizePath("")).toBe("")
-    expect(() => normalizePath(undefined as any)).toThrow(TypeError)
-    expect(() => normalizePath(null as any)).toThrow(TypeError)
+    expect(processPath("")).toBe("")
+    expect(() => processPath(undefined as any)).toThrow(TypeError)
+    expect(() => processPath(null as any)).toThrow(TypeError)
   })
 
   test("handles path comparison based on OS", async () => {
@@ -619,6 +658,52 @@ describe("File Operations", () => {
       expect(validation.resolvedFileRules[0].sourceAbsolutePath).toContain(
         "program.lua"
       )
+    })
+
+    test("resolveSyncRules handles Windows-style paths with potential escape sequences", async () => {
+      // Create files in the temp directory
+      await fs.mkdir(path.join(sourceDir, "test", "temp"), { recursive: true })
+      await fs.writeFile(
+        path.join(sourceDir, "test", "temp", "file.lua"),
+        "-- Test file"
+      )
+
+      const config: Config = withDefaultConfig({
+        sourceRoot: sourceDir,
+        minecraftSavePath: testSaveDir,
+        rules: [
+          {
+            source: String.raw`test\temp\file.lua`,
+            target: "\\target\\folder\\",
+            computers: ["1"],
+          },
+        ],
+      })
+
+      const computers = [
+        {
+          id: "1",
+          path: path.join(computersDir, "1"),
+          shortPath: getComputerShortPath(testSaveName, "1"),
+        },
+      ]
+
+      const validation = await resolveSyncRules(config, computers)
+
+      // Expect no errors
+      expect(validation.errors).toHaveLength(0)
+
+      // Expect the file to be resolved
+      expect(validation.resolvedFileRules).toHaveLength(1)
+
+      // Check paths are correctly sanitized and normalized
+      const resolvedRule = validation.resolvedFileRules[0]
+      expect(
+        processPath(path.relative(sourceDir, resolvedRule.sourceAbsolutePath))
+      ).toBe("test/temp/file.lua")
+
+      // Check target is correctly processed
+      expect(resolvedRule.target.path).toBe("/target/folder")
     })
   })
 
@@ -1202,7 +1287,7 @@ describe("File Operations", () => {
 
     // Verify glob pattern resolution
     const apiFiles = validation.resolvedFileRules.filter((f) =>
-      normalizePath(f.target.path).startsWith("/apis")
+      processPath(f.target.path).startsWith("/apis")
     )
     expect(apiFiles).toHaveLength(2)
     expect(apiFiles[0].computers).toEqual(["1", "2", "3"]) // network group
@@ -1215,7 +1300,7 @@ describe("File Operations", () => {
 
     // Verify multiple group resolution
     const startupFile = validation.resolvedFileRules.find(
-      (f) => normalizePath(f.target.path) === "/startup.lua"
+      (f) => processPath(f.target.path) === "/startup.lua"
     )
     expect(startupFile?.computers).toEqual(["1", "2", "3", "4", "5"]) // both groups
   })

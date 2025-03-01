@@ -37,9 +37,10 @@ describe("Version compatibility", () => {
   })
 
   test("rejects incompatible major version", async () => {
-    await writeConfig(configPath, { version: "2.0" })
-    const { config, errors } = await loadConfig(configPath)
-
+    await writeConfig(configPath, { version: "999" })
+    const { config, errors } = await loadConfig(configPath, {
+      skipPathValidation: true,
+    })
     expect(errors).toHaveLength(1)
     expect(errors[0].category).toBe(ConfigErrorCategory.VERSION)
     expect(errors[0].message).toContain(
@@ -52,7 +53,9 @@ describe("Version compatibility", () => {
     const { version, ...configWithoutVersion } = DEFAULT_CONFIG
     await writeFile(configPath, yaml.stringify(configWithoutVersion))
 
-    const { config, errors } = await loadConfig(configPath)
+    const { config, errors } = await loadConfig(configPath, {
+      skipPathValidation: true,
+    })
 
     expect(errors).toHaveLength(1)
     expect(errors[0].message).toContain("Config version is required")

@@ -19,9 +19,9 @@ import {
   findMinecraftComputers,
   resolveSyncRules,
   copyFilesToComputer,
-  normalizePath,
   pluralize,
   resolveTargetPath,
+  processPath,
 } from "./utils"
 import { KeyHandler } from "./keys"
 import { setTimeout } from "node:timers/promises"
@@ -182,7 +182,7 @@ export class SyncManager {
       } catch (err) {
         plan.issues.push(
           createSyncPlanIssue(
-            `Failed to validate save directory: ${err instanceof Error ? err.message : String(err)}`,
+            `Failed to validate save directory: ${getErrorMessage(err)}`,
             SyncPlanIssueCategory.SAVE_DIRECTORY,
             SyncPlanIssueSeverity.ERROR,
             { source: "createSyncPlan" }
@@ -206,7 +206,7 @@ export class SyncManager {
               {
                 source: "findMinecraftComputers",
                 suggestion:
-                  "Create a computer in-game first, or if using a test environment, add a dummy file to a computer directory",
+                  "Ensure CC:Tweaked computers are present in the world. Sometimes adding a dummy file to the in-game computer helps.",
               }
             )
           )
@@ -985,7 +985,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
 
     // If this is triggered by a file change, update the changedFiles set
     if (changedPath) {
-      const relativePath = normalizePath(
+      const relativePath = processPath(
         path.relative(this.config.sourceRoot, changedPath)
       )
       this.changedFiles.add(relativePath)
@@ -1099,12 +1099,12 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       const uniqueSourcePaths = new Set<string>()
 
       for (const rule of this.config.rules) {
-        const sourcePath = normalizePath(
+        const sourcePath = processPath(
           path.join(this.config.sourceRoot, rule.source),
           false // Don't strip trailing slash for globs
         )
         const matches = await glob(sourcePath, { absolute: true })
-        matches.forEach((match) => uniqueSourcePaths.add(normalizePath(match)))
+        matches.forEach((match) => uniqueSourcePaths.add(processPath(match)))
       }
 
       // Convert to array and store in watchedFiles

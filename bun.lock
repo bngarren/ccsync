@@ -12,6 +12,7 @@
         "glob": "10.3.10",
         "log-update": "^6.1.0",
         "picocolors": "^1.1.1",
+        "strip-ansi": "^7.1.0",
         "ts-deepmerge": "^7.0.2",
         "yaml": "^2.7.0",
         "zod": "^3.24.2",

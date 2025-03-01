@@ -137,14 +137,15 @@ async function handleFatalError(
     error instanceof AppError ? error.message : getErrorMessage(error)
 
   // Log the error
-  p.log.error(`FATAL ERROR: ${message}`)
+  const log = getLogger()
+  log.fatal(`FATAL ERROR: ${message}`)
 
   // Try to clean up if we have a sync manager
   if (syncManager) {
     try {
       await syncManager.stop()
     } catch (stopErr) {
-      p.log.error(`Error during cleanup: ${getErrorMessage(stopErr)}`)
+      log.error(`Error during cleanup: ${getErrorMessage(stopErr)}`)
     }
   }
 
@@ -278,12 +279,7 @@ async function main() {
     }
   } catch (error) {
     // Catch-all for errors during startup
-    if (error instanceof AppError) {
-      await handleFatalError(error)
-    } else {
-      p.log.error(`Fatal error: ${getErrorMessage(error)}`)
-      process.exit(1)
-    }
+    await handleFatalError(error)
   }
 }
 

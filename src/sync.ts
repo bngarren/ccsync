@@ -36,6 +36,7 @@ import {
   SyncPlanIssueSeverity,
   type SyncPlan,
 } from "./syncplan"
+import { getLogger } from "./log"
 
 enum SyncManagerState {
   IDLE,
@@ -78,6 +79,9 @@ function getSyncPlanErrorMessage(syncPlan: SyncPlan): string {
 }
 
 export class SyncManager {
+  private get log() {
+    return getLogger()
+  }
   private ui: UI | null = null
   private activeModeController:
     | ManualModeController
@@ -88,11 +92,11 @@ export class SyncManager {
   // STATE
   private state: SyncManagerState = SyncManagerState.IDLE
   private setState(newState: SyncManagerState) {
-    // const oldState = this.state
+    const oldState = this.state
     this.state = newState
-    // this.log.verbose(
-    //   `State transition: ${SyncManagerState[oldState]} → ${SyncManagerState[newState]}`
-    // );
+    this.log.trace(
+      `State transition: ${SyncManagerState[oldState]} → ${SyncManagerState[newState]}`
+    )
   }
 
   constructor(private config: Config) {}
@@ -118,7 +122,7 @@ export class SyncManager {
   }
 
   public invalidateCache(): void {
-    //this.log.verbose("Sync plan cache invalidated")
+    this.log.trace("Sync plan cache invalidated")
     this.lastSyncPlan = null
   }
 
@@ -134,7 +138,10 @@ export class SyncManager {
 
     // Check cache first
     if (!forceRefresh && this.isCacheValid(changedFiles) && this.lastSyncPlan) {
+      this.log.trace("createSyncPlan > Cache hit")
       return this.lastSyncPlan
+    } else {
+      this.log.trace("createSyncPlan > Cache miss")
     }
 
     // Create a base sync plan
@@ -338,6 +345,7 @@ export class SyncManager {
     )
 
     if (filesToCopy.length === 0) {
+      this.log.warn(`syncToComputer called with 0 files to copy!`)
       return {
         computerId: computer.id,
         copiedFiles: [],
@@ -497,6 +505,25 @@ export class SyncManager {
     } else if (warningMessages.length > 0) {
       operationResult = SyncOperationResult.WARNING
     }
+
+    this.log.info(
+      {
+        totalFiles: totalAttemptedFiles,
+        totalComputers: allComputerIds.size,
+        abbrComputerResults: computerResults.map((cr) => {
+          return {
+            computerId: cr.computerId,
+            exists: cr.exists,
+            files: {
+              attempted: cr.files.length,
+              successful: cr.files.filter((f) => f.success).length,
+            },
+          }
+        }),
+        operationResult,
+      },
+      "performSync completed"
+    )
 
     // Update UI with final results
     if (this.ui) {

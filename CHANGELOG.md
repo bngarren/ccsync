@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.0.0-beta.2](https://github.com/bngarren/ccsync/compare/v1.0.0-beta.1...v1.0.0-beta.2) (2025-03-01)
+
+
+### Features
+
+* **ui:** Major UI update, using chalk, boxen, and log-update ([1358f3e](https://github.com/bngarren/ccsync/commit/1358f3ed32ccc5bb15e96fe90ec4070c5b6431f8))
+
+
+### Bug Fixes
+
+* **config:** downgrade config version to 1.1 (from 2.0) as it was incorrectly given a major increase ([#14](https://github.com/bngarren/ccsync/issues/14)) ([c64cd4d](https://github.com/bngarren/ccsync/commit/c64cd4d5c418a8866b95ca32cb60c0ceb0bb8e8c))
+* **errors:** Improved error handling and integration with new UI ([1358f3e](https://github.com/bngarren/ccsync/commit/1358f3ed32ccc5bb15e96fe90ec4070c5b6431f8))
+* **paths:** Add a resolveTargetPath utility function with extensive testing. This important function helps to resolve a rule's full target path, taking into consideration whether it represents a filename, directory, and whether flatten is false, in which case source directory structure will be preserved in the actual target path. ([1358f3e](https://github.com/bngarren/ccsync/commit/1358f3ed32ccc5bb15e96fe90ec4070c5b6431f8))
+* **paths:** fixes glob * causing inclusion of directories into resolved file rule and added test ([1358f3e](https://github.com/bngarren/ccsync/commit/1358f3ed32ccc5bb15e96fe90ec4070c5b6431f8))
+* **ui:** use strip-ansi in UI to clear color codes ([1358f3e](https://github.com/bngarren/ccsync/commit/1358f3ed32ccc5bb15e96fe90ec4070c5b6431f8))
+
+
+### Miscellaneous Chores
+
+* release as 1.0.0-beta.2 ([cfa6fbe](https://github.com/bngarren/ccsync/commit/cfa6fbe72c3164630f4ad2cc912fdbe3efb43193))
+
 ## [1.0.0-beta.1](https://github.com/bngarren/ccsync/compare/v1.0.0-beta...v1.0.0-beta.1) (2025-02-25)
 
 

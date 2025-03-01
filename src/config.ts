@@ -2,13 +2,13 @@
 
 import { z } from "zod"
 import { parse } from "yaml"
-import { normalizePath, pathIsLikelyFile, resolvePath } from "./utils"
+import { pathIsLikelyFile, processPath, resolvePath } from "./utils"
 import path from "path"
 import * as fs from "node:fs/promises"
 
 import { merge } from "ts-deepmerge"
 
-export const CONFIG_VERSION = "1.0"
+export const CONFIG_VERSION = "2.0"
 export const DEFAULT_CONFIG_FILENAME = ".ccsync.yaml"
 export const DEFAULT_CONFIG: Config = {
   version: CONFIG_VERSION,
@@ -146,13 +146,13 @@ const SyncRuleSchema = z.object({
       required_error: "Source file path is required",
       invalid_type_error: "Source must be a file path",
     })
-    .transform((path) => normalizePath(path, false)), // keep trailing slashes for globs
+    .transform((path) => processPath(path, false)), // keep trailing slashes for globs
   target: z
     .string({
       required_error: "Target file path is required",
       invalid_type_error: "Target must be a file path",
     })
-    .transform((path) => normalizePath(path)),
+    .transform((path) => processPath(path)),
   computers: z
     .union([
       z.array(
@@ -201,13 +201,13 @@ export const ConfigSchema = z
         required_error: "Source path is required",
         invalid_type_error: "Source path must be text",
       })
-      .transform((path) => normalizePath(path)),
+      .transform((path) => processPath(path)),
     minecraftSavePath: z
       .string({
         required_error: "Minecraft save path is required",
         invalid_type_error: "Save path must be text",
       })
-      .transform((path) => normalizePath(path)),
+      .transform((path) => processPath(path)),
     computerGroups: ComputerGroupsSchema,
     rules: z.array(SyncRuleSchema),
     advanced: AdvancedOptionsSchema.default({
@@ -332,6 +332,11 @@ export const findConfig = async (
 }
 
 type LoadConfigOptions = {
+  /**
+   * Path validation in loadConfig includes verifying that the `sourceRoot` directory exists and that the `minecraftSavePath` exists and can be accessed
+   *
+   * Skipping this validation step can be helpful for tests.
+   */
   skipPathValidation?: boolean
 }
 
@@ -349,6 +354,7 @@ export async function loadConfig(
   try {
     const resolvedPath = resolvePath(configFilePath)
     const file = await fs.readFile(resolvedPath, "utf-8")
+
     const rawConfig = parse(file)
 
     const parseResult = ConfigSchema.safeParse(rawConfig)
@@ -421,8 +427,8 @@ export async function loadConfig(
     if (result.errors.length === 0) {
       result.config = {
         ...validatedConfig,
-        sourceRoot: normalizePath(resolvedSourceRoot),
-        minecraftSavePath: normalizePath(resolvedSavePath),
+        sourceRoot: processPath(resolvedSourceRoot),
+        minecraftSavePath: processPath(resolvedSavePath),
       }
     }
   } catch (error) {
@@ -452,6 +458,10 @@ export const createDefaultConfig = async (projectDir: string) => {
   const configPath = path.join(projectDir, DEFAULT_CONFIG_FILENAME)
   const configContent = `# CC:Sync Configuration File
 # This file configures how CC:Sync copies files to your ComputerCraft computers
+
+# IMPORTANT: Recommend using forward slashes (/) in paths, even on Windows.
+# Example: "C:/Users/name/path"
+# Otherwise, backslashes need to be properly escaped: "C:\\Users\\name\\path"
 
 # Config version (do not modify)
 version: "${CONFIG_VERSION}"

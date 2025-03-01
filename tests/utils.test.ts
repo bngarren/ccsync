@@ -4,11 +4,12 @@ import {
   validateMinecraftSave,
   findMinecraftComputers,
   copyFilesToComputer,
-  validateFileSync,
+  resolveSyncRules,
   getComputerShortPath,
-  normalizePath,
   toSystemPath,
   pathsAreEqual,
+  resolveTargetPath,
+  processPath,
 } from "../src/utils"
 import path from "path"
 import { mkdir, rm, writeFile } from "node:fs/promises"
@@ -23,6 +24,8 @@ import {
   TempCleaner,
 } from "./test-helpers"
 import { testLog } from "./setup"
+import { getErrorMessage } from "../src/errors"
+import type { ResolvedFileRule } from "../src/types"
 
 // ---- MC SAVE OPERATIONS ----
 describe("Save Directory Validation", () => {
@@ -175,15 +178,15 @@ describe("Path Handling", () => {
       { input: "folder/./subfolder", expected: "folder/subfolder" },
       { input: "folder/../sibling", expected: "sibling" },
       {
-        input: "C:\\Users\\test\\file.txt",
+        input: String.raw`C:\Users\test\file.txt`,
         expected: "C:/Users/test/file.txt",
       },
       {
-        input: "folder\\subfolder\\file.txt",
+        input: String.raw`folder\subfolder\file.txt`,
         expected: "folder/subfolder/file.txt",
       },
       {
-        input: "\\\\networkshare\\folder\\file.txt",
+        input: String.raw`\\networkshare\folder\file.txt`,
         expected: "//networkshare/folder/file.txt",
       },
       {
@@ -194,24 +197,62 @@ describe("Path Handling", () => {
     ]
 
     for (const { input, expected } of tests) {
-      expect(normalizePath(input)).toBe(expected)
+      expect(processPath(input)).toBe(expected)
+    }
+  })
+
+  test("processPath handles Windows backslash paths that might be interpreted as escape sequences", () => {
+    const tests = [
+      {
+        input: String.raw`folder\test\file.lua`,
+        expected: "folder/test/file.lua",
+        description: "basic Windows path",
+      },
+      {
+        input: String.raw`folder\temp\file.lua`,
+        expected: "folder/temp/file.lua",
+        description: "path with potential tab escape sequence",
+      },
+      {
+        input: String.raw`folder\new\file.lua`,
+        expected: "folder/new/file.lua",
+        description: "path with potential newline escape sequence",
+      },
+      {
+        input: String.raw`folder\r\file.lua`,
+        expected: "folder/r/file.lua",
+        description: "path with potential carriage return escape sequence",
+      },
+      {
+        input: String.raw`C:\Program Files\test\file.lua`,
+        expected: "C:/Program Files/test/file.lua",
+        description: "Windows path with spaces",
+      },
+    ]
+
+    for (const { input, expected, description } of tests) {
+      try {
+        expect(processPath(input)).toBe(expected)
+      } catch (err) {
+        throw new Error(`Test case "${description}" failed: ${String(err)}`)
+      }
     }
   })
 
   test("handles mixed path separators", () => {
     const tests = [
       {
-        input: "folder/subfolder\\file.txt",
+        input: String.raw`folder/subfolder\file.txt`,
         expected: "folder/subfolder/file.txt",
       },
       {
-        input: "C:\\Users/test\\documents/file.txt",
+        input: String.raw`C:\Users/test\documents/file.txt`,
         expected: "C:/Users/test/documents/file.txt",
       },
     ]
 
     for (const { input, expected } of tests) {
-      expect(normalizePath(input)).toBe(expected)
+      expect(processPath(input)).toBe(expected)
     }
   })
 
@@ -244,6 +285,7 @@ describe("Path Handling", () => {
         stripTrailing: true,
       },
       // Windows paths
+      // Not using String.raw here as we want to include that trailing slash in the input
       {
         input: "lib\\folder\\",
         target: "lib/folder",
@@ -260,7 +302,7 @@ describe("Path Handling", () => {
 
     for (const { input, target, description, stripTrailing } of tests) {
       try {
-        expect(normalizePath(input, stripTrailing)).toBe(target)
+        expect(processPath(input, stripTrailing)).toBe(target)
       } catch (err) {
         throw new Error(`Failed: ${description}`)
       }
@@ -287,14 +329,14 @@ describe("Path Handling", () => {
     ]
 
     for (const { input, expected } of tests) {
-      expect(normalizePath(input)).toBe(expected)
+      expect(processPath(input)).toBe(expected)
     }
   })
 
   test("handles empty and invalid inputs", () => {
-    expect(normalizePath("")).toBe("")
-    expect(() => normalizePath(undefined as any)).toThrow(TypeError)
-    expect(() => normalizePath(null as any)).toThrow(TypeError)
+    expect(processPath("")).toBe("")
+    expect(() => processPath(undefined as any)).toThrow(TypeError)
+    expect(() => processPath(null as any)).toThrow(TypeError)
   })
 
   test("handles path comparison based on OS", async () => {
@@ -315,6 +357,204 @@ describe("Path Handling", () => {
     for (const test of tests) {
       expect(pathsAreEqual(test.path1, test.path2)).toBe(test.shouldMatch)
     }
+  })
+
+  describe("resolveTargetPath", () => {
+    test("handles different target types and flatten flags correctly", () => {
+      const tests = [
+        {
+          name: "file target - simple path",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "program.lua",
+            targetPath: "startup.lua", // File target (has extension)
+            computers: "1",
+          }),
+          expected: "startup.lua",
+          description: "file target should use target path directly",
+        },
+        {
+          name: "directory target with flatten=true",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "program.lua",
+            targetPath: "lib/", // Directory target
+            flatten: true,
+            computers: "1",
+          }),
+          expected: "lib/program.lua",
+          description: "should append filename to target directory",
+        },
+        {
+          name: "directory target with flatten=false - root file",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "program.lua", // File at source root
+            targetPath: "lib/",
+            flatten: false, // Don't flatten
+            computers: "1",
+          }),
+          expected: "lib/program.lua",
+          description: "source root file should not add subdirectories",
+        },
+        {
+          name: "directory target with flatten=false - nested file",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "apis/util.lua", // Nested file
+            targetPath: "lib/",
+            flatten: false, // Don't flatten
+            computers: "1",
+          }),
+          expected: "lib/apis/util.lua",
+          description: "should preserve source directory structure",
+        },
+        {
+          name: "directory target with deeply nested source",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "apis/net/http.lua", // Deeply nested
+            targetPath: "lib/",
+            flatten: false,
+            computers: "1",
+          }),
+          expected: "lib/apis/net/http.lua",
+          description: "should preserve deep directory structure",
+        },
+        {
+          name: "absolute target path",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "program.lua",
+            targetPath: "/absolute/path/",
+            computers: "1",
+          }),
+          expected: "/absolute/path/program.lua",
+          description: "should handle absolute target paths",
+        },
+        {
+          name: "Windows-style target path",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "program.lua",
+            targetPath: "windows\\style\\path\\",
+            computers: "1",
+          }),
+          expected: "windows/style/path/program.lua",
+          description: "should normalize Windows path separators",
+        },
+        {
+          name: "mixed separators in target",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "program.lua",
+            targetPath: "mixed/style\\path/",
+            computers: "1",
+          }),
+          expected: "mixed/style/path/program.lua",
+          description: "should normalize mixed path separators",
+        },
+        {
+          name: "path with spaces",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "folder with spaces/file.lua",
+            targetPath: "target with spaces/",
+            flatten: false,
+            computers: "1",
+          }),
+          expected: "target with spaces/folder with spaces/file.lua",
+          description: "should handle paths with spaces",
+        },
+        {
+          name: "unusual characters in paths",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "special-@#$%^-chars/file.lua",
+            targetPath: "output-!&()-/",
+            flatten: false,
+            computers: "1",
+          }),
+          expected: "output-!&()-/special-@#$%^-chars/file.lua",
+          description: "should handle special characters in paths",
+        },
+      ]
+
+      for (const test of tests) {
+        try {
+          const result = resolveTargetPath(test.rule)
+          expect(result).toBe(test.expected)
+        } catch (err) {
+          throw new Error(
+            `Test "${test.name}" failed: ${getErrorMessage(err)}\n${test.description}`
+          )
+        }
+      }
+    })
+
+    test("handles edge cases correctly", () => {
+      const edgeCases = [
+        {
+          name: "empty target path with directory type",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "program.lua",
+            targetPath: "",
+            computers: "1",
+          }),
+          expected: "program.lua",
+          description: "empty directory target should just use filename",
+        },
+        {
+          name: "root target path",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "program.lua",
+            targetPath: "/",
+            computers: "1",
+          }),
+          expected: "/program.lua",
+          description: "root directory target should be handled correctly",
+        },
+        {
+          name: "dot target path",
+          rule: createResolvedFile({
+            sourceRoot: "/src",
+            sourcePath: "program.lua",
+            targetPath: ".",
+            computers: "1",
+          }),
+          expected: "program.lua",
+          description: "current directory target should be handled correctly",
+        },
+        {
+          name: "undefined flatten flag",
+          rule: {
+            sourceAbsolutePath: "/src/program.lua",
+            sourceRelativePath: "program.lua",
+            // flatten is undefined
+            target: {
+              type: "directory",
+              path: "lib/",
+            },
+            computers: ["1"],
+          },
+          expected: "lib/program.lua",
+          description: "undefined flatten should default to true behavior",
+        },
+      ]
+
+      for (const test of edgeCases) {
+        try {
+          const result = resolveTargetPath(test.rule as ResolvedFileRule)
+          expect(result).toBe(test.expected)
+        } catch (err) {
+          throw new Error(
+            `Edge case "${test.name}" failed: ${getErrorMessage(err)}\n${test.description}`
+          )
+        }
+      }
+    })
   })
 })
 
@@ -346,8 +586,8 @@ describe("File Operations", () => {
     await cleanup.cleanDir(tempDir)
   })
 
-  describe("validateFileSync", () => {
-    test("validates files and returns correct structure", async () => {
+  describe("resolveSyncRules", () => {
+    test("resolves rules and returns correct structure", async () => {
       const config: Config = withDefaultConfig({
         sourceRoot: sourceDir,
         minecraftSavePath: testSaveDir,
@@ -364,7 +604,7 @@ describe("File Operations", () => {
           shortPath: getComputerShortPath(testSaveName, "1"),
         },
       ]
-      const validation = await validateFileSync(config, computers)
+      const validation = await resolveSyncRules(config, computers)
 
       expect(validation.resolvedFileRules).toHaveLength(2)
       expect(validation.availableComputers).toHaveLength(1)
@@ -387,7 +627,7 @@ describe("File Operations", () => {
           shortPath: getComputerShortPath(testSaveName, "1"),
         },
       ]
-      const validation = await validateFileSync(config, computers)
+      const validation = await resolveSyncRules(config, computers)
 
       expect(validation.resolvedFileRules).toHaveLength(0)
       expect(validation.errors).toHaveLength(1)
@@ -412,12 +652,116 @@ describe("File Operations", () => {
       ]
       const changedFiles = new Set(["program.lua"])
 
-      const validation = await validateFileSync(config, computers, changedFiles)
+      const validation = await resolveSyncRules(config, computers, changedFiles)
 
       expect(validation.resolvedFileRules).toHaveLength(1)
       expect(validation.resolvedFileRules[0].sourceAbsolutePath).toContain(
         "program.lua"
       )
+    })
+
+    test("resolveSyncRules handles Windows-style paths with potential escape sequences", async () => {
+      // Create files in the temp directory
+      await fs.mkdir(path.join(sourceDir, "test", "temp"), { recursive: true })
+      await fs.writeFile(
+        path.join(sourceDir, "test", "temp", "file.lua"),
+        "-- Test file"
+      )
+
+      const config: Config = withDefaultConfig({
+        sourceRoot: sourceDir,
+        minecraftSavePath: testSaveDir,
+        rules: [
+          {
+            source: String.raw`test\temp\file.lua`,
+            target: "\\target\\folder\\",
+            computers: ["1"],
+          },
+        ],
+      })
+
+      const computers = [
+        {
+          id: "1",
+          path: path.join(computersDir, "1"),
+          shortPath: getComputerShortPath(testSaveName, "1"),
+        },
+      ]
+
+      const validation = await resolveSyncRules(config, computers)
+
+      // Expect no errors
+      expect(validation.errors).toHaveLength(0)
+
+      // Expect the file to be resolved
+      expect(validation.resolvedFileRules).toHaveLength(1)
+
+      // Check paths are correctly sanitized and normalized
+      const resolvedRule = validation.resolvedFileRules[0]
+      expect(
+        processPath(path.relative(sourceDir, resolvedRule.sourceAbsolutePath))
+      ).toBe("test/temp/file.lua")
+
+      // Check target is correctly processed
+      expect(resolvedRule.target.path).toBe("/target/folder")
+    })
+
+    test("filters out directories when using glob without file extension", async () => {
+      // Create test directory structure with both files and directories
+      await fs.mkdir(path.join(sourceDir, "glob_test"), { recursive: true })
+      await fs.mkdir(path.join(sourceDir, "glob_test", "subdir"), {
+        recursive: true,
+      })
+
+      // Create some files
+      await fs.writeFile(
+        path.join(sourceDir, "glob_test", "file1.lua"),
+        "-- Test file 1"
+      )
+      await fs.writeFile(
+        path.join(sourceDir, "glob_test", "file2.txt"),
+        "-- Test file 2"
+      )
+      await fs.writeFile(
+        path.join(sourceDir, "glob_test", "subdir", "file3.lua"),
+        "-- Test file 3"
+      )
+
+      const config: Config = withDefaultConfig({
+        sourceRoot: sourceDir,
+        minecraftSavePath: testSaveDir,
+        rules: [
+          {
+            // Use a glob pattern without file extension that would match both files and dirs
+            source: "glob_test/*",
+            target: "/files/",
+            computers: ["1"],
+          },
+        ],
+      })
+
+      const computers = [
+        {
+          id: "1",
+          path: path.join(computersDir, "1"),
+          shortPath: getComputerShortPath(testSaveName, "1"),
+        },
+      ]
+
+      const validation = await resolveSyncRules(config, computers)
+
+      // Should only match the files, not the 'subdir' directory
+      expect(validation.resolvedFileRules).toHaveLength(2)
+
+      // Verify we only got files, not directories
+      const resolvedPaths = validation.resolvedFileRules
+        .map((rule) => path.basename(rule.sourceAbsolutePath))
+        .sort()
+
+      expect(resolvedPaths).toEqual(["file1.lua", "file2.txt"])
+
+      // Make sure 'subdir' was not included
+      expect(resolvedPaths).not.toContain("subdir")
     })
   })
 
@@ -983,7 +1327,7 @@ describe("File Operations", () => {
       },
     ]
 
-    const validation = await validateFileSync(config, computers)
+    const validation = await resolveSyncRules(config, computers)
 
     // testLog({
     //   ruleCount: validation.resolvedFileRules.length,
@@ -1001,7 +1345,7 @@ describe("File Operations", () => {
 
     // Verify glob pattern resolution
     const apiFiles = validation.resolvedFileRules.filter((f) =>
-      normalizePath(f.targetPath).startsWith("/apis")
+      processPath(f.target.path).startsWith("/apis")
     )
     expect(apiFiles).toHaveLength(2)
     expect(apiFiles[0].computers).toEqual(["1", "2", "3"]) // network group
@@ -1014,7 +1358,7 @@ describe("File Operations", () => {
 
     // Verify multiple group resolution
     const startupFile = validation.resolvedFileRules.find(
-      (f) => normalizePath(f.targetPath) === "/startup.lua"
+      (f) => processPath(f.target.path) === "/startup.lua"
     )
     expect(startupFile?.computers).toEqual(["1", "2", "3", "4", "5"]) // both groups
   })
@@ -1039,7 +1383,7 @@ describe("File Operations", () => {
         shortPath: getComputerShortPath(testSaveName, "1"),
       },
     ]
-    const validation = await validateFileSync(config, computers)
+    const validation = await resolveSyncRules(config, computers)
 
     expect(validation.errors).toHaveLength(1)
     expect(validation.errors[0]).toContain("nonexistent_group")
@@ -1082,7 +1426,7 @@ describe("File Operations", () => {
       },
     ]
 
-    const validation = await validateFileSync(config, computers)
+    const validation = await resolveSyncRules(config, computers)
 
     const programFile = validation.resolvedFileRules[0]
     expect(programFile.computers).toEqual(["1", "2", "3"])

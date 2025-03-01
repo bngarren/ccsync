@@ -12,10 +12,10 @@ import {
 import color from "picocolors"
 import path from "path"
 import { SyncManager } from "./sync"
-import { createLogger } from "./log"
 import { theme } from "./theme"
 import { toTildePath } from "./utils"
 import { type SyncMode } from "./types"
+import { AppError, ErrorSeverity, getErrorMessage } from "./errors"
 
 const initConfig = async () => {
   // Find all config files
@@ -124,10 +124,38 @@ const presentConfigErrors = (errors: ConfigError[], isVerbose: boolean) => {
   // p.log.info("  • Use 'ccsync --init' to create a fresh config if needed")
 }
 
+/**
+ * Handles fatal errors and exits the process
+ */
+async function handleFatalError(
+  error: unknown,
+  syncManager?: SyncManager
+): Promise<never> {
+  // Extract message from the error
+  const message =
+    error instanceof AppError ? error.message : getErrorMessage(error)
+
+  // Log the error
+  p.log.error(`FATAL ERROR: ${message}`)
+
+  // Try to clean up if we have a sync manager
+  if (syncManager) {
+    try {
+      await syncManager.stop()
+    } catch (stopErr) {
+      p.log.error(`Error during cleanup: ${getErrorMessage(stopErr)}`)
+    }
+  }
+
+  // Exit with error code
+  p.outro("Application terminated due to a fatal error.")
+  process.exit(1)
+}
+
 async function main() {
   console.clear()
 
-  p.intro(`${color.magentaBright(`CC: Sync`)}`)
+  p.intro(`${color.cyanBright(`CC: Sync`)}`)
 
   try {
     // Get the config file
@@ -144,12 +172,12 @@ async function main() {
       process.exit(0)
     }
 
-    // Init log
-    const log = createLogger({ verbose: config.advanced.verbose })
+    // console.debug(JSON.stringify(config, null, 2))
+
     const savePath = path.parse(config.minecraftSavePath)
 
     const gracefulExit = () => {
-      p.outro(theme.accent("Goodbye!"))
+      p.outro(theme.info("Goodbye."))
       process.exit(0)
     }
 
@@ -163,7 +191,7 @@ async function main() {
     })
 
     if (p.isCancel(res) || !res) {
-      log.info(
+      p.log.info(
         "If this save instance is incorrect, change the 'minecraftSavePath' in the .ccsync.yaml to point to the one you want."
       )
       gracefulExit()
@@ -197,29 +225,55 @@ async function main() {
     process.on("SIGINT", cleanup) // Ctrl+C
     process.on("SIGTERM", cleanup) // Termination request
 
-    if (mode === "manual") {
-      await syncManager.startManualMode()
-    } else {
-      await syncManager.startWatchMode()
-    }
+    try {
+      if (mode === "manual") {
+        await syncManager.startManualMode()
+      } else {
+        await syncManager.startWatchMode()
+      }
 
-    // Keep the process alive until explicitly terminated
-    await new Promise<void>((resolve) => {
-      const checkInterval = setInterval(() => {
-        if (!syncManager.isRunning()) {
-          clearInterval(checkInterval)
-          resolve()
+      // Keep the process alive until explicitly terminated
+      await new Promise<void>((resolve) => {
+        const checkInterval = setInterval(() => {
+          if (!syncManager.isRunning()) {
+            clearInterval(checkInterval)
+            resolve()
+          }
+        }, 500)
+      })
+
+      gracefulExit()
+    } catch (error) {
+      // Handle errors that bubble up from SyncManager
+      if (error instanceof AppError) {
+        if (error.severity === ErrorSeverity.FATAL) {
+          await handleFatalError(error, syncManager)
+        } else {
+          // Non-fatal errors - log and exit gracefully
+          p.log.error(`Error: ${error.message}`)
+          gracefulExit()
         }
-      }, 500)
-    })
-
-    gracefulExit()
-  } catch (err) {
-    p.log.error(
-      `Fatal error: ${err instanceof Error ? err.message : String(err)}`
-    )
-    process.exit(1)
+      } else {
+        // Unknown errors - treat as fatal
+        await handleFatalError(error, syncManager)
+      }
+    }
+  } catch (error) {
+    // Catch-all for errors during startup
+    if (error instanceof AppError) {
+      await handleFatalError(error)
+    } else {
+      p.log.error(`Fatal error: ${getErrorMessage(error)}`)
+      process.exit(1)
+    }
   }
 }
 
-main().catch(console.error)
+main().catch((error) => {
+  // Last resort error handling - should rarely get here
+  console.error(`Unhandled error in main process: ${getErrorMessage(error)}`)
+  if (error instanceof Error && error.stack) {
+    console.error(error.stack)
+  }
+  process.exit(1)
+})

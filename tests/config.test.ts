@@ -8,7 +8,7 @@ import {
   ConfigErrorCategory,
 } from "../src/config"
 import { createUniqueTempDir, TempCleaner } from "./test-helpers"
-import yaml from "yaml"
+import yaml, { parse } from "yaml"
 
 describe("Computer Group", () => {
   const tempCleaner = TempCleaner.getInstance()
@@ -139,5 +139,34 @@ describe("Computer Group", () => {
 
     expect(circularRefError).toBeDefined()
     expect(circularRefError?.suggestion).toContain("Remove circular references")
+  })
+})
+
+describe("YAML Config Parsing for Paths", () => {
+  test("correctly parses POSIX paths", () => {
+    const yamlWithPosixPath = `path: /home/user/directory`
+    const parsed = parse(yamlWithPosixPath)
+    expect(parsed.path).toBe("/home/user/directory")
+  })
+
+  test("correctly parses Windows paths", () => {
+    // If Windows backslashes are put in quotes, you would have to double them
+    const yamlWithWindowsPath = String.raw`path: "C:\\Users\\name\\Documents"`
+    const parsed = parse(yamlWithWindowsPath)
+    expect(parsed.path).toBe(String.raw`C:\Users\name\Documents`)
+  })
+
+  test("handles unquoted Windows paths with double backslashes", () => {
+    // Without quotes, YAML may interpret backslashes
+    // (this test confirms actual behavior)
+    const yamlWithUnquotedWindowsPath = String.raw`path: C:\Users\name\Documents`
+    const parsed = parse(yamlWithUnquotedWindowsPath)
+    expect(parsed.path).toBe(String.raw`C:\Users\name\Documents`)
+  })
+
+  test("handles paths with special characters", () => {
+    const yamlWithSpecialChars = `path: "/path with spaces/and-special_chars/"`
+    const parsed = parse(yamlWithSpecialChars)
+    expect(parsed.path).toBe("/path with spaces/and-special_chars/")
   })
 })

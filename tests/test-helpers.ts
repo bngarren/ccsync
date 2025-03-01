@@ -2,12 +2,17 @@ import { mkdir, rm, writeFile } from "node:fs/promises"
 import path from "path"
 import os from "os"
 import crypto from "crypto"
-import type { Computer, ResolvedFileRule } from "../src/types"
-import { getComputerShortPath, isRecursiveGlob } from "../src/utils"
+import { SyncEvent, type Computer, type ResolvedFileRule } from "../src/types"
+import {
+  getComputerShortPath,
+  isRecursiveGlob,
+  pathIsLikelyFile,
+} from "../src/utils"
 import * as p from "@clack/prompts"
 import { mock } from "bun:test"
 import { DEFAULT_CONFIG, type SyncRule } from "../src/config"
 import * as yaml from "yaml"
+import type { IAppError } from "../src/errors"
 
 /**
  * Creates a new tmp directory in the operating system's default directory for temporary files.
@@ -65,10 +70,10 @@ export async function createTestComputer(
  *
  * ```
  * /targetDir
- *   - program.lua
- *   - startup.lua
+ *   - program.lua // "print('Hello')"
+ *   - startup.lua // "print('Startup')"
  *   /lib
- *     - utils.lua
+ *     - utils.lua // "-- Utils"
  * ```
  *
  * @param targetDir
@@ -177,7 +182,7 @@ interface CreateResolvedFileOptions {
   sourceRoot: string // Root of source files, per the config.sourceRoot
   sourcePath: string // Path relative to sourceRoot
   flatten?: boolean // Whether to flatten sources files into target dir
-  targetPath: string // Target path on computer
+  targetPath: string
   computers: string | string[] // Computer IDs or array of IDs
 }
 
@@ -199,11 +204,19 @@ export function createResolvedFile(
     ? opts.computers
     : [opts.computers]
 
+  // Determine if target is likely a directory
+  const isDirectory = !pathIsLikelyFile(opts.targetPath)
+
+  const flatten = opts.flatten !== undefined ? opts.flatten : true
+
   return {
     sourceAbsolutePath: path.resolve(sourceRoot, opts.sourcePath),
     sourceRelativePath: opts.sourcePath,
-    flatten: opts.flatten || true,
-    targetPath: opts.targetPath,
+    flatten,
+    target: {
+      type: isDirectory ? "directory" : "file",
+      path: opts.targetPath,
+    },
     computers,
   }
 }
@@ -215,15 +228,15 @@ export function createResolvedFiles(
   sourceRoot: string,
   rules: SyncRule[]
 ): ResolvedFileRule[] {
-  return rules.map((rule) =>
-    createResolvedFile({
+  return rules.map((rule) => {
+    return createResolvedFile({
       sourceRoot,
       sourcePath: rule.source,
       flatten: !isRecursiveGlob(rule.source) || rule.flatten,
       targetPath: rule.target,
       computers: rule.computers,
     })
-  )
+  })
 }
 
 /**
@@ -278,5 +291,79 @@ export class TempCleaner {
       require("fs").rmSync(dir, { recursive: true })
     }
     this.tempDirs.clear()
+  }
+}
+
+/**
+ * Creates a promise that resolves when an event is emitted or rejects on error/timeout
+ */
+export function waitForEvent<T>(
+  emitter: {
+    on: (event: any, callback: any) => void
+    off: (event: any, callback: any) => void
+  },
+  awaitedEvent: SyncEvent,
+  timeoutMs = 5000
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    // Set timeout to avoid test hanging
+    const timeout = setTimeout(() => {
+      cleanup()
+      reject(
+        new Error(
+          `Timed out waiting for ${SyncEvent[awaitedEvent]} after ${timeoutMs}ms`
+        )
+      )
+    }, timeoutMs)
+
+    // Success handler
+    const handleSuccess = (data: T) => {
+      cleanup()
+      resolve(data)
+    }
+
+    // Error handler
+    const handleError = (error: IAppError) => {
+      cleanup()
+      reject(new Error(`Operation failed: ${error.message}`))
+    }
+
+    // Clean up listeners
+    // The specific event listeners (handleSuccess and handleError) are removed so they don't continue to listen for events after the promise has settled
+    const cleanup = () => {
+      clearTimeout(timeout)
+      emitter.off(awaitedEvent, handleSuccess)
+      emitter.off(SyncEvent.SYNC_ERROR, handleError)
+    }
+
+    // Register listeners
+    emitter.on(awaitedEvent, handleSuccess)
+    emitter.on(SyncEvent.SYNC_ERROR, handleError)
+  })
+}
+
+/**
+ * Mocks console.log to capture and store all UI output for later verification
+ */
+export function captureUIOutput() {
+  const output: string[] = []
+  const originalConsoleLog = console.log
+
+  const mockConsoleLog = mock((...args: any[]) => {
+    // Capture the output
+    output.push(args.join(" "))
+  })
+
+  // Replace console.log
+  console.log = mockConsoleLog
+
+  return {
+    getOutput: () => [...output],
+    clear: () => {
+      output.length = 0
+    },
+    restore: () => {
+      console.log = originalConsoleLog
+    },
   }
 }

@@ -16,7 +16,10 @@ mock.module("../src/log", () => ({
 }))
 
 beforeAll(() => {
+  // Trying not to pollute the terminal output when running tests since our program utilizes lots of console and stdout output
   console.log = mock(() => {})
+  console.clear = mock(() => {})
+  process.stdout.write = mock(() => false)
 })
 
 afterAll(() => {

@@ -1,4 +1,3 @@
-import * as p from "@clack/prompts"
 import { theme } from "./theme"
 
 interface LogConfig {
@@ -18,13 +17,13 @@ export interface Logger {
 export const createLogger = (config?: LogConfig): Logger => ({
   verbose: (msg: string) => {
     if (config?.verbose) {
-      p.log.info(theme.dim(msg))
+      console.log(theme.dim(msg))
     }
   },
-  info: (msg: string) => p.log.info(theme.info(msg)),
-  step: (msg: string) => p.log.step(theme.info(msg)),
-  success: (msg: string) => p.log.success(theme.success(`${msg}`)),
-  warn: (msg: string) => p.log.warn(theme.warn(`${msg}`)),
-  error: (msg: string) => p.log.error(theme.error(`${msg}`)),
-  status: (msg: string) => p.log.info(theme.accent(msg)),
+  info: (msg: string) => console.log(theme.info(msg)),
+  step: (msg: string) => console.log(theme.info(msg)),
+  success: (msg: string) => console.log(theme.success(`${msg}`)),
+  warn: (msg: string) => console.log(theme.warn(`${msg}`)),
+  error: (msg: string) => console.log(theme.error(`${msg}`)),
+  status: (msg: string) => console.log(theme.accent(msg)),
 })

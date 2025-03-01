@@ -1,4 +1,6 @@
 import { EventEmitter } from "node:events"
+import type { IAppError } from "./errors"
+import type { SyncPlan } from "./syncplan"
 
 export enum SyncMode {
   MANUAL = "manual",
@@ -18,11 +20,41 @@ export enum SyncMode {
  * A resolved file rule has been validated such that a file exists at the source path.
  */
 export interface ResolvedFileRule {
-  sourceAbsolutePath: string // Absolute path to source file
-  sourceRelativePath: string // Relative path to source file from source root
-  flatten?: boolean // Flatten if non-recursive or explicitly set
-  targetPath: string // Relative path on computer
-  computers: string[] // Resolved list of computer IDs (not group names)
+  /**
+   * Absolute path to source file
+   */
+  sourceAbsolutePath: string
+  /**
+   * Relative path to source file from source root
+   */
+  sourceRelativePath: string
+  /**
+   * This flag will dictate _how_ the source files are copied to the target. If _false_ **and** a _recursive glob pattern_ is used for `source`, then the files will be copied to the target directory maintaining their source directory structure. The default is _true_, in which source files are copied to a single target directory.
+   */
+  flatten?: boolean
+  /**
+   * Explicit target structure defining where files should be copied
+   */
+  target: {
+    /**
+     * Type of target destination - either a directory or specific file
+     */
+    type: TargetType
+    /**
+     * Raw normalized target path WITHOUT considering 'flatten' flag.
+     *
+     * IMPORTANT: This is NOT the final resolved path that should be used for file operations.
+     * - For 'file' type: This is the complete target path including filename.
+     * - For 'directory' type: This is just the directory path WITHOUT any filename or source structure.
+     *
+     * In general, to ensure you are using the fully resolved path, use the utility function `resolveTargetPath()` which will return the actual path with filename, properly accounting for source structure preservation when 'flatten' is false.
+     */
+    path: string
+  }
+  /**
+   * Resolved list of computer IDs (not group names)
+   */
+  computers: string[]
 }
 
 // Represents a computer in the Minecraft save
@@ -45,22 +77,39 @@ export interface ValidationResult {
   errors: string[]
 }
 
+export enum SyncOperationResult {
+  /**
+   * No sync operation completed yet
+   */
+  NONE = "none",
+  /**
+   * All files synced successfully
+   */
+  SUCCESS = "success",
+  /**
+   * All files synced successfully with warnings
+   */
+  WARNING = "warning",
+  /**
+   * Sync operation failed with errors
+   */
+  ERROR = "error",
+  /**
+   * Some files synced successfully, some failed
+   */
+  PARTIAL = "partial",
+}
+
 export interface SyncResult {
   successCount: number
   errorCount: number
   missingCount: number
 }
 
-export interface SyncErrorEventData {
-  error: Error // The actual error
-  fatal: boolean // Whether this error should stop operations
-  source?: string // Optional: where the error occurred (e.g. 'validation', 'sync', 'watcher')
-}
-
 export enum SyncEvent {
   STARTED,
   STOPPED,
-  SYNC_VALIDATION,
+  SYNC_PLANNED,
   SYNC_COMPLETE,
   SYNC_ERROR,
   INITIAL_SYNC_COMPLETE,
@@ -70,20 +119,20 @@ export enum SyncEvent {
   WATCHER_ERROR,
 }
 
-type CommonSyncEvents = {
-  [SyncEvent.STARTED]: void
-  [SyncEvent.SYNC_VALIDATION]: ValidationResult
-  [SyncEvent.SYNC_COMPLETE]: SyncResult
-  [SyncEvent.SYNC_ERROR]: SyncErrorEventData
+export type BaseControllerEvents = {
   [SyncEvent.STOPPED]: void
+  [SyncEvent.STARTED]: void
+  [SyncEvent.SYNC_PLANNED]: SyncPlan
+  [SyncEvent.SYNC_COMPLETE]: SyncResult
+  [SyncEvent.SYNC_ERROR]: IAppError
 }
 
 // Event maps for each mode type
-export type ManualSyncEvents = CommonSyncEvents
+export type ManualSyncEvents = BaseControllerEvents
 
 export type WatchSyncEvents = {
   [SyncEvent.INITIAL_SYNC_COMPLETE]: SyncResult
-} & CommonSyncEvents
+} & BaseControllerEvents
 
 // Type-safe event emitter factory
 export function createTypedEmitter<T extends Record<string, any>>() {
@@ -114,4 +163,23 @@ export function createTypedEmitter<T extends Record<string, any>>() {
       emitter.off(event as string, listener)
     },
   }
+}
+
+export type TargetType = "directory" | "file"
+
+/**
+ * Represents a sync result for a specific computer
+ * Used for UI display
+ */
+export interface ComputerSyncResult {
+  computerId: string
+  exists: boolean
+  files: Array<{
+    // Store full target path for UI display
+    targetPath: string
+    targetType: TargetType
+    // Include source path for potential filename resolution
+    sourcePath: string
+    success: boolean
+  }>
 }

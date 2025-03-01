@@ -14,12 +14,16 @@ dist
 logs
 *.log
 
+#.vscode
+.vscode/launch.json
+
 # MacOS
 .DS_Store
 .AppleDouble
 .LSOverride
 
 # personal dev
-consolidated.md
+consolidated*.md
 notes.md
 TODO
+prompts.txt

@@ -1,7 +1,7 @@
 # CC:Sync Configuration File
 # This file configures how CC:Sync copies files to your ComputerCraft computers
 
-version: "1.0"
+version: "2.0"
 
 # Where your source files are located (relative to this config file)
 sourceRoot: "./examples/test1"
@@ -22,9 +22,14 @@ computerGroups:
 rules:
   # Examples:
   # Sync to a specific computer:
-  - source: "a.lua" # File in your sourceRoot
-    target: "/" # Where to put it on the computer
-    computers: ["servers"] # Computer IDs to sync to
+  - source: "*" # File in your sourceRoot
+    target: "/test" # Where to put it on the computer
+    computers: ["1"] # Computer IDs to sync to
+    # flatten: false
+
+  # - source: "c.lua" # File in your sourceRoot
+  #   target: "/test" # Where to put it on the computer
+  #   computers: ["1"] # Computer IDs to sync to
   #
   # Sync to a group of computers:
   # - source: "lib/*.lua"      # Glob patterns supported
@@ -34,7 +39,7 @@ rules:
 # Advanced configuration options
 advanced:
   # Enable verbose logging
-  verbose: false
+  verbose: true
 
   # How long to cache validation results (milliseconds)
   # Lower = more accurate but more CPU intensive, Higher = faster but may miss changes

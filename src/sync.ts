@@ -22,6 +22,7 @@ import {
   pluralize,
   resolveTargetPath,
   processPath,
+  filterFilesOnly,
 } from "./utils"
 import { KeyHandler } from "./keys"
 import { setTimeout } from "node:timers/promises"
@@ -1104,7 +1105,12 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
           false // Don't strip trailing slash for globs
         )
         const matches = await glob(sourcePath, { absolute: true })
-        matches.forEach((match) => uniqueSourcePaths.add(processPath(match)))
+
+        // Filter out directories to only include files
+        const fileMatches = await filterFilesOnly(matches)
+        fileMatches.forEach((match) =>
+          uniqueSourcePaths.add(processPath(match))
+        )
       }
 
       // Convert to array and store in watchedFiles

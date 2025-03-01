@@ -705,6 +705,64 @@ describe("File Operations", () => {
       // Check target is correctly processed
       expect(resolvedRule.target.path).toBe("/target/folder")
     })
+
+    test("filters out directories when using glob without file extension", async () => {
+      // Create test directory structure with both files and directories
+      await fs.mkdir(path.join(sourceDir, "glob_test"), { recursive: true })
+      await fs.mkdir(path.join(sourceDir, "glob_test", "subdir"), {
+        recursive: true,
+      })
+
+      // Create some files
+      await fs.writeFile(
+        path.join(sourceDir, "glob_test", "file1.lua"),
+        "-- Test file 1"
+      )
+      await fs.writeFile(
+        path.join(sourceDir, "glob_test", "file2.txt"),
+        "-- Test file 2"
+      )
+      await fs.writeFile(
+        path.join(sourceDir, "glob_test", "subdir", "file3.lua"),
+        "-- Test file 3"
+      )
+
+      const config: Config = withDefaultConfig({
+        sourceRoot: sourceDir,
+        minecraftSavePath: testSaveDir,
+        rules: [
+          {
+            // Use a glob pattern without file extension that would match both files and dirs
+            source: "glob_test/*",
+            target: "/files/",
+            computers: ["1"],
+          },
+        ],
+      })
+
+      const computers = [
+        {
+          id: "1",
+          path: path.join(computersDir, "1"),
+          shortPath: getComputerShortPath(testSaveName, "1"),
+        },
+      ]
+
+      const validation = await resolveSyncRules(config, computers)
+
+      // Should only match the files, not the 'subdir' directory
+      expect(validation.resolvedFileRules).toHaveLength(2)
+
+      // Verify we only got files, not directories
+      const resolvedPaths = validation.resolvedFileRules
+        .map((rule) => path.basename(rule.sourceAbsolutePath))
+        .sort()
+
+      expect(resolvedPaths).toEqual(["file1.lua", "file2.txt"])
+
+      // Make sure 'subdir' was not included
+      expect(resolvedPaths).not.toContain("subdir")
+    })
   })
 
   describe("copyFilesToComputer", () => {

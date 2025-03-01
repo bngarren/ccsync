@@ -363,6 +363,56 @@ export const findMinecraftComputers = async (savePath: string) => {
 // - - - - - Files - - - - -
 
 /**
+ * Filters a list of paths to include only files and exclude directories
+ *
+ * This utility efficiently processes file paths in batches to avoid exhausting file descriptors.
+ *
+ * Paths that cannot be accessed (due to permissions or non-existence) will be silently filtered out.
+ *
+ * @param paths - Array of file paths to filter
+ * @param concurrency - Maximum number of concurrent file operations (default: 50)
+ * @returns Promise resolving to an array containing only the paths that are files
+ * @example
+ * // Filter only actual files from glob results
+ * const allPaths = await glob("*");
+ * const onlyFiles = await filterFilesOnly(allPaths);
+ */
+export async function filterFilesOnly(
+  paths: string[],
+  concurrency = 50
+): Promise<string[]> {
+  // Use a simple concurrency pool to avoid opening too many file handles
+  const results: string[] = []
+  const chunks: string[][] = []
+
+  // Split into chunks for concurrent processing
+  const chunkSize = Math.max(1, Math.min(concurrency, paths.length))
+  for (let i = 0; i < paths.length; i += chunkSize) {
+    chunks.push(paths.slice(i, i + chunkSize))
+  }
+
+  // Process each chunk sequentially, but files within a chunk concurrently
+  for (const chunk of chunks) {
+    const chunkResults = await Promise.all(
+      chunk.map(async (filePath) => {
+        try {
+          const stats = await fs.stat(toSystemPath(filePath))
+          return stats.isFile() ? filePath : null
+        } catch (err) {
+          return null // Skip files that can't be accessed // TODO may need to return error instead of silently skipping
+        }
+      })
+    )
+
+    results.push(
+      ...chunkResults.filter((path): path is string => path !== null)
+    )
+  }
+
+  return results
+}
+
+/**
  * Resolves computer references into a flat array of computer IDs, recursively expanding group references.
  *
  * This function handles:
@@ -480,12 +530,14 @@ export async function resolveSyncRules(
   for (const rule of config.rules) {
     try {
       // Find all matching source files
-      const matchedSourceFiles = (
+      const matchedPaths = (
         await glob(processPath(rule.source, false), {
           cwd: processedSourceRootPath,
           absolute: true,
         })
       ).map((sf) => processPath(sf))
+
+      const matchedSourceFiles = await filterFilesOnly(matchedPaths)
 
       // Filter for 'selectedFiles', i.e. changed files from watch mode
       const filesToResolve = selectedFiles

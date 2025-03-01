@@ -390,7 +390,7 @@ export class UI {
     }
 
     return theme.bold(
-      `#${this.syncsComplete + 1} [${date}] Attempted to sync ${totalFiles} total ${pluralize("file")(totalFiles)} ${totalComputers === 1 ? "to" : "across"} ${totalComputers} ${pluralize("computer")(totalComputers)} ` +
+      `#${this.syncsComplete + 1} [${date}] Attempted to sync ${totalFiles} total ${pluralize("file")(totalFiles)} ${totalComputers === 1 ? "to" : "across"} ${totalComputers} ${pluralize("computer")(totalComputers)}. ` +
         result +
         "\n"
     )

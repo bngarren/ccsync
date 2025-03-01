@@ -22,7 +22,7 @@ computerGroups:
 rules:
   # Examples:
   # Sync to a specific computer:
-  - source: "\\test\\a.lua" # File in your sourceRoot
+  - source: "*" # File in your sourceRoot
     target: "/test" # Where to put it on the computer
     computers: ["1"] # Computer IDs to sync to
     # flatten: false

@@ -11,9 +11,11 @@ import {
   spyOnClackPrompts,
   createTestComputer,
   waitForEvent,
+  captureUIOutput,
 } from "./test-helpers"
 import { stringify } from "yaml"
 import { SyncEvent, type SyncResult } from "../src/types"
+import stripAnsi from "strip-ansi"
 
 describe("Integration: SyncManager", () => {
   let tempDir: string
@@ -671,6 +673,307 @@ describe("Integration: SyncManager", () => {
           reject(error.message)
         })
       })
+    } finally {
+      await syncManager.stop()
+    }
+  })
+})
+
+// This function helps extract just the content we care about for testing
+// It filters out styling/color codes and timestamps which would make tests brittle
+function normalizeOutput(output: string[]): string {
+  // Join all output lines
+  const joinedOutput = output.join("\n")
+
+  // Replace timestamps with placeholder to make tests more stable
+  const withoutTimestamps = joinedOutput.replace(
+    /\[\d{1,2}\/\d{1,2}\/\d{4},\s+\d{1,2}:\d{2}:\d{2}\s+[APM]{2}\]/g,
+    "[TIMESTAMP]"
+  )
+
+  // Strip the ANSI color codes and return the normalized output
+  return stripAnsi(withoutTimestamps)
+}
+
+describe("Integration: UI", () => {
+  let tempDir: string
+  let sourceDir: string
+  let savePath: string
+  let computersDir: string
+
+  let clackPromptsSpy: ReturnType<typeof spyOnClackPrompts>
+  let outputCapture: ReturnType<typeof captureUIOutput>
+  const cleanup = TempCleaner.getInstance()
+
+  beforeEach(async () => {
+    tempDir = createUniqueTempDir()
+    cleanup.add(tempDir)
+
+    sourceDir = path.join(tempDir, "src")
+    savePath = path.join(tempDir, "mc/saves/test_world")
+    computersDir = path.join(savePath, "computercraft/computer")
+
+    // Setup test environment
+    await fs.mkdir(sourceDir, { recursive: true })
+    await fs.mkdir(path.dirname(savePath), { recursive: true })
+    await createTestSave(savePath)
+    await createTestFiles(sourceDir)
+
+    // Setup @clack/prompts spy
+    clackPromptsSpy = spyOnClackPrompts()
+
+    // Setup output capture
+    outputCapture = captureUIOutput()
+  })
+
+  afterEach(async () => {
+    // Ensure synchronous cleanup
+    try {
+      await cleanup.cleanDir(tempDir)
+    } catch (err) {
+      console.warn(
+        `Warning: Failed to clean up test directory ${tempDir}:`,
+        err
+      )
+    }
+    outputCapture.restore()
+    mock.restore()
+    clackPromptsSpy.cleanup()
+  })
+
+  test("displays successful sync operation", async () => {
+    // Create a basic config
+    const configPath = path.join(tempDir, ".ccsync.yaml")
+    const configObject = withDefaultConfig({
+      sourceRoot: sourceDir,
+      minecraftSavePath: savePath,
+      rules: [
+        { source: "program.lua", target: "/program.lua", computers: ["1"] },
+      ],
+    })
+
+    await fs.writeFile(configPath, stringify(configObject))
+    await fs.mkdir(path.join(computersDir, "1"), { recursive: true })
+
+    const { config } = await loadConfig(configPath, {
+      skipPathValidation: true,
+    })
+    if (!config) throw new Error("Failed to load config")
+
+    const syncManager = new SyncManager(config)
+
+    try {
+      // Start manual mode and wait for sync
+      const manualController = await syncManager.startManualMode()
+
+      // Wait for the sync to complete
+      const syncResult = await waitForEvent<SyncResult>(
+        manualController,
+        SyncEvent.SYNC_COMPLETE
+      )
+
+      // Check results
+      expect(syncResult.successCount).toBe(1)
+      expect(syncResult.errorCount).toBe(0)
+
+      // Get the captured output
+      const capturedOutput = outputCapture.getOutput()
+      const normalizedOutput = normalizeOutput(capturedOutput)
+
+      // Verify expected output contents
+      expect(normalizedOutput).toContain(
+        "Attempted to sync 1 total file to 1 computer"
+      )
+      expect(normalizedOutput).toContain("Computer 1")
+      expect(normalizedOutput).toContain("/program.lua")
+      expect(normalizedOutput).not.toContain("No files synced")
+      expect(normalizedOutput).not.toContain("Error")
+      expect(normalizedOutput).not.toContain("Warning")
+    } finally {
+      await syncManager.stop()
+    }
+  })
+
+  test("displays warning when no matching files found", async () => {
+    // Create a config with a rule that won't match any files
+    const configPath = path.join(tempDir, ".ccsync.yaml")
+    const configObject = withDefaultConfig({
+      sourceRoot: sourceDir,
+      minecraftSavePath: savePath,
+      rules: [
+        { source: "nonexistent/*.lua", target: "/test/", computers: ["1"] },
+      ],
+    })
+
+    await fs.writeFile(configPath, stringify(configObject))
+    await fs.mkdir(path.join(computersDir, "1"), { recursive: true })
+
+    const { config } = await loadConfig(configPath, {
+      skipPathValidation: true,
+    })
+    if (!config) throw new Error("Failed to load config")
+
+    const syncManager = new SyncManager(config)
+
+    try {
+      // Start manual mode and wait for sync
+      const manualController = await syncManager.startManualMode()
+
+      // Wait for the sync to complete
+      await waitForEvent<SyncResult>(manualController, SyncEvent.SYNC_COMPLETE)
+
+      // Get the captured output
+      const capturedOutput = outputCapture.getOutput()
+      const normalizedOutput = normalizeOutput(capturedOutput)
+
+      // Verify expected output contents
+      expect(normalizedOutput).toContain("Attempted to sync 0 total files")
+      expect(normalizedOutput).toContain("No files synced")
+      expect(normalizedOutput).toContain("No matching files found for")
+    } finally {
+      await syncManager.stop()
+    }
+  })
+
+  test("displays errors when missing computers", async () => {
+    // Create a config that references a non-existent computer
+    const configPath = path.join(tempDir, ".ccsync.yaml")
+    const configObject = withDefaultConfig({
+      sourceRoot: sourceDir,
+      minecraftSavePath: savePath,
+      rules: [
+        {
+          source: "",
+          target: "",
+          computers: ["555", "888", "999"],
+        },
+      ],
+    })
+
+    await createTestComputer(computersDir, "555")
+
+    await fs.writeFile(configPath, stringify(configObject))
+    // Deliberately NOT creating computer 888 and 999
+
+    const { config } = await loadConfig(configPath, {
+      skipPathValidation: true,
+    })
+    if (!config) throw new Error("Failed to load config")
+
+    const syncManager = new SyncManager(config)
+
+    try {
+      // Start manual mode and wait for sync
+      const manualController = await syncManager.startManualMode()
+
+      // Wait for the sync to complete
+      await waitForEvent<SyncResult>(manualController, SyncEvent.SYNC_COMPLETE)
+
+      // Get the captured output
+      const capturedOutput = outputCapture.getOutput()
+      const normalizedOutput = normalizeOutput(capturedOutput)
+
+      // Verify expected output contents
+      expect(normalizedOutput).toContain("Missing computer")
+      expect(normalizedOutput).toContain("888")
+      expect(normalizedOutput).toContain("999")
+      expect(normalizedOutput).not.toContain("555")
+    } finally {
+      await syncManager.stop()
+    }
+  })
+
+  test("displays multiple computers with correct file counts", async () => {
+    // Create a config with multiple computers
+    const configPath = path.join(tempDir, ".ccsync.yaml")
+    const configObject = withDefaultConfig({
+      sourceRoot: sourceDir,
+      minecraftSavePath: savePath,
+      rules: [
+        {
+          source: "program.lua",
+          target: "/program.lua",
+          computers: ["1", "2"],
+        },
+        { source: "startup.lua", target: "/startup.lua", computers: ["1"] },
+      ],
+    })
+
+    await fs.writeFile(configPath, stringify(configObject))
+    await fs.mkdir(path.join(computersDir, "1"), { recursive: true })
+    await fs.mkdir(path.join(computersDir, "2"), { recursive: true })
+
+    const { config } = await loadConfig(configPath)
+    if (!config) throw new Error("Failed to load config")
+
+    const syncManager = new SyncManager(config)
+
+    try {
+      // Start manual mode and wait for sync
+      const manualController = await syncManager.startManualMode()
+
+      // Wait for the sync to complete
+      await waitForEvent<SyncResult>(manualController, SyncEvent.SYNC_COMPLETE)
+
+      // Get the captured output
+      const capturedOutput = outputCapture.getOutput()
+      const normalizedOutput = normalizeOutput(capturedOutput)
+
+      // Verify expected output contents
+      expect(normalizedOutput).toContain(
+        "Attempted to sync 3 total files across 2 computers"
+      )
+      expect(normalizedOutput).toContain("Computer 1: (2/2)")
+      expect(normalizedOutput).toContain("Computer 2: (1/1)")
+    } finally {
+      await syncManager.stop()
+    }
+  })
+
+  test("shows sync history for multiple operations", async () => {
+    // Create a config with a rule
+    const configPath = path.join(tempDir, ".ccsync.yaml")
+    const configObject = withDefaultConfig({
+      sourceRoot: sourceDir,
+      minecraftSavePath: savePath,
+      rules: [
+        { source: "program.lua", target: "/program.lua", computers: ["1"] },
+      ],
+    })
+
+    await fs.writeFile(configPath, stringify(configObject))
+    await fs.mkdir(path.join(computersDir, "1"), { recursive: true })
+
+    const { config } = await loadConfig(configPath)
+    if (!config) throw new Error("Failed to load config")
+
+    const syncManager = new SyncManager(config)
+
+    try {
+      // Start manual mode
+      const manualController = await syncManager.startManualMode()
+
+      // First sync
+      await waitForEvent<SyncResult>(manualController, SyncEvent.SYNC_COMPLETE)
+
+      // Clear current output to analyze the next round
+      outputCapture.clear()
+
+      // Trigger another sync by simulating a key press
+      manualController.performSyncCycle()
+
+      // Wait for the second sync to complete
+      await waitForEvent<SyncResult>(manualController, SyncEvent.SYNC_COMPLETE)
+
+      // Get the captured output
+      const capturedOutput = outputCapture.getOutput()
+      const normalizedOutput = normalizeOutput(capturedOutput)
+
+      // Check that it shows the second sync operation
+      expect(normalizedOutput).toContain("#2")
+      expect(normalizedOutput).toContain(
+        "Attempted to sync 1 total file to 1 computer"
+      )
     } finally {
       await syncManager.stop()
     }

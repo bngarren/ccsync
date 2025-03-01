@@ -341,3 +341,29 @@ export function waitForEvent<T>(
     emitter.on(SyncEvent.SYNC_ERROR, handleError)
   })
 }
+
+/**
+ * Mocks console.log to capture and store all UI output for later verification
+ */
+export function captureUIOutput() {
+  const output: string[] = []
+  const originalConsoleLog = console.log
+
+  const mockConsoleLog = mock((...args: any[]) => {
+    // Capture the output
+    output.push(args.join(" "))
+  })
+
+  // Replace console.log
+  console.log = mockConsoleLog
+
+  return {
+    getOutput: () => [...output],
+    clear: () => {
+      output.length = 0
+    },
+    restore: () => {
+      console.log = originalConsoleLog
+    },
+  }
+}

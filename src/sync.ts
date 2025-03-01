@@ -795,7 +795,7 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
     }
   }
 
-  private async performSyncCycle(): Promise<void> {
+  public async performSyncCycle(): Promise<void> {
     if (this.syncManager.getState() !== SyncManagerState.RUNNING) {
       // throw this, a programming error
       throw AppError.error(

@@ -501,7 +501,7 @@ export async function resolveSyncRules(
         resolvedResult.errors.push(
           `No matching files found for: '${toSystemPath(rule.source)}'`
         )
-        continue
+        // continue
       }
 
       // Resolve computer IDs for this rule

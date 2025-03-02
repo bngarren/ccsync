@@ -907,9 +907,6 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
 
   private setupKeyHandler(continueCallback: () => void): void {
     if (this.keyHandler) {
-      this.log.warn(
-        "manualController setupKeyHandler called while another was active"
-      )
       this.keyHandler.stop()
     }
 

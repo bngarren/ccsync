@@ -180,7 +180,7 @@ async function main() {
       logLevel: config.advanced.logLevel,
     })
 
-    const log = getLogger()
+    const log = getLogger().child({ component: "Main" })
     log.debug("Configuration loaded successfully")
     log.trace({ config }, "Current configuration")
 

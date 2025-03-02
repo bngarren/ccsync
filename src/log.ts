@@ -14,7 +14,7 @@ export type LogLevel =
   | "fatal"
 
 // Default log level
-const DEFAULT_LOG_LEVEL: LogLevel = "info"
+const DEFAULT_LOG_LEVEL: LogLevel = "debug"
 
 // Helper to get OS-specific user log directory
 export function getLogDirectory(): string {
@@ -42,9 +42,8 @@ export function getLogFilePath(): string {
     fs.mkdirSync(logDir, { recursive: true })
   }
 
-  // Use ISO date format for log files (YYYY-MM-DD)
-  const dateString = new Date().toLocaleDateString("en-CA")
-  return path.join(logDir, `ccsync-${dateString}.log`)
+  // Use ISO date format for the base log file name
+  return path.join(logDir, "ccsync")
 }
 
 // Logger instance that will be exported and used throughout the app
@@ -69,32 +68,36 @@ export function initializeLogger(options: {
   // Setup file destination
   const logFilePath = getLogFilePath()
 
-  // Create file stream
-  const destination = pino.destination({
-    dest: logFilePath,
-    sync: true, // Use sync writing to avoid losing logs on crashes
-  })
-
-  // Create the logger
-  logger = pino({
-    level: options.logLevel || DEFAULT_LOG_LEVEL,
-    timestamp: pino.stdTimeFunctions.isoTime,
-    transport: {
-      target: "pino/file",
-      options: { destination: logFilePath },
+  // Setup transport with pino-roll
+  const transport = pino.transport({
+    target: "pino-roll",
+    options: {
+      file: logFilePath,
+      frequency: "daily", // Rotate logs daily
+      mkdir: true, // Create the directory if it doesn't exist
+      size: "10m", // Also rotate if a log file reaches 10 MB
+      extension: ".log", // Add .log extension to the files
+      symlink: true, // Create a symlink to the current log file
+      dateFormat: "yyyy-MM-dd", // Format for date in filename
+      limit: {
+        count: 2, // Keep 2 days of logs
+      },
+      messageFormat: "{if component} [{component}]: {end}{msg}",
     },
   })
 
-  // Add process termination handlers to flush logs
-  process.on("beforeExit", () => {
-    logger.info("Application shutting down")
-    destination.flushSync()
-  })
-
-  process.on("uncaughtException", (err) => {
-    logger.fatal({ err }, "Uncaught exception")
-    destination.flushSync()
-  })
+  // Create the logger with serializers for better error reporting
+  logger = pino(
+    {
+      level: options.logLevel || DEFAULT_LOG_LEVEL,
+      timestamp: pino.stdTimeFunctions.isoTime,
+      serializers: {
+        err: pino.stdSerializers.err, // Standard error serializer
+        error: pino.stdSerializers.err, // Also handle 'error' property name
+      },
+    },
+    transport
+  )
 
   // Log initialization
   logger.info(

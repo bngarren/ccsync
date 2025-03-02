@@ -86,9 +86,14 @@ function getSyncPlanErrorMessage(syncPlan: SyncPlan): string {
 }
 
 export class SyncManager {
+  private _logger: pino.Logger | null = null
   private get log() {
-    return getLogger()
+    if (!this._logger) {
+      this._logger = getLogger().child({ component: "SyncManager" })
+    }
+    return this._logger
   }
+
   private ui: UI | null = null
   private activeModeController:
     | ManualModeController
@@ -746,8 +751,12 @@ export class SyncManager {
  * Base controller for common functionality between manual and watch modes
  */
 abstract class BaseController<T extends BaseControllerEvents> {
+  private _logger: pino.Logger | null = null
   protected get log() {
-    return getLogger()
+    if (!this._logger) {
+      this._logger = getLogger().child({ component: "Controller" })
+    }
+    return this._logger
   }
   protected events = createTypedEmitter<T>()
   protected keyHandler: KeyHandler | null = null

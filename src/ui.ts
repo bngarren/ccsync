@@ -12,6 +12,7 @@ import boxen from "boxen"
 import { pluralize } from "./utils"
 import stripAnsi from "strip-ansi"
 import { getLogger } from "./log"
+import type { Logger } from "pino"
 
 const theme = {
   primary: chalk.hex("#61AFEF"), // Bright blue
@@ -101,8 +102,12 @@ interface UIState {
 const MIN_RENDER_INTERVAL = 50
 
 export class UI {
+  private _logger: Logger | null = null
   private get log() {
-    return getLogger()
+    if (!this._logger) {
+      this._logger = getLogger().child({ component: "UI" })
+    }
+    return this._logger
   }
   private state: UIState
   private timer: ReturnType<typeof setInterval> | null = null

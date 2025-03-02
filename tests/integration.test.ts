@@ -14,7 +14,7 @@ import {
   captureUIOutput,
 } from "./test-helpers"
 import { stringify } from "yaml"
-import { SyncEvent, type SyncResult } from "../src/types"
+import { SyncEvent, type SyncOperationResult } from "../src/types"
 import stripAnsi from "strip-ansi"
 
 describe("Integration: SyncManager", () => {
@@ -83,7 +83,7 @@ describe("Integration: SyncManager", () => {
       // Start manual mode and wait for first sync
       const manualController = await syncManager.startManualMode()
 
-      const syncResult = await waitForEvent<SyncResult>(
+      const syncResult = await waitForEvent<SyncOperationResult>(
         manualController,
         SyncEvent.SYNC_COMPLETE
       )
@@ -91,7 +91,8 @@ describe("Integration: SyncManager", () => {
       // Verify results
       const targetFile = path.join(computersDir, "1", "program.lua")
       expect(await fs.exists(targetFile)).toBe(true)
-      expect(syncResult.successCount).toBe(1)
+      expect(syncResult.summary.successfulFiles).toBe(1)
+      expect(syncResult.summary.fullySuccessfulComputers).toBe(1)
       const content = await fs.readFile(
         path.join(computersDir, "1", "program.lua"),
         "utf8"
@@ -129,15 +130,15 @@ describe("Integration: SyncManager", () => {
 
     const watchController = await syncManager.startWatchMode()
     try {
-      const initialSyncResult = await waitForEvent<SyncResult>(
+      const initialSyncResult = await waitForEvent<SyncOperationResult>(
         watchController,
         SyncEvent.INITIAL_SYNC_COMPLETE
       )
 
       // Verify initial sync results
-      expect(initialSyncResult.successCount).toBe(2) // Both computers synced
-      expect(initialSyncResult.errorCount).toBe(0)
-      expect(initialSyncResult.missingCount).toBe(0)
+      expect(initialSyncResult.summary.fullySuccessfulComputers).toBe(2) // Both computers synced
+      expect(initialSyncResult.summary.failedComputers).toBe(0)
+      expect(initialSyncResult.summary.missingComputers).toBe(0)
 
       // Verify files were copied
       expect(await fs.exists(path.join(computersDir, "1", "program.lua"))).toBe(
@@ -153,15 +154,15 @@ describe("Integration: SyncManager", () => {
         "print('Updated')"
       )
 
-      const triggeredSyncResult = await waitForEvent<SyncResult>(
+      const triggeredSyncResult = await waitForEvent<SyncOperationResult>(
         watchController,
         SyncEvent.SYNC_COMPLETE
       )
 
       // Verify sync results
-      expect(triggeredSyncResult.successCount).toBe(2)
-      expect(triggeredSyncResult.errorCount).toBe(0)
-      expect(triggeredSyncResult.missingCount).toBe(0)
+      expect(triggeredSyncResult.summary.fullySuccessfulComputers).toBe(2)
+      expect(triggeredSyncResult.summary.failedComputers).toBe(0)
+      expect(triggeredSyncResult.summary.missingComputers).toBe(0)
 
       // Verify updated content was copied
       const content1 = await fs.readFile(
@@ -245,16 +246,12 @@ describe("Integration: SyncManager", () => {
           manualController.off(SyncEvent.SYNC_ERROR, handleSyncError)
         }
 
-        const handleSyncComplete = async ({
-          successCount,
-          errorCount,
-          missingCount,
-        }: SyncResult) => {
+        const handleSyncComplete = async ({ summary }: SyncOperationResult) => {
           try {
             // Verify sync statistics
-            expect(successCount).toBe(2) // Both computers processed
-            expect(errorCount).toBe(0) // No errors
-            expect(missingCount).toBe(0) // No missing computers
+            expect(summary.fullySuccessfulComputers).toBe(2) // Both computers processed
+            expect(summary.failedComputers).toBe(0) // No errors
+            expect(summary.missingComputers).toBe(0) // No missing computers
 
             // Verify both computers' file states
             await Promise.all([
@@ -378,14 +375,14 @@ describe("Integration: SyncManager", () => {
         // Listen for initial sync completion
         watchController.on(
           SyncEvent.INITIAL_SYNC_COMPLETE,
-          async ({ successCount, errorCount, missingCount }) => {
+          async ({ summary }) => {
             try {
               initialSyncCompleted = true
 
               // Verify initial sync results
-              expect(successCount).toBe(1) // One computer synced
-              expect(errorCount).toBe(0)
-              expect(missingCount).toBe(0)
+              expect(summary.fullySuccessfulComputers).toBe(1) // One computer synced
+              expect(summary.failedComputers).toBe(0)
+              expect(summary.missingComputers).toBe(0)
 
               // Verify all files were copied
               const computer1LibDir = path.join(computersDir, "1", "lib")
@@ -412,52 +409,49 @@ describe("Integration: SyncManager", () => {
         )
 
         // Listen for file change sync
-        watchController.on(
-          SyncEvent.SYNC_COMPLETE,
-          async ({ successCount, errorCount, missingCount }) => {
-            if (
-              !initialSyncCompleted ||
-              !fileChangeDetected ||
-              fileChangeSynced
-            ) {
-              return // Only handle the first file change after initial sync
-            }
-
-            try {
-              fileChangeSynced = true
-
-              // Verify sync results
-              expect(successCount).toBe(1)
-              expect(errorCount).toBe(0)
-              expect(missingCount).toBe(0)
-
-              // Verify only the changed file was updated
-              const computer1LibDir = path.join(computersDir, "1", "lib")
-              const content1 = await fs.readFile(
-                path.join(computer1LibDir, "first.lua"),
-                "utf8"
-              )
-              const content2 = await fs.readFile(
-                path.join(computer1LibDir, "second.lua"),
-                "utf8"
-              )
-              const content3 = await fs.readFile(
-                path.join(computer1LibDir, "third.lua"),
-                "utf8"
-              )
-
-              expect(content1).toBe("print('First')") // Unchanged
-              expect(content2).toBe("print('Updated Second')") // Changed
-              expect(content3).toBe("print('Third')") // Unchanged
-
-              // Test complete
-              await syncManager.stop()
-              resolve()
-            } catch (err) {
-              reject(err)
-            }
+        watchController.on(SyncEvent.SYNC_COMPLETE, async ({ summary }) => {
+          if (
+            !initialSyncCompleted ||
+            !fileChangeDetected ||
+            fileChangeSynced
+          ) {
+            return // Only handle the first file change after initial sync
           }
-        )
+
+          try {
+            fileChangeSynced = true
+
+            // Verify sync results
+            expect(summary.fullySuccessfulComputers).toBe(1)
+            expect(summary.failedComputers).toBe(0)
+            expect(summary.missingComputers).toBe(0)
+
+            // Verify only the changed file was updated
+            const computer1LibDir = path.join(computersDir, "1", "lib")
+            const content1 = await fs.readFile(
+              path.join(computer1LibDir, "first.lua"),
+              "utf8"
+            )
+            const content2 = await fs.readFile(
+              path.join(computer1LibDir, "second.lua"),
+              "utf8"
+            )
+            const content3 = await fs.readFile(
+              path.join(computer1LibDir, "third.lua"),
+              "utf8"
+            )
+
+            expect(content1).toBe("print('First')") // Unchanged
+            expect(content2).toBe("print('Updated Second')") // Changed
+            expect(content3).toBe("print('Third')") // Unchanged
+
+            // Test complete
+            await syncManager.stop()
+            resolve()
+          } catch (err) {
+            reject(err)
+          }
+        })
 
         // Handle errors
         watchController.on(SyncEvent.SYNC_ERROR, (error) => {
@@ -572,101 +566,93 @@ describe("Integration: SyncManager", () => {
 
     try {
       await new Promise<void>((resolve, reject) => {
-        manualController.on(
-          SyncEvent.SYNC_COMPLETE,
-          async ({ successCount, errorCount, missingCount }) => {
-            try {
-              expect(errorCount).toBe(0)
-              expect(missingCount).toBe(0)
-              expect(successCount).toBe(2)
+        manualController.on(SyncEvent.SYNC_COMPLETE, async ({ summary }) => {
+          try {
+            expect(summary.fullySuccessfulComputers).toBe(2)
+            expect(summary.failedComputers).toBe(0)
+            expect(summary.missingComputers).toBe(0)
 
-              const computer1Dir = path.join(computersDir, "1")
+            const computer1Dir = path.join(computersDir, "1")
 
-              // Test each path case
-              const verifications = [
-                {
-                  desc: "spaces in path",
-                  path: path.join(computer1Dir, "path with spaces", "test.lua"),
-                  content: "print('spaces')",
-                },
-                {
-                  desc: "deep nested path",
-                  path: path.join(
-                    computer1Dir,
-                    "very",
-                    "deep",
-                    "nested",
-                    "target",
-                    "deep.lua"
-                  ),
-                  content: "print('deep')",
-                },
-                {
-                  desc: "Windows-style target path",
-                  path: path.join(
-                    computer1Dir,
-                    "windows",
-                    "target",
-                    "folder",
-                    "win.lua"
-                  ),
-                  content: "print('windows')",
-                },
-                {
-                  desc: "mixed style target path",
-                  path: path.join(
-                    computer1Dir,
-                    "mixed",
-                    "style",
-                    "target",
-                    "mixed.lua"
-                  ),
-                  content: "print('mixed')",
-                },
-              ]
+            // Test each path case
+            const verifications = [
+              {
+                desc: "spaces in path",
+                path: path.join(computer1Dir, "path with spaces", "test.lua"),
+                content: "print('spaces')",
+              },
+              {
+                desc: "deep nested path",
+                path: path.join(
+                  computer1Dir,
+                  "very",
+                  "deep",
+                  "nested",
+                  "target",
+                  "deep.lua"
+                ),
+                content: "print('deep')",
+              },
+              {
+                desc: "Windows-style target path",
+                path: path.join(
+                  computer1Dir,
+                  "windows",
+                  "target",
+                  "folder",
+                  "win.lua"
+                ),
+                content: "print('windows')",
+              },
+              {
+                desc: "mixed style target path",
+                path: path.join(
+                  computer1Dir,
+                  "mixed",
+                  "style",
+                  "target",
+                  "mixed.lua"
+                ),
+                content: "print('mixed')",
+              },
+            ]
 
-              // Verify each path and content
-              for (const verify of verifications) {
-                const exists = await fs.exists(verify.path)
-                if (!exists) {
-                  throw new Error(
-                    `Failed to handle ${verify.desc}: File not found at ${verify.path}`
-                  )
-                }
-
-                const content = await fs.readFile(verify.path, "utf8")
-                if (content !== verify.content) {
-                  throw new Error(`Content mismatch for ${verify.desc}`)
-                }
+            // Verify each path and content
+            for (const verify of verifications) {
+              const exists = await fs.exists(verify.path)
+              if (!exists) {
+                throw new Error(
+                  `Failed to handle ${verify.desc}: File not found at ${verify.path}`
+                )
               }
 
-              // Verify Computer 2's backup folder
-              const computer2Dir = path.join(computersDir, "2")
-              const backupDir = path.join(
-                computer2Dir,
-                "backup",
-                "all",
-                "files"
-              )
-
-              // All files should be in backup
-              for (const file of testFiles) {
-                const filename = path.basename(file.path)
-                const exists = await fs.exists(path.join(backupDir, filename))
-                if (!exists) {
-                  throw new Error(`Backup file not found: ${filename}`)
-                }
+              const content = await fs.readFile(verify.path, "utf8")
+              if (content !== verify.content) {
+                throw new Error(`Content mismatch for ${verify.desc}`)
               }
-
-              await manualController.stop()
-              await syncManager.stop()
-              resolve()
-            } catch (err) {
-              await syncManager.stop()
-              reject(err)
             }
+
+            // Verify Computer 2's backup folder
+            const computer2Dir = path.join(computersDir, "2")
+            const backupDir = path.join(computer2Dir, "backup", "all", "files")
+
+            // All files should be in backup
+            for (const file of testFiles) {
+              const filename = path.basename(file.path)
+              const exists = await fs.exists(path.join(backupDir, filename))
+              if (!exists) {
+                throw new Error(`Backup file not found: ${filename}`)
+              }
+            }
+
+            await manualController.stop()
+            await syncManager.stop()
+            resolve()
+          } catch (err) {
+            await syncManager.stop()
+            reject(err)
           }
-        )
+        })
 
         manualController.on(SyncEvent.SYNC_ERROR, async (error) => {
           await syncManager.stop()
@@ -767,14 +753,14 @@ describe("Integration: UI", () => {
       const manualController = await syncManager.startManualMode()
 
       // Wait for the sync to complete
-      const syncResult = await waitForEvent<SyncResult>(
+      const syncResult = await waitForEvent<SyncOperationResult>(
         manualController,
         SyncEvent.SYNC_COMPLETE
       )
 
       // Check results
-      expect(syncResult.successCount).toBe(1)
-      expect(syncResult.errorCount).toBe(0)
+      expect(syncResult.summary.fullySuccessfulComputers).toBe(1)
+      expect(syncResult.summary.failedComputers).toBe(0)
 
       // Get the captured output
       const capturedOutput = outputCapture.getOutput()
@@ -820,7 +806,10 @@ describe("Integration: UI", () => {
       const manualController = await syncManager.startManualMode()
 
       // Wait for the sync to complete
-      await waitForEvent<SyncResult>(manualController, SyncEvent.SYNC_COMPLETE)
+      await waitForEvent<SyncOperationResult>(
+        manualController,
+        SyncEvent.SYNC_COMPLETE
+      )
 
       // Get the captured output
       const capturedOutput = outputCapture.getOutput()
@@ -867,7 +856,10 @@ describe("Integration: UI", () => {
       const manualController = await syncManager.startManualMode()
 
       // Wait for the sync to complete
-      await waitForEvent<SyncResult>(manualController, SyncEvent.SYNC_COMPLETE)
+      await waitForEvent<SyncOperationResult>(
+        manualController,
+        SyncEvent.SYNC_COMPLETE
+      )
 
       // Get the captured output
       const capturedOutput = outputCapture.getOutput()
@@ -913,7 +905,10 @@ describe("Integration: UI", () => {
       const manualController = await syncManager.startManualMode()
 
       // Wait for the sync to complete
-      await waitForEvent<SyncResult>(manualController, SyncEvent.SYNC_COMPLETE)
+      await waitForEvent<SyncOperationResult>(
+        manualController,
+        SyncEvent.SYNC_COMPLETE
+      )
 
       // Get the captured output
       const capturedOutput = outputCapture.getOutput()
@@ -954,7 +949,10 @@ describe("Integration: UI", () => {
       const manualController = await syncManager.startManualMode()
 
       // First sync
-      await waitForEvent<SyncResult>(manualController, SyncEvent.SYNC_COMPLETE)
+      await waitForEvent<SyncOperationResult>(
+        manualController,
+        SyncEvent.SYNC_COMPLETE
+      )
 
       // Clear current output to analyze the next round
       outputCapture.clear()
@@ -963,7 +961,10 @@ describe("Integration: UI", () => {
       manualController.performSyncCycle()
 
       // Wait for the second sync to complete
-      await waitForEvent<SyncResult>(manualController, SyncEvent.SYNC_COMPLETE)
+      await waitForEvent<SyncOperationResult>(
+        manualController,
+        SyncEvent.SYNC_COMPLETE
+      )
 
       // Get the captured output
       const capturedOutput = outputCapture.getOutput()

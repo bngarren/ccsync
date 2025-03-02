@@ -7,13 +7,6 @@ export enum SyncMode {
   WATCH = "watch",
 }
 
-// // Base interface for file sync configuration in .ccsync.yaml
-// export interface SyncRule {
-//   source: string // Glob pattern relative to sourceRoot
-//   target: string // Target path on computer
-//   computers?: string[] // Array of computer IDs or group names
-// }
-
 /**
  * Represents a viable file resolved from a config sync rule.
  *
@@ -77,33 +70,101 @@ export interface ValidationResult {
   errors: string[]
 }
 
-export enum SyncOperationResult {
-  /**
-   * No sync operation completed yet
-   */
+export enum SyncStatus {
+  /** No sync operation has been attempted yet */
   NONE = "none",
-  /**
-   * All files synced successfully
-   */
+  /** All files were synced successfully with no warnings */
   SUCCESS = "success",
-  /**
-   * All files synced successfully with warnings
-   */
+  /** All files synced successfully but with some warnings */
   WARNING = "warning",
-  /**
-   * Sync operation failed with errors
-   */
+  /** Operation failed completely with errors */
   ERROR = "error",
-  /**
-   * Some files synced successfully, some failed
-   */
+  /** Some files synced successfully, some failed */
   PARTIAL = "partial",
 }
 
-export interface SyncResult {
+/**
+ * Result of syncing a single file to a computer.
+ * Contains details about the source, target, and success status.
+ */
+export interface FileSyncResult {
+  /** Full target path where the file was copied to */
+  targetPath: string
+
+  /** Full source path where the file was copied from */
+  sourcePath: string
+
+  /** Whether the file was successfully copied */
+  success: boolean
+
+  /** Optional error message if the sync failed */
+  error?: string
+}
+
+/**
+ * Results of syncing multiple files to a single computer.
+ * Tracks both the detailed file results and summary counts.
+ */
+export interface ComputerSyncResult {
+  /** ID of the computer */
+  computerId: string
+
+  /** Whether the computer exists in the save directory */
+  exists: boolean
+
+  /** Detailed results for each file synced to this computer */
+  files: FileSyncResult[]
+
+  /** Number of files successfully synced to this computer */
   successCount: number
-  errorCount: number
-  missingCount: number
+
+  /** Number of files that failed to sync to this computer */
+  failureCount: number
+}
+
+/**
+ * Comprehensive result of a complete sync operation.
+ * Contains both summary statistics and detailed results per computer.
+ */
+export interface SyncOperationResult {
+  /** Overall status of the operation */
+  status: SyncStatus
+
+  /** Timestamp when the operation completed */
+  timestamp: number
+
+  /** Summary statistics for the entire operation */
+  summary: {
+    /** Total number of file sync operations attempted */
+    totalFiles: number
+
+    /** Number of files successfully synced */
+    successfulFiles: number
+
+    /** Number of files that failed to sync */
+    failedFiles: number
+
+    /** Number of computers attempted */
+    totalComputers: number
+
+    /** Number of computers where all files synced successfully */
+    fullySuccessfulComputers: number
+
+    /** Number of computers where some files succeeded and others failed */
+    partiallySuccessfulComputers: number
+
+    /** Number of computers where all file syncs failed */
+    failedComputers: number
+
+    /** Number of computers referenced but not found */
+    missingComputers: number
+  }
+
+  /** Detailed results for each computer */
+  computerResults: ComputerSyncResult[]
+
+  /** Error messages that occurred during the operation */
+  errors: string[]
 }
 
 export enum SyncEvent {
@@ -123,7 +184,7 @@ export type BaseControllerEvents = {
   [SyncEvent.STOPPED]: void
   [SyncEvent.STARTED]: void
   [SyncEvent.SYNC_PLANNED]: SyncPlan
-  [SyncEvent.SYNC_COMPLETE]: SyncResult
+  [SyncEvent.SYNC_COMPLETE]: SyncOperationResult
   [SyncEvent.SYNC_ERROR]: IAppError
 }
 
@@ -131,7 +192,7 @@ export type BaseControllerEvents = {
 export type ManualSyncEvents = BaseControllerEvents
 
 export type WatchSyncEvents = {
-  [SyncEvent.INITIAL_SYNC_COMPLETE]: SyncResult
+  [SyncEvent.INITIAL_SYNC_COMPLETE]: SyncOperationResult
 } & BaseControllerEvents
 
 // Type-safe event emitter factory
@@ -166,20 +227,3 @@ export function createTypedEmitter<T extends Record<string, any>>() {
 }
 
 export type TargetType = "directory" | "file"
-
-/**
- * Represents a sync result for a specific computer
- * Used for UI display
- */
-export interface ComputerSyncResult {
-  computerId: string
-  exists: boolean
-  files: Array<{
-    // Store full target path for UI display
-    targetPath: string
-    targetType: TargetType
-    // Include source path for potential filename resolution
-    sourcePath: string
-    success: boolean
-  }>
-}

@@ -8,7 +8,7 @@ import type {
   ResolvedFileRule,
   ValidationResult as ResolveSyncRulesResult,
 } from "./types"
-import { isNodeError } from "./errors"
+import { getErrorMessage, isNodeError } from "./errors"
 import stripAnsi from "strip-ansi"
 
 // ---- Language ----
@@ -217,8 +217,18 @@ interface SaveValidationResult {
   missingFiles: string[]
 }
 
+/**
+ * Verifies that the path specified by 'saveDir' points to a valid Minecraft save/instance directory. Additionally, verifies that the Minecraft save has the required 'computerModDir', i.e. CC: Tweaked uses `computercraft/computer`.
+ *
+ * A valid Minecraft save is assumed to have specific files/dirs such as "level.dat", "session.lock", "region/"
+ *
+ * @param saveDir Absolute path to Minecraft save
+ * @param computerModDir Relative path (from root of saveDir) to the directory containing the computers
+ * @returns
+ */
 export const validateMinecraftSave = async (
-  saveDir: string
+  saveDir: string,
+  computerModDir = "computercraft/computer"
 ): Promise<SaveValidationResult> => {
   const savePath = resolvePath(saveDir)
   const result: SaveValidationResult = {
@@ -228,13 +238,8 @@ export const validateMinecraftSave = async (
     missingFiles: [],
   }
 
-  // Key files that should exist in a valid Minecraft save
-  const keyFiles = [
-    "level.dat",
-    "session.lock",
-    "region",
-    "computercraft/computer", // Required for ComputerCraft
-  ]
+  // Key files/dirs that should exist in a valid Minecraft save
+  const keyPaths = ["level.dat", "session.lock", "region"]
 
   try {
     // First check if the directory exists
@@ -247,7 +252,7 @@ export const validateMinecraftSave = async (
 
     // Check each key file/directory
     await Promise.all(
-      keyFiles.map(async (kf) => {
+      keyPaths.map(async (kf) => {
         try {
           await fs.access(path.join(savePath, kf))
         } catch (err) {
@@ -264,16 +269,24 @@ export const validateMinecraftSave = async (
     }
 
     // Specific check for computercraft directory
-    if (!result.missingFiles.includes("computercraft/computer")) {
-      try {
-        const computercraftStats = await fs.stat(
-          path.join(savePath, "computercraft/computer")
+    const errorMessage = `${computerModDir} not found. Is 'CC: Tweaked' mod installed?`
+    try {
+      const computerModDirPath = path.join(savePath, computerModDir)
+      // Check if the directory exists and if it's a directory
+      const computercraftStats = await fs.stat(computerModDirPath)
+
+      if (!computercraftStats.isDirectory()) {
+        result.errors.push(errorMessage)
+      }
+    } catch (err) {
+      if (isNodeError(err) && err.code === "ENOENT") {
+        // Directory doesn't exist
+        result.errors.push(errorMessage)
+      } else {
+        // Other errors (e.g., permission issues, etc.)
+        result.errors.push(
+          `Unexpected failure to validate '${computerModDir}: ${getErrorMessage(err)}'`
         )
-        if (!computercraftStats.isDirectory()) {
-          result.errors.push("computercraft/computer is not a directory")
-        }
-      } catch (err) {
-        result.errors.push("Failed to check computercraft directory structure")
       }
     }
 

@@ -269,6 +269,10 @@ export class SyncManager {
           changedFiles
         )
 
+        this.log.warn(
+          `missing computers: ${ruleResolution.missingComputerIds.join(" , ")}`
+        )
+
         // Add resolved files to the plan
         plan.resolvedFileRules = ruleResolution.resolvedFileRules
         plan.availableComputers = ruleResolution.availableComputers

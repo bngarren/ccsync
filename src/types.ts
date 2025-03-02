@@ -135,7 +135,7 @@ export interface SyncOperationResult {
 
   /** Summary statistics for the entire operation */
   summary: {
-    /** Total number of file sync operations attempted */
+    /** Total number of file copies attempted. 1 file -> 2 computers = 2 totalFiles */
     totalFiles: number
 
     /** Number of files successfully synced */

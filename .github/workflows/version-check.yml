@@ -8,6 +8,9 @@ on:
       - "package.json"
       - "src/version.ts"
 
+permissions:
+  contents: read
+
 jobs:
   check-versions:
     runs-on: ubuntu-latest
@@ -27,6 +30,8 @@ jobs:
 
       - name: Check version consistency
         id: version-check
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           # Extract version from package.json
           PKG_VERSION=$(node -p "require('./package.json').version")
@@ -51,10 +56,14 @@ jobs:
             exit 0
           fi
 
-          # Check latest git tag if not a release-please PR
-          git fetch --tags
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0.0")
-          echo "Latest git tag: $LATEST_TAG"
+          # Get latest tag using GitHub API
+          echo "Getting latest tag..."
+          if ! LATEST_TAG=$(gh api repos/${{ github.repository }}/tags --jq '.[0].name // "0.0.0"'); then
+            echo "Failed to get tags from GitHub API, using 0.0.0 as default"
+            LATEST_TAG="0.0.0"
+          else
+            echo "Latest git tag: $LATEST_TAG"
+          fi
 
           # Strip 'v' prefix if present in tag
           LATEST_TAG=${LATEST_TAG#v}

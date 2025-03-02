@@ -20,6 +20,11 @@ jobs:
         with:
           node-version: "18"
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
       - name: Check version consistency
         id: version-check
         run: |
@@ -27,8 +32,8 @@ jobs:
           PKG_VERSION=$(node -p "require('./package.json').version")
           echo "Package.json version: $PKG_VERSION"
 
-          # Extract version from version.ts
-          TS_VERSION=$(grep -o "'[0-9]\+\.[0-9]\+\.[0-9]\+'" src/version.ts | tr -d "'")
+          # Extract version directly from TypeScript file using Bun
+          TS_VERSION=$(bun --silent -e "import { version } from './src/version'; console.log(version)")
           echo "version.ts version: $TS_VERSION"
 
           # Compare versions

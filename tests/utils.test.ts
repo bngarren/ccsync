@@ -68,7 +68,10 @@ describe("Save Directory Validation", () => {
 
     const result = await validateMinecraftSave(testSaveDir)
     expect(result.isValid).toBe(false)
-    expect(result.missingFiles).toContain("computercraft/computer")
+    // Check if 'computercraft/computer' is in the errors array
+    expect(
+      result.errors.some((error) => error.includes("computercraft/computer"))
+    ).toBe(true)
   })
 
   test("fails when required files are missing", async () => {

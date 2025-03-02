@@ -45,10 +45,10 @@ rules:
 advanced:
   # Enable logging to file
   logToFile: true
-  
+
   # Log level: silent, trace, debug, info, warn, error, fatal
   logLevel: "trace"
-  
+
   # How long to cache validation results (milliseconds)
   # Lower = more accurate but more CPU intensive, Higher = faster but may miss changes
   cache_ttl: 5000

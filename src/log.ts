@@ -15,6 +15,9 @@ export type LogLevel =
 
 // Default log level
 const DEFAULT_LOG_LEVEL: LogLevel = "debug"
+const LOG_ROTATION_FREQ = "daily"
+const LOG_MAX_SIZE = "10m"
+const LOG_RETENTION_COUNT = 2 // days
 
 // Helper to get OS-specific user log directory
 export function getLogDirectory(): string {
@@ -66,6 +69,7 @@ export function initializeLogger(options: {
   }
 
   // Setup file destination
+  const logDir = getLogDirectory()
   const logFilePath = getLogFilePath()
 
   // Setup transport with pino-roll
@@ -73,14 +77,14 @@ export function initializeLogger(options: {
     target: "pino-roll",
     options: {
       file: logFilePath,
-      frequency: "daily", // Rotate logs daily
+      frequency: LOG_ROTATION_FREQ, // Rotate logs daily
       mkdir: true, // Create the directory if it doesn't exist
-      size: "10m", // Also rotate if a log file reaches 10 MB
+      size: LOG_MAX_SIZE, // Also rotate if a log file reaches 10 MB
       extension: ".log", // Add .log extension to the files
       symlink: true, // Create a symlink to the current log file
       dateFormat: "yyyy-MM-dd", // Format for date in filename
       limit: {
-        count: 2, // Keep 2 days of logs
+        count: LOG_RETENTION_COUNT, // Keep 2 days of logs
       },
       messageFormat: "{if component} [{component}]: {end}{msg}",
     },
@@ -99,13 +103,82 @@ export function initializeLogger(options: {
     transport
   )
 
-  // Log initialization
+  // ---- Log some initialization info (not critical) ----
+
+  function formatSize(bytes: number): string {
+    if (bytes < 1024) return `${bytes} bytes`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`
+  }
+
+  // Get information about log directory and existing logs
+  let existingLogs: string[] = []
+  let directorySize = 0
+  const currentLogSymlink = path.join(logDir, "current.log")
+  let currentLogFile = ""
+  let currentFileSize: string | number = "unknown"
+
+  try {
+    if (fs.existsSync(logDir)) {
+      // Get list of log files
+      existingLogs = fs
+        .readdirSync(logDir)
+        .filter((file) => file.startsWith("ccsync") && file.endsWith(".log"))
+
+      // Calculate total size of log directory
+      directorySize = existingLogs.reduce((total, file) => {
+        try {
+          const stats = fs.statSync(path.join(logDir, file))
+          return total + stats.size
+        } catch (e) {
+          return total
+        }
+      }, 0)
+
+      if (fs.existsSync(currentLogSymlink)) {
+        // Read where the symlink points to
+        currentLogFile = fs.readlinkSync(currentLogSymlink)
+
+        const currentLogPath = path.join(logDir, currentLogFile)
+
+        if (fs.existsSync(currentLogPath)) {
+          const stats = fs.statSync(currentLogPath)
+          currentFileSize = stats.size
+        }
+      }
+    }
+  } catch (err) {
+    // If we can't access the directory, just continue without this info
+  }
+
   logger.info(
     {
       logLevel: options.logLevel,
-      logFile: logFilePath,
+      settings: {
+        directory: logDir,
+        rotationSettings: {
+          frequency: LOG_ROTATION_FREQ,
+          sizeLimit: LOG_MAX_SIZE,
+          retentionCount: LOG_RETENTION_COUNT,
+        },
+      },
+      stats: {
+        existingLogCount: existingLogs.length,
+        logFiles: existingLogs,
+        directorySize: formatSize(directorySize),
+      },
+      currentLog: {
+        path: currentLogFile,
+        formattedSize:
+          typeof currentFileSize === "number"
+            ? formatSize(currentFileSize)
+            : currentFileSize,
+      },
+      pino: pino.version,
+      platform: process.platform,
+      nodeVersion: process.version,
     },
-    "Logger initialized"
+    "pino logger intialized."
   )
 
   return logger

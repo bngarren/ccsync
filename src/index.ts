@@ -181,11 +181,23 @@ async function main() {
     })
 
     const log = getLogger().child({ component: "Main" })
-    log.debug("Configuration loaded successfully")
+    log.info(
+      {
+        version: process.env.npm_package_version || "unknown",
+        platform: process.platform,
+        nodeVersion: process.version,
+        config: {
+          sourceRoot: config.sourceRoot,
+          minecraftSave: path.posix.basename(config.minecraftSavePath),
+          rulesCount: config.rules.length,
+        },
+      },
+      "CC:Sync initialized"
+    )
     log.trace({ config }, "Current configuration")
 
     if (config.advanced.logToFile) {
-      p.log.message(`Logging to file at: ${getLogFilePath()}`)
+      p.log.message(color.dim(`Logging to file at: ${getLogFilePath()}`))
     }
 
     const savePath = path.parse(config.minecraftSavePath)

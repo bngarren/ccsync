@@ -156,6 +156,9 @@ export class SyncManager {
       this.log.trace("createSyncPlan > Cache miss")
     }
 
+    // Performance tracking
+    const createSyncPlanStartTime = process.hrtime.bigint()
+
     // Create a base sync plan
     const plan = createEmptySyncPlan()
 
@@ -216,6 +219,14 @@ export class SyncManager {
       let computers: Computer[] = []
       try {
         computers = await findMinecraftComputers(this.config.minecraftSavePath)
+
+        this.log.info(
+          {
+            computers: computers.map((c) => ({ [c.id]: c.shortPath })),
+            saveDir: this.config.minecraftSavePath,
+          },
+          `Found ${computers.length} Minecraft ${pluralize("computer")(computers.length)} in save directory`
+        )
 
         if (computers.length === 0) {
           plan.issues.push(
@@ -326,6 +337,20 @@ export class SyncManager {
         this.lastSyncPlan = null
       }
 
+      // Performance tracking
+      const endTime = process.hrtime.bigint()
+      const duration = Number(endTime - createSyncPlanStartTime) / 1_000_000 // Convert to ms
+
+      this.log.debug(
+        {
+          planCreationTime: duration,
+          filesCount: plan.resolvedFileRules.length,
+          computersCount: plan.availableComputers.length,
+          valid: plan.isValid,
+        },
+        `SyncPlan created (${duration} ms)`
+      )
+
       return plan
     } catch (err) {
       // Handle unexpected errors
@@ -366,8 +391,23 @@ export class SyncManager {
       }
     }
 
+    this.log.debug(
+      {
+        computerPath: computer.shortPath,
+        numberOfFiles: filesToCopy.length,
+      },
+      `starting copy of files to computer ${computer.id}`
+    )
+
     const copyResult = await copyFilesToComputer(filesToCopy, computer.path)
     await setTimeout(100) // Small delay between computers
+
+    this.log.info(
+      {
+        ...copyResult,
+      },
+      `finished copying files to computer ${computer.id}.`
+    )
 
     return {
       computerId: computer.id,
@@ -865,6 +905,9 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
 
     this.log.debug("manualController started a new sync cycle.")
 
+    // Performance tracking
+    const syncCycleStartTime = process.hrtime.bigint()
+
     try {
       const syncPlan = await this.syncManager.createSyncPlan()
       this.emit(SyncEvent.SYNC_PLANNED, syncPlan)
@@ -905,6 +948,17 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
       this.emit(SyncEvent.SYNC_ERROR, appError)
 
       // Emitting a fatal error (above) will cause SyncManager to stop() this controller
+    } finally {
+      // Performance tracking
+      const endTime = process.hrtime.bigint()
+      const duration = Number(endTime - syncCycleStartTime) / 1_000_000 // Convert to ms
+      this.log.debug(
+        {
+          mode: SyncMode.MANUAL,
+          syncCycleDuration: duration,
+        },
+        `performSyncCycle complete (${duration} ms)`
+      )
     }
   }
 
@@ -921,9 +975,17 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
 
     this.keyHandler = new KeyHandler({
       onSpace: async () => {
+        this.log.info(
+          { action: "manual_sync", trigger: "keypress_space" },
+          "User triggered manual sync"
+        )
         continueCallback()
       },
       onEsc: async () => {
+        this.log.info(
+          { action: "exit", trigger: "keypress_esc" },
+          "User triggered exit"
+        )
         try {
           await this.syncManager.stop()
         } catch (error) {
@@ -938,6 +1000,10 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
         }
       },
       onCtrlC: async () => {
+        this.log.info(
+          { action: "exit", trigger: "keypress_ctrlc" },
+          "User triggered terminate"
+        )
         try {
           await this.syncManager.stop()
           continueCallback()
@@ -1044,6 +1110,9 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
 
     this.log.debug(`watchController started a new sync cycle.`)
 
+    // Performance tracking
+    const syncCycleStartTime = process.hrtime.bigint()
+
     // If this is triggered by a file change, update the changedFiles set
     if (changedPath) {
       const relativePath = processPath(
@@ -1126,6 +1195,17 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       this.emit(SyncEvent.SYNC_ERROR, appError)
 
       // Emitting a fatal error (above) will cause SyncManager to stop() this controller
+    } finally {
+      // Performance tracking
+      const endTime = process.hrtime.bigint()
+      const duration = Number(endTime - syncCycleStartTime) / 1_000_000 // Convert to ms
+      this.log.debug(
+        {
+          mode: SyncMode.WATCH,
+          syncCycleDuration: duration,
+        },
+        `performSyncCycle complete (${duration} ms)`
+      )
     }
   }
 
@@ -1139,6 +1219,10 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
 
     this.keyHandler = new KeyHandler({
       onEsc: async () => {
+        this.log.info(
+          { action: "exit", trigger: "keypress_esc" },
+          "User triggered exit"
+        )
         try {
           await this.syncManager.stop()
         } catch (error) {
@@ -1153,6 +1237,10 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
         }
       },
       onCtrlC: async () => {
+        this.log.info(
+          { action: "exit", trigger: "keypress_ctrlc" },
+          "User triggered terminate"
+        )
         try {
           await this.syncManager.stop()
         } catch (error) {

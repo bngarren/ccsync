@@ -11,4 +11,4 @@ fi
 
 # Run the tail command and pipe it to pino-pretty
 echo "Tailing log file: $LOG_FILE"
-tail -f "$LOG_FILE" | pino-pretty -c -l -i pid,hostname,component -S -o '{if component} [{component}]: {end}{msg}'
+tail -f "$LOG_FILE" | pino-pretty -c -i pid,hostname,component -S -o '{if component} [{component}]: {end}{msg}'

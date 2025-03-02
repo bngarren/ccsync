@@ -172,6 +172,7 @@ npx @bngarren/ccsync
 
 #### Basic Example
 ```yaml
+version: "2.0"
 sourceRoot: "./src"
 minecraftSavePath: "~/minecraft/saves/my_world"
 
@@ -263,12 +264,25 @@ The config for CC: Sync is a `.ccsync.yaml` file in your project root. If no fil
 |                   | The following fields are ***optional***:
 |                   |  - `flatten` (default true): Whether the matched source files should be flattened into the target directory. If a recursive glob pattern (e.g., **/*.lua) is used and `flatten` is false, the source directory structure will be preserved in the target directory.
 
+> Should use forward slashes (/) in paths, even on Windows:<br> 
+>`"C:/Users/name/path"`
+<br>
+> Otherwise, backslashes need to be properly escaped: `"C:\\Users\\name\\path"`
+
 ### Advanced Options
 These shouldn't need to be modified—mostly for debugging and performance.
 | Key               | Description                                                                                                     |
 |-------------------|-----------------------------------------------------------------------------------------------------------------|
-| `verbose`      | Enable detailed logging and error messages. |
+| `logToFile`      | Default: false. Enable logging to file.   |
+| `logLevel`      | Default: 'debug'. Options: 'silent', 'trace', 'debug', 'info', 'warn', 'error', 'fatal' |
 | `cache_ttl`      | Cache duration in milliseconds. This reduces how many times the source/target parameters must be validated on quick, repetitive re-syncs. |
+
+> Note: Log files are written to a log directory depending on the operating system:
+<br>
+> - Windows: `%USER%\AppData\Local\ccsync\logs`
+> - macOS: `~/Library/Logs/ccsync`
+> - Linux/Unix: `~/.local/share/ccsync/logs`
+
 
 ### Where is my Minecraft save?
 Below are some common places to look based on your operating system. However, if you use a custom launcher, then you will need to check where it stores the saves.

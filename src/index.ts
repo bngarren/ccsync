@@ -17,6 +17,7 @@ import { toTildePath } from "./utils"
 import { type SyncMode } from "./types"
 import { AppError, ErrorSeverity, getErrorMessage } from "./errors"
 import { getLogFilePath, getLogger, initializeLogger } from "./log"
+import { version } from "./version"
 
 const initConfig = async () => {
   // Find all config files
@@ -157,7 +158,7 @@ async function handleFatalError(
 async function main() {
   console.clear()
 
-  p.intro(`${color.cyanBright(`CC: Sync`)}`)
+  p.intro(`${color.cyanBright(`CC: Sync`)} v${version}`)
 
   try {
     // Get the config file
@@ -183,7 +184,7 @@ async function main() {
     const log = getLogger().child({ component: "Main" })
     log.info(
       {
-        version: process.env.npm_package_version || "unknown",
+        ccSyncVersion: version || process.env.npm_package_version || "unknown",
         platform: process.platform,
         nodeVersion: process.version,
         config: {
@@ -192,7 +193,7 @@ async function main() {
           rulesCount: config.rules.length,
         },
       },
-      "CC:Sync initialized"
+      "CC: Sync initialized"
     )
     log.trace({ config }, "Current configuration")
 

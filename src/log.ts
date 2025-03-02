@@ -43,7 +43,7 @@ export function getLogFilePath(): string {
   }
 
   // Use ISO date format for log files (YYYY-MM-DD)
-  const dateString = new Date().toISOString().split("T")[0]
+  const dateString = new Date().toLocaleDateString("en-CA")
   return path.join(logDir, `ccsync-${dateString}.log`)
 }
 

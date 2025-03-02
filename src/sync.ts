@@ -179,7 +179,7 @@ export class SyncManager {
                 SyncPlanIssueSeverity.ERROR,
                 {
                   source: "validateMinecraftSave",
-                  suggestion: `Ensure this is a valid Minecraft at '${saveDirValidation.savePath}'`,
+                  suggestion: `Ensure this is a valid Minecraft save at '${saveDirValidation.savePath}' and that a 'computercraft/computer' directory exists`,
                 }
               )
             )
@@ -237,7 +237,7 @@ export class SyncManager {
               {
                 source: "findMinecraftComputers",
                 suggestion:
-                  "Ensure CC:Tweaked computers are present in the world. Sometimes adding a dummy file to the in-game computer helps.",
+                  "Ensure CC: Tweaked computers are present in the world. Sometimes adding a dummy file to the in-game computer helps.",
               }
             )
           )
@@ -629,9 +629,10 @@ export class SyncManager {
 
       // High level controller functions should emit a SYNC_ERROR when they catch thrown errors from subordinate functions
       manualController.on(SyncEvent.SYNC_ERROR, async (error) => {
-        if (this.ui) {
-          this.ui.addMessage(UIMessageType.ERROR, error.message)
-        }
+        // TODO Not sure if we should send to UI here. I think we just log...It should have been sent to the UI from the controller. Same for watchController
+        // if (this.ui) {
+        //   this.ui.addMessage(UIMessageType.ERROR, error.message)
+        // }
         // Handle based on severity
         if (error.severity === ErrorSeverity.FATAL) {
           this.log.fatal(error, "startManualMode")
@@ -704,12 +705,6 @@ export class SyncManager {
       })
 
       watchController.on(SyncEvent.SYNC_ERROR, async (error) => {
-        if (this.ui) {
-          this.ui.addMessage(UIMessageType.ERROR, error.message)
-        } else {
-          console.error(error)
-        }
-
         // Handle based on severity
         if (error.severity === ErrorSeverity.FATAL) {
           this.log.fatal(error, "startWatchMode")

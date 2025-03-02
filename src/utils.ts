@@ -8,7 +8,7 @@ import type {
   ResolvedFileRule,
   ValidationResult as ResolveSyncRulesResult,
 } from "./types"
-import { isNodeError } from "./errors"
+import { getErrorMessage, isNodeError } from "./errors"
 import stripAnsi from "strip-ansi"
 
 // ---- Language ----
@@ -217,8 +217,18 @@ interface SaveValidationResult {
   missingFiles: string[]
 }
 
+/**
+ * Verifies that the path specified by 'saveDir' points to a valid Minecraft save/instance directory. Additionally, verifies that the Minecraft save has the required 'computerModDir', i.e. CC: Tweaked uses `computercraft/computer`.
+ *
+ * A valid Minecraft save is assumed to have specific files/dirs such as "level.dat", "session.lock", "region/"
+ *
+ * @param saveDir Absolute path to Minecraft save
+ * @param computerModDir Relative path (from root of saveDir) to the directory containing the computers
+ * @returns
+ */
 export const validateMinecraftSave = async (
-  saveDir: string
+  saveDir: string,
+  computerModDir = "computercraft/computer"
 ): Promise<SaveValidationResult> => {
   const savePath = resolvePath(saveDir)
   const result: SaveValidationResult = {
@@ -259,12 +269,11 @@ export const validateMinecraftSave = async (
     }
 
     // Specific check for computercraft directory
-    const errorMessage =
-      "computercraft/computer not found. Is 'CC: Tweaked' mod installed?"
+    const errorMessage = `${computerModDir} not found. Is 'CC: Tweaked' mod installed?`
     try {
-      const computerModDir = path.join(savePath, "computercraft/computer")
+      const computerModDirPath = path.join(savePath, computerModDir)
       // Check if the directory exists and if it's a directory
-      const computercraftStats = await fs.stat(computerModDir)
+      const computercraftStats = await fs.stat(computerModDirPath)
 
       if (!computercraftStats.isDirectory()) {
         result.errors.push(errorMessage)
@@ -275,7 +284,9 @@ export const validateMinecraftSave = async (
         result.errors.push(errorMessage)
       } else {
         // Other errors (e.g., permission issues, etc.)
-        result.errors.push("Failed to check computercraft directory structure")
+        result.errors.push(
+          `Unexpected failure to validate '${computerModDir}: ${getErrorMessage(err)}'`
+        )
       }
     }
 

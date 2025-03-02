@@ -18,9 +18,11 @@ jobs:
     needs: ci
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - uses: googleapis/release-please-action@v4
         id: release
         with:
-          release-type: node
           token: ${{ secrets.PAT }}
           config-file: release-please-config.json

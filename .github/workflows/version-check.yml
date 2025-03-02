@@ -1,0 +1,60 @@
+name: Version Check
+
+on:
+  pull_request:
+    branches:
+      - master
+    paths:
+      - "package.json"
+      - "src/version.ts"
+
+jobs:
+  check-versions:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: "18"
+
+      - name: Check version consistency
+        id: version-check
+        run: |
+          # Extract version from package.json
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          echo "Package.json version: $PKG_VERSION"
+
+          # Extract version from version.ts
+          TS_VERSION=$(grep -o "'[0-9]\+\.[0-9]\+\.[0-9]\+'" src/version.ts | tr -d "'")
+          echo "version.ts version: $TS_VERSION"
+
+          # Compare versions
+          if [ "$PKG_VERSION" != "$TS_VERSION" ]; then
+            echo "::error::Version mismatch! package.json ($PKG_VERSION) does not match version.ts ($TS_VERSION)"
+            exit 1
+          else
+            echo "Versions match: $PKG_VERSION"
+          fi
+
+          # Also check if this is a version bump PR from release-please
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          if [[ "$PR_TITLE" == "chore(master): release "* ]]; then
+            echo "This appears to be a release-please PR, skipping tag check"
+            exit 0
+          fi
+
+          # Check latest git tag if not a release-please PR
+          git fetch --tags
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0.0")
+          echo "Latest git tag: $LATEST_TAG"
+
+          # Strip 'v' prefix if present in tag
+          LATEST_TAG=${LATEST_TAG#v}
+
+          # Compare package version with latest tag
+          if [ "$PKG_VERSION" != "$LATEST_TAG" ] && [ "$PKG_VERSION" != "0.0.0" ]; then
+            echo "::warning::Package version ($PKG_VERSION) does not match latest git tag ($LATEST_TAG). This is expected for version bump PRs."
+          fi

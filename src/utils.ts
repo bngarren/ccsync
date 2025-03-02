@@ -697,11 +697,6 @@ export async function copyFilesToComputer(
   const skippedFiles = []
   const errors = []
 
-  // DEBUG
-  // console.log("\n=== Starting copyFilesToComputer ===")
-  // console.log("Computer path:", computerPath)
-  // console.log("Number of files to process:", resolvedFiles.length)
-
   // Normalize the computer path
   const normalizedComputerPath = normalizePath(computerPath)
 

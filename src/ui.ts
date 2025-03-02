@@ -11,6 +11,8 @@ import {
 import boxen from "boxen"
 import { pluralize } from "./utils"
 import stripAnsi from "strip-ansi"
+import { getLogger } from "./log"
+import type { Logger } from "pino"
 
 const theme = {
   primary: chalk.hex("#61AFEF"), // Bright blue
@@ -100,6 +102,13 @@ interface UIState {
 const MIN_RENDER_INTERVAL = 50
 
 export class UI {
+  private _logger: Logger | null = null
+  private get log() {
+    if (!this._logger) {
+      this._logger = getLogger().child({ component: "UI" })
+    }
+    return this._logger
+  }
   private state: UIState
   private timer: ReturnType<typeof setInterval> | null = null
   private isActive = false
@@ -150,12 +159,14 @@ export class UI {
     process.stdout.write("\x1B[1;1H\x1B[0J")
 
     // Show the persistent header
-    console.log(
+    process.stdout.write(
       theme.primary(
         `\nCC: Sync - ${theme.bold(this.state.mode.toUpperCase())} mode started at ${this.state.lastUpdated.toLocaleString()}`
-      )
+      ) +
+        "\n" +
+        theme.primary("─".repeat(process.stdout.columns || 80)) +
+        "\n"
     )
-    console.log(theme.primary("─".repeat(process.stdout.columns || 80)) + "\n")
 
     // Display history (if any) in plain text
     for (const pastOutput of this.state.syncHistory) {
@@ -197,6 +208,8 @@ export class UI {
         this.renderDynamicElements()
       }
     }, 100)
+
+    this.log.info("UI started.")
   }
 
   stop(): void {
@@ -214,6 +227,8 @@ export class UI {
     // Final clear of dynamic elements
     logUpdate.clear()
     logUpdate.done()
+
+    this.log.info("UI stopped.")
   }
 
   private updateState(update: Partial<UIState>): void {
@@ -262,10 +277,6 @@ export class UI {
     })
   }
 
-  /**
-   *
-   * In contrast to other UI methods, we don't _queue_ the UIState updates here, we peform them synchronously so that the calling code is assured it has a clean, expected state before beginning another sync operation.
-   */
   startSyncOperation(
     options: { clearMessages: boolean } = { clearMessages: true }
   ): void {
@@ -279,8 +290,7 @@ export class UI {
       updates.messages = []
     }
 
-    // Apply updates synchronously
-    this.state = { ...this.state, ...updates }
+    this.updateState({ ...updates })
   }
 
   // Complete an operation and log results
@@ -309,8 +319,20 @@ export class UI {
     // Store in history before logging
     this.addToHistory(currentOutput)
 
-    // Log the new output with colors
-    console.log(currentOutput)
+    // Write the new output with colors
+    process.stdout.write(
+      header +
+        "\n" +
+        computerResults +
+        "\n" +
+        messages +
+        "\n" +
+        theme.dim("─".repeat(process.stdout.columns || 80)) +
+        "\n"
+    )
+
+    this.log.debug(`UI received a 'completedOperation: ${result.toUpperCase()}`)
+
     // After logging static content, re-render dynamic elements
     this.renderDynamicElements()
     this.syncsComplete++

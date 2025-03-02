@@ -8,7 +8,7 @@ import * as fs from "node:fs/promises"
 
 import { merge } from "ts-deepmerge"
 
-export const CONFIG_VERSION = "1.1"
+export const CONFIG_VERSION = "2.0"
 export const DEFAULT_CONFIG_FILENAME = ".ccsync.yaml"
 export const DEFAULT_CONFIG: Config = {
   version: CONFIG_VERSION,
@@ -17,7 +17,8 @@ export const DEFAULT_CONFIG: Config = {
   computerGroups: {},
   rules: [],
   advanced: {
-    verbose: false,
+    logToFile: false,
+    logLevel: "debug",
     cache_ttl: 5000,
   },
 }
@@ -169,11 +170,23 @@ const SyncRuleSchema = z.object({
 })
 
 const AdvancedOptionsSchema = z.object({
-  verbose: z
+  logToFile: z
     .boolean({
-      invalid_type_error: "Verbose must be true or false",
+      invalid_type_error: "logToFile must be true or false",
     })
     .default(false),
+  // mirror pino's log levels
+  logLevel: z
+    .enum([
+      "silent",
+      "trace",
+      "debug",
+      "info",
+      "warn",
+      "error",
+      "fatal",
+    ] as const)
+    .default("debug"),
   cache_ttl: z
     .number({
       invalid_type_error: "Cache TTL must be a number",
@@ -211,7 +224,6 @@ export const ConfigSchema = z
     computerGroups: ComputerGroupsSchema,
     rules: z.array(SyncRuleSchema),
     advanced: AdvancedOptionsSchema.default({
-      verbose: false,
       cache_ttl: 5000,
     }),
   })
@@ -497,8 +509,11 @@ rules: []
 
 # Advanced configuration options
 advanced:
-  # Enable verbose logging
-  verbose: false
+  # Enable logging to file
+  logToFile: false
+  
+  # Log level: silent, trace, debug, info, warn, error, fatal
+  logLevel: "debug"
   
   # How long to cache validation results (milliseconds)
   # Lower = more accurate but more CPU intensive, Higher = faster but may miss changes

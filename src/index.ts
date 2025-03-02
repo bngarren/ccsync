@@ -16,6 +16,7 @@ import { theme } from "./theme"
 import { toTildePath } from "./utils"
 import { type SyncMode } from "./types"
 import { AppError, ErrorSeverity, getErrorMessage } from "./errors"
+import { getLogFilePath, getLogger, initializeLogger } from "./log"
 
 const initConfig = async () => {
   // Find all config files
@@ -78,7 +79,7 @@ function getErrorCategoryTitle(category: ConfigErrorCategory) {
   }
 }
 
-const presentConfigErrors = (errors: ConfigError[], isVerbose: boolean) => {
+const presentConfigErrors = (errors: ConfigError[]) => {
   p.log.error("Configuration errors found:")
 
   // Group errors by category
@@ -108,7 +109,7 @@ const presentConfigErrors = (errors: ConfigError[], isVerbose: boolean) => {
         `  • ${error.message}${error.suggestion ? "\n    " + theme.dim(error.suggestion) : ""}`
       )
 
-      if (isVerbose && error.verboseDetail) {
+      if (error.verboseDetail) {
         p.log.info(`    ${theme.dim(error.verboseDetail)}`)
       }
     })
@@ -136,14 +137,15 @@ async function handleFatalError(
     error instanceof AppError ? error.message : getErrorMessage(error)
 
   // Log the error
-  p.log.error(`FATAL ERROR: ${message}`)
+  const log = getLogger()
+  log.fatal(`FATAL ERROR: ${message}`)
 
   // Try to clean up if we have a sync manager
   if (syncManager) {
     try {
       await syncManager.stop()
     } catch (stopErr) {
-      p.log.error(`Error during cleanup: ${getErrorMessage(stopErr)}`)
+      log.error(`Error during cleanup: ${getErrorMessage(stopErr)}`)
     }
   }
 
@@ -162,7 +164,7 @@ async function main() {
     const { config, errors } = await initConfig()
 
     if (errors.length > 0) {
-      presentConfigErrors(errors, config?.advanced?.verbose || false)
+      presentConfigErrors(errors)
       p.outro("Please fix these issues and try again.")
       process.exit(0)
     }
@@ -172,12 +174,37 @@ async function main() {
       process.exit(0)
     }
 
-    // console.debug(JSON.stringify(config, null, 2))
+    // Initialize logger with config settings
+    initializeLogger({
+      logToFile: config.advanced.logToFile,
+      logLevel: config.advanced.logLevel,
+    })
+
+    const log = getLogger().child({ component: "Main" })
+    log.info(
+      {
+        version: process.env.npm_package_version || "unknown",
+        platform: process.platform,
+        nodeVersion: process.version,
+        config: {
+          sourceRoot: config.sourceRoot,
+          minecraftSave: path.posix.basename(config.minecraftSavePath),
+          rulesCount: config.rules.length,
+        },
+      },
+      "CC:Sync initialized"
+    )
+    log.trace({ config }, "Current configuration")
+
+    if (config.advanced.logToFile) {
+      p.log.message(color.dim(`Logging to file at: ${getLogFilePath()}`))
+    }
 
     const savePath = path.parse(config.minecraftSavePath)
 
     const gracefulExit = () => {
       p.outro(theme.info("Goodbye."))
+      log.info("Gracefully exited.")
       process.exit(0)
     }
 
@@ -197,6 +224,8 @@ async function main() {
       gracefulExit()
     }
 
+    log.debug(`User confirmed minecraftSavePath at ${config.minecraftSavePath}`)
+
     // Choose mode
     const mode: SyncMode = (await p.select({
       message: "Select sync mode:",
@@ -213,6 +242,8 @@ async function main() {
     if (p.isCancel(mode)) {
       gracefulExit()
     }
+
+    log.debug(`User selected sync mode: ${mode.toUpperCase()}`)
 
     const syncManager = new SyncManager(config)
 
@@ -260,12 +291,7 @@ async function main() {
     }
   } catch (error) {
     // Catch-all for errors during startup
-    if (error instanceof AppError) {
-      await handleFatalError(error)
-    } else {
-      p.log.error(`Fatal error: ${getErrorMessage(error)}`)
-      process.exit(1)
-    }
+    await handleFatalError(error)
   }
 }
 

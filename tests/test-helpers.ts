@@ -343,19 +343,20 @@ export function waitForEvent<T>(
 }
 
 /**
- * Mocks console.log to capture and store all UI output for later verification
+ * Mocks stdout.write to capture and store all UI output for later verification
  */
 export function captureUIOutput() {
   const output: string[] = []
-  const originalConsoleLog = console.log
+  const originalStdoutWrite = process.stdout.write
 
-  const mockConsoleLog = mock((...args: any[]) => {
+  const mockStdoutWrite = mock((...args: any[]) => {
     // Capture the output
     output.push(args.join(" "))
+    return true
   })
 
-  // Replace console.log
-  console.log = mockConsoleLog
+  // Replace stdout
+  process.stdout.write = mockStdoutWrite
 
   return {
     getOutput: () => [...output],
@@ -363,7 +364,7 @@ export function captureUIOutput() {
       output.length = 0
     },
     restore: () => {
-      console.log = originalConsoleLog
+      process.stdout.write = originalStdoutWrite
     },
   }
 }

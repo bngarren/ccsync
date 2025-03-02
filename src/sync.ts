@@ -36,6 +36,8 @@ import {
   SyncPlanIssueSeverity,
   type SyncPlan,
 } from "./syncplan"
+import { getLogger } from "./log"
+import type pino from "pino"
 
 enum SyncManagerState {
   IDLE,
@@ -49,7 +51,11 @@ enum SyncManagerState {
 /**
  * Utility function to display sync plan issues in the UI
  */
-function displaySyncPlanIssues(syncPlan: SyncPlan, ui: UI | null): void {
+function displaySyncPlanIssues(
+  syncPlan: SyncPlan,
+  ui: UI | null,
+  log: pino.Logger
+): void {
   if (!ui) return
 
   // Display errors
@@ -57,6 +63,7 @@ function displaySyncPlanIssues(syncPlan: SyncPlan, ui: UI | null): void {
     .filter((issue) => issue.severity === SyncPlanIssueSeverity.ERROR)
     .forEach((issue) => {
       ui.addMessage(UIMessageType.ERROR, issue.message, issue.suggestion)
+      log.error({ issue }, `sync plan error`)
     })
 
   // Display warnings
@@ -64,6 +71,7 @@ function displaySyncPlanIssues(syncPlan: SyncPlan, ui: UI | null): void {
     .filter((issue) => issue.severity === SyncPlanIssueSeverity.WARNING)
     .forEach((issue) => {
       ui.addMessage(UIMessageType.WARNING, issue.message, issue.suggestion)
+      log.warn({ issue }, `sync plan warning`)
     })
 }
 
@@ -78,6 +86,14 @@ function getSyncPlanErrorMessage(syncPlan: SyncPlan): string {
 }
 
 export class SyncManager {
+  private _logger: pino.Logger | null = null
+  private get log() {
+    if (!this._logger) {
+      this._logger = getLogger().child({ component: "SyncManager" })
+    }
+    return this._logger
+  }
+
   private ui: UI | null = null
   private activeModeController:
     | ManualModeController
@@ -88,11 +104,11 @@ export class SyncManager {
   // STATE
   private state: SyncManagerState = SyncManagerState.IDLE
   private setState(newState: SyncManagerState) {
-    // const oldState = this.state
+    const oldState = this.state
     this.state = newState
-    // this.log.verbose(
-    //   `State transition: ${SyncManagerState[oldState]} → ${SyncManagerState[newState]}`
-    // );
+    this.log.trace(
+      `State transition: ${SyncManagerState[oldState]} → ${SyncManagerState[newState]}`
+    )
   }
 
   constructor(private config: Config) {}
@@ -118,7 +134,7 @@ export class SyncManager {
   }
 
   public invalidateCache(): void {
-    //this.log.verbose("Sync plan cache invalidated")
+    this.log.trace("Sync plan cache invalidated")
     this.lastSyncPlan = null
   }
 
@@ -134,8 +150,14 @@ export class SyncManager {
 
     // Check cache first
     if (!forceRefresh && this.isCacheValid(changedFiles) && this.lastSyncPlan) {
+      this.log.trace("createSyncPlan > Cache hit")
       return this.lastSyncPlan
+    } else {
+      this.log.trace("createSyncPlan > Cache miss")
     }
+
+    // Performance tracking
+    const createSyncPlanStartTime = process.hrtime.bigint()
 
     // Create a base sync plan
     const plan = createEmptySyncPlan()
@@ -197,6 +219,14 @@ export class SyncManager {
       let computers: Computer[] = []
       try {
         computers = await findMinecraftComputers(this.config.minecraftSavePath)
+
+        this.log.info(
+          {
+            computers: computers.map((c) => ({ [c.id]: c.shortPath })),
+            saveDir: this.config.minecraftSavePath,
+          },
+          `Found ${computers.length} Minecraft ${pluralize("computer")(computers.length)} in save directory`
+        )
 
         if (computers.length === 0) {
           plan.issues.push(
@@ -307,6 +337,20 @@ export class SyncManager {
         this.lastSyncPlan = null
       }
 
+      // Performance tracking
+      const endTime = process.hrtime.bigint()
+      const duration = Number(endTime - createSyncPlanStartTime) / 1_000_000 // Convert to ms
+
+      this.log.debug(
+        {
+          planCreationTime: duration,
+          filesCount: plan.resolvedFileRules.length,
+          computersCount: plan.availableComputers.length,
+          valid: plan.isValid,
+        },
+        `SyncPlan created (${duration} ms)`
+      )
+
       return plan
     } catch (err) {
       // Handle unexpected errors
@@ -338,6 +382,7 @@ export class SyncManager {
     )
 
     if (filesToCopy.length === 0) {
+      this.log.warn(`syncToComputer called with 0 files to copy!`)
       return {
         computerId: computer.id,
         copiedFiles: [],
@@ -346,8 +391,23 @@ export class SyncManager {
       }
     }
 
+    this.log.debug(
+      {
+        computerPath: computer.shortPath,
+        numberOfFiles: filesToCopy.length,
+      },
+      `starting copy of files to computer ${computer.id}`
+    )
+
     const copyResult = await copyFilesToComputer(filesToCopy, computer.path)
     await setTimeout(100) // Small delay between computers
+
+    this.log.info(
+      {
+        ...copyResult,
+      },
+      `finished copying files to computer ${computer.id}.`
+    )
 
     return {
       computerId: computer.id,
@@ -498,6 +558,25 @@ export class SyncManager {
       operationResult = SyncOperationResult.WARNING
     }
 
+    this.log.info(
+      {
+        totalFiles: totalAttemptedFiles,
+        totalComputers: allComputerIds.size,
+        abbrComputerResults: computerResults.map((cr) => {
+          return {
+            computerId: cr.computerId,
+            exists: cr.exists,
+            files: {
+              planned: cr.files.length,
+              successful: cr.files.filter((f) => f.success).length,
+            },
+          }
+        }),
+        operationResult,
+      },
+      "performSync completed"
+    )
+
     // Update UI with final results
     if (this.ui) {
       this.ui.updateOperationStats({
@@ -537,12 +616,14 @@ export class SyncManager {
       // Listen for controller state changes
       manualController.on(SyncEvent.STARTED, () => {
         this.setState(SyncManagerState.RUNNING)
+        this.log.trace("manualController SyncEvent.STARTED")
         this.ui?.start()
       })
 
       // The controller has already stopped
       manualController.on(SyncEvent.STOPPED, async () => {
         this.setState(SyncManagerState.STOPPED)
+        this.log.trace("manualController SyncEvent.STOPPED")
         this.ui?.stop()
       })
 
@@ -550,13 +631,14 @@ export class SyncManager {
       manualController.on(SyncEvent.SYNC_ERROR, async (error) => {
         if (this.ui) {
           this.ui.addMessage(UIMessageType.ERROR, error.message)
-        } else {
-          console.error(error)
         }
         // Handle based on severity
         if (error.severity === ErrorSeverity.FATAL) {
+          this.log.fatal(error, "startManualMode")
           this.setState(SyncManagerState.ERROR)
           await this.stop()
+        } else {
+          this.log.error(error, "startManualMode")
         }
       })
 
@@ -611,11 +693,13 @@ export class SyncManager {
       // Listen for controller state changes
       watchController.on(SyncEvent.STARTED, () => {
         this.setState(SyncManagerState.RUNNING)
+        this.log.trace("watchController SyncEvent.STARTED")
         this.ui?.start()
       })
 
       watchController.on(SyncEvent.STOPPED, async () => {
         this.setState(SyncManagerState.STOPPED)
+        this.log.trace("watchController SyncEvent.STOPPED")
         this.ui?.stop()
       })
 
@@ -628,8 +712,11 @@ export class SyncManager {
 
         // Handle based on severity
         if (error.severity === ErrorSeverity.FATAL) {
+          this.log.fatal(error, "startWatchMode")
           this.setState(SyncManagerState.ERROR)
           await this.stop()
+        } else {
+          this.log.error(error, "startWatchMode")
         }
       })
 
@@ -704,6 +791,13 @@ export class SyncManager {
  * Base controller for common functionality between manual and watch modes
  */
 abstract class BaseController<T extends BaseControllerEvents> {
+  private _logger: pino.Logger | null = null
+  protected get log() {
+    if (!this._logger) {
+      this._logger = getLogger().child({ component: "Controller" })
+    }
+    return this._logger
+  }
   protected events = createTypedEmitter<T>()
   protected keyHandler: KeyHandler | null = null
 
@@ -744,6 +838,7 @@ abstract class BaseController<T extends BaseControllerEvents> {
     if (this.keyHandler) {
       this.keyHandler.stop()
       this.keyHandler = null
+      this.log.trace("keyHandler stopped.")
     }
   }
 
@@ -790,8 +885,8 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
       this.emit(SyncEvent.STOPPED)
     } catch (error) {
       // Log but don't throw during stop to ensure clean shutdown
-      console.error(
-        `Error during controller cleanup: ${getErrorMessage(error)}`
+      this.log.error(
+        `Error during ManualController cleanup: ${getErrorMessage(error)}`
       )
     }
   }
@@ -808,12 +903,17 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
     // Update UI status
     this.ui?.startSyncOperation()
 
+    this.log.debug("manualController started a new sync cycle.")
+
+    // Performance tracking
+    const syncCycleStartTime = process.hrtime.bigint()
+
     try {
       const syncPlan = await this.syncManager.createSyncPlan()
       this.emit(SyncEvent.SYNC_PLANNED, syncPlan)
 
       // Display issues to UI
-      displaySyncPlanIssues(syncPlan, this.ui)
+      displaySyncPlanIssues(syncPlan, this.ui, this.log)
 
       // Check if the plan has critical issues
       if (!syncPlan.isValid) {
@@ -848,6 +948,17 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
       this.emit(SyncEvent.SYNC_ERROR, appError)
 
       // Emitting a fatal error (above) will cause SyncManager to stop() this controller
+    } finally {
+      // Performance tracking
+      const endTime = process.hrtime.bigint()
+      const duration = Number(endTime - syncCycleStartTime) / 1_000_000 // Convert to ms
+      this.log.debug(
+        {
+          mode: SyncMode.MANUAL,
+          syncCycleDuration: duration,
+        },
+        `performSyncCycle complete (${duration} ms)`
+      )
     }
   }
 
@@ -864,9 +975,17 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
 
     this.keyHandler = new KeyHandler({
       onSpace: async () => {
+        this.log.info(
+          { action: "manual_sync", trigger: "keypress_space" },
+          "User triggered manual sync"
+        )
         continueCallback()
       },
       onEsc: async () => {
+        this.log.info(
+          { action: "exit", trigger: "keypress_esc" },
+          "User triggered exit"
+        )
         try {
           await this.syncManager.stop()
         } catch (error) {
@@ -881,6 +1000,10 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
         }
       },
       onCtrlC: async () => {
+        this.log.info(
+          { action: "exit", trigger: "keypress_ctrlc" },
+          "User triggered terminate"
+        )
         try {
           await this.syncManager.stop()
           continueCallback()
@@ -893,6 +1016,7 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
     })
 
     this.keyHandler.start()
+    this.log.debug("manualController keyHandler started")
   }
 
   private async cleanup(): Promise<void> {
@@ -984,12 +1108,26 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     // Update UI status
     this.ui?.startSyncOperation()
 
+    this.log.debug(`watchController started a new sync cycle.`)
+
+    // Performance tracking
+    const syncCycleStartTime = process.hrtime.bigint()
+
     // If this is triggered by a file change, update the changedFiles set
     if (changedPath) {
       const relativePath = processPath(
         path.relative(this.config.sourceRoot, changedPath)
       )
+      this.log.debug(
+        `watchController was triggered by file change: '${relativePath}'`
+      )
+
       this.changedFiles.add(relativePath)
+
+      this.log.trace(
+        { changedFiles: [...this.changedFiles] },
+        "updated changedFiles"
+      )
 
       // Update UI to show sync is starting
       if (this.ui) {
@@ -1007,7 +1145,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       this.emit(SyncEvent.SYNC_PLANNED, syncPlan)
 
       // Add each error message to UI
-      displaySyncPlanIssues(syncPlan, this.ui)
+      displaySyncPlanIssues(syncPlan, this.ui, this.log)
 
       // Check if the plan has critical issues
       if (!syncPlan.isValid) {
@@ -1057,16 +1195,34 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       this.emit(SyncEvent.SYNC_ERROR, appError)
 
       // Emitting a fatal error (above) will cause SyncManager to stop() this controller
+    } finally {
+      // Performance tracking
+      const endTime = process.hrtime.bigint()
+      const duration = Number(endTime - syncCycleStartTime) / 1_000_000 // Convert to ms
+      this.log.debug(
+        {
+          mode: SyncMode.WATCH,
+          syncCycleDuration: duration,
+        },
+        `performSyncCycle complete (${duration} ms)`
+      )
     }
   }
 
   private setupKeyHandler(): void {
     if (this.keyHandler) {
+      this.log.warn(
+        "watchController setupKeyHandler called while another was active"
+      )
       this.keyHandler.stop()
     }
 
     this.keyHandler = new KeyHandler({
       onEsc: async () => {
+        this.log.info(
+          { action: "exit", trigger: "keypress_esc" },
+          "User triggered exit"
+        )
         try {
           await this.syncManager.stop()
         } catch (error) {
@@ -1081,6 +1237,10 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
         }
       },
       onCtrlC: async () => {
+        this.log.info(
+          { action: "exit", trigger: "keypress_ctrlc" },
+          "User triggered terminate"
+        )
         try {
           await this.syncManager.stop()
         } catch (error) {
@@ -1092,6 +1252,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     })
 
     this.keyHandler.start()
+    this.log.debug("watchController keyHandler started")
   }
 
   private async resolveWatchPatterns(): Promise<string[]> {
@@ -1142,13 +1303,20 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
         },
       })
 
+      this.log.debug(
+        patterns,
+        `watchController set up a chokidar watcher with patterns:`
+      )
+
       this.watcher.on("change", async (changedPath) => {
+        this.log.info(
+          { changedPath },
+          `watchController watcher detected change`
+        )
+
         if (this.syncManager.getState() !== SyncManagerState.RUNNING) {
           return
         }
-
-        // Update UI status
-        this.ui?.startSyncOperation()
 
         try {
           await this.performSyncCycle(changedPath)
@@ -1169,8 +1337,8 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
             )
           } else {
             // For non-fatal errors, just log and continue watching
-            console.log(
-              `Problem occurred during sync: ${getErrorMessage(error)}`
+            this.log.error(
+              `Unexpected problem occurred during sync: ${getErrorMessage(error)}`
             )
           }
         }
@@ -1200,7 +1368,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       try {
         await this.watcher.close()
       } catch (err) {
-        console.error(`Error closing watcher: ${err}`)
+        this.log.error(`Error closing watcher: ${err}`)
       }
       this.watcher = null
     }

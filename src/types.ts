@@ -88,7 +88,7 @@ export enum SyncStatus {
  * Contains details about the source, target, and success status.
  */
 export interface FileSyncResult {
-  /** Full target path where the file was copied to */
+  /** Full target path where the file should have been copied */
   targetPath: string
 
   /** Full source path where the file was copied from */
@@ -118,7 +118,10 @@ export interface ComputerSyncResult {
   /** Number of files successfully synced to this computer */
   successCount: number
 
-  /** Number of files that failed to sync to this computer */
+  /** Number of files that failed to sync to this computer.
+   *
+   * If a computer does not exist, it will have a failureCount of 0, as no files would even be attempted to copy.
+   */
   failureCount: number
 }
 
@@ -135,7 +138,9 @@ export interface SyncOperationResult {
 
   /** Summary statistics for the entire operation */
   summary: {
-    /** Total number of file copies attempted. 1 file -> 2 computers = 2 totalFiles */
+    /** Total number of file copies attempted.
+     *
+     * For example, 1 file → 2 computers = 2 totalFiles */
     totalFiles: number
 
     /** Number of files successfully synced */
@@ -160,7 +165,9 @@ export interface SyncOperationResult {
     missingComputers: number
   }
 
-  /** Detailed results for each computer */
+  /** Detailed results for each computer.
+   *
+   * Note: A computer will only generate a {@link ComputerSyncResult} if it was targeted by a sync rule that actually matched files. In other words, if a sync rule source pattern does not match a file, the computers in the target will not show up in this array (unless they are part of another sync rule).  */
   computerResults: ComputerSyncResult[]
 
   /** Error messages that occurred during the operation */

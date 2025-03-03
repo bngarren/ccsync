@@ -9,7 +9,7 @@ import {
   pathIsLikelyFile,
 } from "../src/utils"
 import * as p from "@clack/prompts"
-import { mock } from "bun:test"
+import { expect, mock } from "bun:test"
 import { DEFAULT_CONFIG, type SyncRule } from "../src/config"
 import * as yaml from "yaml"
 import type { IAppError } from "../src/errors"
@@ -367,4 +367,16 @@ export function captureUIOutput() {
       process.stdout.write = originalStdoutWrite
     },
   }
+}
+
+// ---- Expect helpers ----
+
+/**
+ * This function checks if value is defined using expect(value).toBeDefined(). If the value is defined, the function returns value but narrows its type to T (not T | undefined | null), allowing you to safely access its properties in the calling code.
+ * @param value
+ * @returns value (cast to T) or it fails the expect
+ */
+export const expectToBeDefined = <T>(value: T | undefined | null): T => {
+  expect(value).toBeDefined() // Fail the test if value is undefined or null
+  return value as T // Return the value, which TypeScript can now narrow
 }

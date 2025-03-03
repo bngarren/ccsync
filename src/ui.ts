@@ -4,9 +4,10 @@ import logUpdate from "log-update"
 import figures from "figures"
 import chalk from "chalk"
 import {
-  SyncOperationResult,
+  SyncStatus,
   type ComputerSyncResult,
   type SyncMode,
+  type SyncOperationResult,
 } from "./types"
 import boxen from "boxen"
 import { pluralize } from "./utils"
@@ -40,6 +41,7 @@ const symbols = {
   bullet: figures.bullet,
   pointer: figures.pointer,
   line: figures.line,
+  lineDouble: figures.lineDouble,
   ellipsis: figures.ellipsis,
 }
 
@@ -87,7 +89,7 @@ export interface OperationStats {
 interface UIState {
   mode: SyncMode
   status: UIStatus
-  operationResult: SyncOperationResult
+  operationResult: SyncOperationResult | null
   operationsStats: OperationStats
   computerResults: ComputerSyncResult[]
   lastUpdated: Date
@@ -126,7 +128,7 @@ export class UI {
     this.state = {
       mode,
       status: UIStatus.IDLE,
-      operationResult: SyncOperationResult.NONE,
+      operationResult: null,
       operationsStats: {
         totalFiles: 0,
         totalComputers: 0,
@@ -156,7 +158,9 @@ export class UI {
     // 1. Move cursor to start of screen
     // 2. Clear everything from cursor to end of screen
     // This reduces flickering. Thanks Claude!!
-    process.stdout.write("\x1B[1;1H\x1B[0J")
+    // process.stdout.write("\x1B[1;1H\x1B[0J")
+
+    console.clear()
 
     // Show the persistent header
     process.stdout.write(
@@ -164,8 +168,8 @@ export class UI {
         `\nCC: Sync - ${theme.bold(this.state.mode.toUpperCase())} mode started at ${this.state.lastUpdated.toLocaleString()}`
       ) +
         "\n" +
-        theme.primary("─".repeat(process.stdout.columns || 80)) +
-        "\n"
+        theme.primary(symbols.lineDouble.repeat(process.stdout.columns || 80)) +
+        "\n\n"
     )
 
     // Display history (if any) in plain text
@@ -245,10 +249,6 @@ export class UI {
     this.updateState({ status: newStatus, lastUpdated: new Date() })
   }
 
-  updateOperationResult(result: SyncOperationResult): void {
-    this.updateState({ operationResult: result, lastUpdated: new Date() })
-  }
-
   updateOperationStats(stats: OperationStats): void {
     this.updateState({ operationsStats: stats })
   }
@@ -282,7 +282,7 @@ export class UI {
   ): void {
     const updates: Partial<UIState> = {
       status: UIStatus.SYNCING,
-      operationResult: SyncOperationResult.NONE,
+      operationResult: null,
       lastUpdated: new Date(),
     }
 
@@ -303,7 +303,13 @@ export class UI {
       ...this.state,
       status: UIStatus.READY,
       operationResult: result,
+      operationsStats: {
+        totalFiles: result.summary.totalFiles,
+        totalComputers: result.summary.totalComputers,
+      },
+      computerResults: result.computerResults,
       lastUpdated: new Date(),
+      messages: this.state.messages,
     }
 
     // Generate the current log content
@@ -331,7 +337,9 @@ export class UI {
         "\n"
     )
 
-    this.log.debug(`UI received a 'completedOperation: ${result.toUpperCase()}`)
+    this.log.debug(
+      `UI received a 'completedOperation: ${result.status.toUpperCase()}`
+    )
 
     // After logging static content, re-render dynamic elements
     this.renderDynamicElements()
@@ -358,36 +366,6 @@ export class UI {
     logUpdate.clear()
   }
 
-  private getResultColor() {
-    switch (this.state.operationResult) {
-      case SyncOperationResult.SUCCESS:
-        return theme.success
-      case SyncOperationResult.ERROR:
-        return theme.error
-      case SyncOperationResult.WARNING:
-        return theme.warning
-      case SyncOperationResult.PARTIAL:
-        return theme.warning
-      default:
-        return theme.normal
-    }
-  }
-
-  private getResultSymbol(): string {
-    switch (this.state.operationResult) {
-      case SyncOperationResult.SUCCESS:
-        return symbols.check
-      case SyncOperationResult.ERROR:
-        return symbols.cross
-      case SyncOperationResult.WARNING:
-        return symbols.warning
-      case SyncOperationResult.PARTIAL:
-        return symbols.warning
-      default:
-        return symbols.info
-    }
-  }
-
   private formatElapsedTime(): string {
     const elapsed =
       (new Date().getTime() - this.state.lastUpdated.getTime()) / 1000
@@ -405,7 +383,7 @@ export class UI {
     let result = ""
 
     if (
-      this.state.operationResult === SyncOperationResult.SUCCESS &&
+      this.state.operationResult?.status === SyncStatus.SUCCESS &&
       this.state.messages.every((m) => m.type === UIMessageType.INFO)
     ) {
       result = theme.success("Success.")
@@ -583,7 +561,7 @@ export class UI {
           padding: 1,
           margin: { top: 1, left: 1 },
           borderStyle: "round",
-          borderColor: "cyan",
+          borderColor: "#61AFEF",
           title: titleWithSpinner,
           titleAlignment: "center",
           textAlignment: "center",
@@ -647,8 +625,8 @@ export class UI {
 
       const controlsTitle =
         this.state.mode === "manual"
-          ? "Awaiting user input..."
-          : "Watching for file changes..."
+          ? `Awaiting user input ${symbols.ellipsis}`
+          : `Watching for file changes ${symbols.ellipsis}`
 
       // Render controls and status
       logUpdate(statusIndicator + this.renderControls(controlsTitle))

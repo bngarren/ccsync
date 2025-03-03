@@ -12,9 +12,10 @@ import {
   createTestComputer,
   waitForEvent,
   captureUIOutput,
+  expectToBeDefined,
 } from "./test-helpers"
 import { stringify } from "yaml"
-import { SyncEvent, type SyncResult } from "../src/types"
+import { SyncEvent, SyncStatus, type SyncOperationResult } from "../src/types"
 import stripAnsi from "strip-ansi"
 
 describe("Integration: SyncManager", () => {
@@ -48,14 +49,17 @@ describe("Integration: SyncManager", () => {
     // Ensure synchronous cleanup
     try {
       await cleanup.cleanDir(tempDir)
+      // Verify directory was actually removed
+      const exists = await fs.exists(tempDir).catch(() => false)
+      if (exists) {
+        console.warn(`Warning: Failed to clean up test directory ${tempDir}`)
+      }
     } catch (err) {
-      console.warn(
-        `Warning: Failed to clean up test directory ${tempDir}:`,
-        err
-      )
+      console.warn(`Error during cleanup: ${err}`)
+    } finally {
+      mock.restore()
+      clackPromptsSpy.cleanup()
     }
-    mock.restore()
-    clackPromptsSpy.cleanup()
   })
 
   test("performs manual sync", async () => {
@@ -83,15 +87,42 @@ describe("Integration: SyncManager", () => {
       // Start manual mode and wait for first sync
       const manualController = await syncManager.startManualMode()
 
-      const syncResult = await waitForEvent<SyncResult>(
+      const syncResult = await waitForEvent<SyncOperationResult>(
         manualController,
         SyncEvent.SYNC_COMPLETE
       )
 
-      // Verify results
+      expect(syncResult.status).toBe(SyncStatus.SUCCESS)
+
+      // Verify timestamp is recent
+      expect(typeof syncResult.timestamp).toBe("number")
+      expect(Date.now() - syncResult.timestamp).toBeLessThan(5000)
+
+      // Verify computer results structure
+      expect(syncResult.computerResults).toHaveLength(1)
+      expect(syncResult.computerResults[0]).toMatchObject({
+        computerId: "1",
+        exists: true,
+        successCount: 1,
+        failureCount: 0,
+      })
+
+      // Verify file level details
+      const fileResult = syncResult.computerResults[0].files[0]
+      expect(fileResult).toMatchObject({
+        targetPath: "/program.lua",
+        success: true,
+      })
+      expect(fileResult.sourcePath).toContain("program.lua")
+
+      // Verify no errors
+      expect(syncResult.errors).toHaveLength(0)
+      expect(syncResult.summary.successfulFiles).toBe(1)
+      expect(syncResult.summary.fullySuccessfulComputers).toBe(1)
+
+      // Verify actual files
       const targetFile = path.join(computersDir, "1", "program.lua")
       expect(await fs.exists(targetFile)).toBe(true)
-      expect(syncResult.successCount).toBe(1)
       const content = await fs.readFile(
         path.join(computersDir, "1", "program.lua"),
         "utf8"
@@ -129,15 +160,26 @@ describe("Integration: SyncManager", () => {
 
     const watchController = await syncManager.startWatchMode()
     try {
-      const initialSyncResult = await waitForEvent<SyncResult>(
+      const initialSyncResult = await waitForEvent<SyncOperationResult>(
         watchController,
         SyncEvent.INITIAL_SYNC_COMPLETE
       )
 
       // Verify initial sync results
-      expect(initialSyncResult.successCount).toBe(2) // Both computers synced
-      expect(initialSyncResult.errorCount).toBe(0)
-      expect(initialSyncResult.missingCount).toBe(0)
+      expect(initialSyncResult.status).toBe(SyncStatus.SUCCESS)
+      expect(initialSyncResult.summary).toMatchObject({
+        totalFiles: 2, // Number of rule matching files (1 file to 2 computers)
+        successfulFiles: 2,
+        failedFiles: 0,
+        totalComputers: 2,
+        fullySuccessfulComputers: 2,
+        partiallySuccessfulComputers: 0,
+        failedComputers: 0,
+        missingComputers: 0,
+      })
+      expect(initialSyncResult.summary.fullySuccessfulComputers).toBe(2)
+      expect(initialSyncResult.summary.failedComputers).toBe(0)
+      expect(initialSyncResult.summary.missingComputers).toBe(0)
 
       // Verify files were copied
       expect(await fs.exists(path.join(computersDir, "1", "program.lua"))).toBe(
@@ -153,15 +195,28 @@ describe("Integration: SyncManager", () => {
         "print('Updated')"
       )
 
-      const triggeredSyncResult = await waitForEvent<SyncResult>(
+      const triggeredSyncResult = await waitForEvent<SyncOperationResult>(
         watchController,
         SyncEvent.SYNC_COMPLETE
       )
 
-      // Verify sync results
-      expect(triggeredSyncResult.successCount).toBe(2)
-      expect(triggeredSyncResult.errorCount).toBe(0)
-      expect(triggeredSyncResult.missingCount).toBe(0)
+      expect(triggeredSyncResult.status).toBe(SyncStatus.SUCCESS)
+
+      // Verify all computer results have appropriate success/failure counts
+      for (const computerResult of triggeredSyncResult.computerResults) {
+        expect(computerResult.successCount).toBe(1)
+        expect(computerResult.failureCount).toBe(0)
+        expect(computerResult.files).toHaveLength(1)
+
+        // Verify file contents were actually updated in the sync result
+        const fileResult = computerResult.files[0]
+        expect(fileResult.success).toBe(true)
+        expect(fileResult.targetPath).toBe("/program.lua")
+      }
+
+      expect(triggeredSyncResult.summary.fullySuccessfulComputers).toBe(2)
+      expect(triggeredSyncResult.summary.failedComputers).toBe(0)
+      expect(triggeredSyncResult.summary.missingComputers).toBe(0)
 
       // Verify updated content was copied
       const content1 = await fs.readFile(
@@ -236,51 +291,25 @@ describe("Integration: SyncManager", () => {
 
     const syncManager = new SyncManager(config)
     const manualController = await syncManager.startManualMode()
-    let syncCompleted = false
 
     try {
-      await new Promise<void>((resolve, reject) => {
-        const cleanup = () => {
-          manualController.off(SyncEvent.SYNC_COMPLETE, handleSyncComplete)
-          manualController.off(SyncEvent.SYNC_ERROR, handleSyncError)
-        }
+      const syncResult = await waitForEvent<SyncOperationResult>(
+        manualController,
+        SyncEvent.SYNC_COMPLETE,
+        10000 // 10 second timeout
+      )
 
-        const handleSyncComplete = async ({
-          successCount,
-          errorCount,
-          missingCount,
-        }: SyncResult) => {
-          try {
-            // Verify sync statistics
-            expect(successCount).toBe(2) // Both computers processed
-            expect(errorCount).toBe(0) // No errors
-            expect(missingCount).toBe(0) // No missing computers
+      expect(syncResult.status).toBe(SyncStatus.SUCCESS)
+      // Verify sync statistics
+      expect(syncResult.summary.fullySuccessfulComputers).toBe(2)
+      expect(syncResult.summary.failedComputers).toBe(0)
+      expect(syncResult.summary.missingComputers).toBe(0)
 
-            // Verify both computers' file states
-            await Promise.all([
-              verifyComputer1Files(path.join(computersDir, "1")),
-              verifyComputer2Files(path.join(computersDir, "2")),
-            ])
-
-            syncCompleted = true
-            cleanup()
-            resolve()
-          } catch (err) {
-            cleanup()
-            reject(err)
-          }
-        }
-
-        const handleSyncError = (error: unknown) => {
-          cleanup()
-          reject(error)
-        }
-
-        manualController.once(SyncEvent.SYNC_COMPLETE, handleSyncComplete)
-        manualController.once(SyncEvent.SYNC_ERROR, handleSyncError)
-      })
-
-      expect(syncCompleted).toBe(true)
+      // Verify both computers' file states
+      await Promise.all([
+        verifyComputer1Files(path.join(computersDir, "1")),
+        verifyComputer2Files(path.join(computersDir, "2")),
+      ])
     } finally {
       await manualController.stop()
       await syncManager.stop()
@@ -337,14 +366,28 @@ describe("Integration: SyncManager", () => {
     rootFiles.forEach((exists) => expect(exists).toBe(false))
   }
 
+  /**
+   * Tests the watch mode's ability to detect and sync changes to multiple files.
+   *
+   * This test verifies:
+   * 1. Initial sync correctly processes multiple glob-matched files
+   * 2. File changes are detected and trigger a new sync
+   * 3. Only the changed file is included in the change-triggered sync
+   * 4. Original files remain intact while changed files are updated
+   */
   test("handles glob pattern with multiple matching files in watch mode", async () => {
     const configPath = path.join(tempDir, ".ccsync.yaml")
 
-    // Create multiple lua files
+    // Clear out the source directory to remove any default files
+    await fs.rm(sourceDir, { recursive: true, force: true })
+    await fs.mkdir(sourceDir, { recursive: true })
+
+    // Create multiple lua files with unique content
     await fs.writeFile(path.join(sourceDir, "first.lua"), "print('First')")
     await fs.writeFile(path.join(sourceDir, "second.lua"), "print('Second')")
     await fs.writeFile(path.join(sourceDir, "third.lua"), "print('Third')")
 
+    // Create config with a glob pattern to match all Lua files
     const configObject = withDefaultConfig({
       sourceRoot: sourceDir,
       minecraftSavePath: savePath,
@@ -357,128 +400,136 @@ describe("Integration: SyncManager", () => {
       ],
     })
 
-    const configContent = stringify(configObject)
-    await fs.writeFile(configPath, configContent)
+    await fs.writeFile(configPath, stringify(configObject))
 
     // Create target computer
     await createTestComputer(computersDir, "1")
 
     const { config } = await loadConfig(configPath)
     if (!config) throw new Error("Failed to load config")
+
     const syncManager = new SyncManager(config)
-    const watchController = await syncManager.startWatchMode()
+    let watchController
 
-    await new Promise<void>((resolve, reject) => {
-      try {
-        // Track test phases
-        let initialSyncCompleted = false
-        let fileChangeDetected = false
-        let fileChangeSynced = false
+    try {
+      watchController = await syncManager.startWatchMode()
 
-        // Listen for initial sync completion
-        watchController.on(
-          SyncEvent.INITIAL_SYNC_COMPLETE,
-          async ({ successCount, errorCount, missingCount }) => {
-            try {
-              initialSyncCompleted = true
+      // Step 1: Wait for initial sync to complete
+      const initialSyncResult = await waitForEvent<SyncOperationResult>(
+        watchController,
+        SyncEvent.INITIAL_SYNC_COMPLETE
+      )
 
-              // Verify initial sync results
-              expect(successCount).toBe(1) // One computer synced
-              expect(errorCount).toBe(0)
-              expect(missingCount).toBe(0)
+      // Verify initial sync
+      expect(initialSyncResult.summary.fullySuccessfulComputers).toBe(1)
+      expect(initialSyncResult.summary.failedComputers).toBe(0)
+      expect(initialSyncResult.summary.missingComputers).toBe(0)
 
-              // Verify all files were copied
-              const computer1LibDir = path.join(computersDir, "1", "lib")
-              expect(
-                await fs.exists(path.join(computer1LibDir, "first.lua"))
-              ).toBe(true)
-              expect(
-                await fs.exists(path.join(computer1LibDir, "second.lua"))
-              ).toBe(true)
-              expect(
-                await fs.exists(path.join(computer1LibDir, "third.lua"))
-              ).toBe(true)
+      // Find Computer 1 in results
+      const computer1 = expectToBeDefined(
+        initialSyncResult.computerResults.find((c) => c.computerId === "1")
+      )
 
-              // Modify one of the files to trigger watch
-              await fs.writeFile(
-                path.join(sourceDir, "second.lua"),
-                "print('Updated Second')"
-              )
-              fileChangeDetected = true
-            } catch (err) {
-              reject(err)
-            }
-          }
-        )
+      // Verify all three files were synced
+      const fileNames = computer1.files
+        .filter((f) => f.success)
+        .map((f) => path.basename(f.targetPath))
+        .sort()
 
-        // Listen for file change sync
-        watchController.on(
-          SyncEvent.SYNC_COMPLETE,
-          async ({ successCount, errorCount, missingCount }) => {
-            if (
-              !initialSyncCompleted ||
-              !fileChangeDetected ||
-              fileChangeSynced
-            ) {
-              return // Only handle the first file change after initial sync
-            }
+      expect(fileNames).toEqual(["first.lua", "second.lua", "third.lua"])
 
-            try {
-              fileChangeSynced = true
+      // Verify all paths have the correct /lib/ prefix
+      const allPathsHaveLibPrefix = computer1.files.every((f) =>
+        f.targetPath.startsWith("/lib/")
+      )
+      expect(allPathsHaveLibPrefix).toBe(true)
 
-              // Verify sync results
-              expect(successCount).toBe(1)
-              expect(errorCount).toBe(0)
-              expect(missingCount).toBe(0)
+      // Verify the files exist on disk with correct content
+      const computer1LibDir = path.join(computersDir, "1", "lib")
 
-              // Verify only the changed file was updated
-              const computer1LibDir = path.join(computersDir, "1", "lib")
-              const content1 = await fs.readFile(
-                path.join(computer1LibDir, "first.lua"),
-                "utf8"
-              )
-              const content2 = await fs.readFile(
-                path.join(computer1LibDir, "second.lua"),
-                "utf8"
-              )
-              const content3 = await fs.readFile(
-                path.join(computer1LibDir, "third.lua"),
-                "utf8"
-              )
+      const firstContent = await fs.readFile(
+        path.join(computer1LibDir, "first.lua"),
+        "utf8"
+      )
+      expect(firstContent).toBe("print('First')")
 
-              expect(content1).toBe("print('First')") // Unchanged
-              expect(content2).toBe("print('Updated Second')") // Changed
-              expect(content3).toBe("print('Third')") // Unchanged
+      const secondContent = await fs.readFile(
+        path.join(computer1LibDir, "second.lua"),
+        "utf8"
+      )
+      expect(secondContent).toBe("print('Second')")
 
-              // Test complete
-              await syncManager.stop()
-              resolve()
-            } catch (err) {
-              reject(err)
-            }
-          }
-        )
+      const thirdContent = await fs.readFile(
+        path.join(computer1LibDir, "third.lua"),
+        "utf8"
+      )
+      expect(thirdContent).toBe("print('Third')")
 
-        // Handle errors
-        watchController.on(SyncEvent.SYNC_ERROR, (error) => {
-          reject(error.message)
-        })
+      // Step 2: Modify one file to trigger watch
+      await fs.writeFile(
+        path.join(sourceDir, "second.lua"),
+        "print('Updated Second')"
+      )
 
-        // Set timeout for test
-        const timeout = setTimeout(async () => {
-          await syncManager.stop()
-          reject(new Error("Test timeout - watch events not received"))
-        }, 5000)
+      // Step 3: Wait for the file change sync to complete
+      const fileChangeSyncResult = await waitForEvent<SyncOperationResult>(
+        watchController,
+        SyncEvent.SYNC_COMPLETE
+      )
 
-        // Clean up timeout on success
-        process.once("beforeExit", () => clearTimeout(timeout))
-      } catch (err) {
-        reject(err)
-      }
-    })
-    await syncManager.stop()
+      // Verify change-triggered sync
+      expect(fileChangeSyncResult.summary.fullySuccessfulComputers).toBe(1)
+      expect(fileChangeSyncResult.summary.failedComputers).toBe(0)
+      expect(fileChangeSyncResult.summary.missingComputers).toBe(0)
+
+      // Get computer result
+      const computer1AfterChange = expectToBeDefined(
+        fileChangeSyncResult.computerResults.find((c) => c.computerId === "1")
+      )
+
+      // Verify only one file was synced (the changed one)
+      expect(computer1AfterChange.files).toHaveLength(1)
+      expect(path.basename(computer1AfterChange.files[0].targetPath)).toBe(
+        "second.lua"
+      )
+      expect(computer1AfterChange.files[0].success).toBe(true)
+
+      // Verify file content was updated, and the other files remain unchanged
+      const updatedFirstContent = await fs.readFile(
+        path.join(computer1LibDir, "first.lua"),
+        "utf8"
+      )
+      const updatedSecondContent = await fs.readFile(
+        path.join(computer1LibDir, "second.lua"),
+        "utf8"
+      )
+      const updatedThirdContent = await fs.readFile(
+        path.join(computer1LibDir, "third.lua"),
+        "utf8"
+      )
+
+      // First and third should be unchanged
+      expect(updatedFirstContent).toBe("print('First')")
+      expect(updatedThirdContent).toBe("print('Third')")
+
+      // Only second.lua should be updated
+      expect(updatedSecondContent).toBe("print('Updated Second')")
+    } finally {
+      // Ensure cleanup happens regardless of test outcome
+      await syncManager.stop()
+    }
   })
 
+  /**
+   * Tests the system's ability to handle various path edge cases during sync operations.
+   *
+   * This test verifies:
+   * 1. Handling of paths with spaces
+   * 2. Deep nested directory paths
+   * 3. Windows-style backslash paths
+   * 4. Mixed separator paths (forward/backslashes)
+   * 5. Path normalization across platforms
+   */
   test("handles path edge cases in sync operation", async () => {
     const configPath = path.join(tempDir, ".ccsync.yaml")
 
@@ -496,23 +547,27 @@ describe("Integration: SyncManager", () => {
       recursive: true,
     })
 
-    // Create test files
+    // Create test files with descriptive content
     const testFiles = [
       {
         path: "folder with spaces/test.lua",
         content: "print('spaces')",
+        description: "path with spaces",
       },
       {
         path: "deep/nested/path/deep.lua",
         content: "print('deep')",
+        description: "deeply nested path",
       },
       {
         path: "windows/style/path/win.lua",
         content: "print('windows')",
+        description: "Windows-style path",
       },
       {
         path: "mixed/style/path/mixed.lua",
         content: "print('mixed')",
+        description: "mixed separator path",
       },
     ]
 
@@ -521,6 +576,7 @@ describe("Integration: SyncManager", () => {
       await fs.writeFile(path.join(sourceDir, file.path), file.content)
     }
 
+    // Create configuration with rules for each path type
     const configObject = withDefaultConfig({
       sourceRoot: sourceDir,
       minecraftSavePath: savePath,
@@ -568,112 +624,106 @@ describe("Integration: SyncManager", () => {
     if (!config) throw new Error("Failed to load config")
     const syncManager = new SyncManager(config)
 
-    const manualController = await syncManager.startManualMode()
-
     try {
-      await new Promise<void>((resolve, reject) => {
-        manualController.on(
-          SyncEvent.SYNC_COMPLETE,
-          async ({ successCount, errorCount, missingCount }) => {
-            try {
-              expect(errorCount).toBe(0)
-              expect(missingCount).toBe(0)
-              expect(successCount).toBe(2)
+      const manualController = await syncManager.startManualMode()
 
-              const computer1Dir = path.join(computersDir, "1")
+      // Wait for sync completion with explicit timeout
+      const syncResult = await waitForEvent<SyncOperationResult>(
+        manualController,
+        SyncEvent.SYNC_COMPLETE,
+        15000 // 15 second timeout
+      )
 
-              // Test each path case
-              const verifications = [
-                {
-                  desc: "spaces in path",
-                  path: path.join(computer1Dir, "path with spaces", "test.lua"),
-                  content: "print('spaces')",
-                },
-                {
-                  desc: "deep nested path",
-                  path: path.join(
-                    computer1Dir,
-                    "very",
-                    "deep",
-                    "nested",
-                    "target",
-                    "deep.lua"
-                  ),
-                  content: "print('deep')",
-                },
-                {
-                  desc: "Windows-style target path",
-                  path: path.join(
-                    computer1Dir,
-                    "windows",
-                    "target",
-                    "folder",
-                    "win.lua"
-                  ),
-                  content: "print('windows')",
-                },
-                {
-                  desc: "mixed style target path",
-                  path: path.join(
-                    computer1Dir,
-                    "mixed",
-                    "style",
-                    "target",
-                    "mixed.lua"
-                  ),
-                  content: "print('mixed')",
-                },
-              ]
+      // Verify overall success
+      expect(syncResult.status).toBe(SyncStatus.SUCCESS)
+      expect(syncResult.summary.fullySuccessfulComputers).toBe(2)
+      expect(syncResult.summary.failedComputers).toBe(0)
+      expect(syncResult.summary.missingComputers).toBe(0)
 
-              // Verify each path and content
-              for (const verify of verifications) {
-                const exists = await fs.exists(verify.path)
-                if (!exists) {
-                  throw new Error(
-                    `Failed to handle ${verify.desc}: File not found at ${verify.path}`
-                  )
-                }
+      // Check Computer 1 detailed results
+      const computer1 = syncResult.computerResults.find(
+        (c) => c.computerId === "1"
+      )
+      expect(computer1).toBeDefined()
+      expect(computer1?.successCount).toBeGreaterThan(0)
+      expect(computer1?.failureCount).toBe(0)
 
-                const content = await fs.readFile(verify.path, "utf8")
-                if (content !== verify.content) {
-                  throw new Error(`Content mismatch for ${verify.desc}`)
-                }
-              }
+      const computer1Dir = path.join(computersDir, "1")
 
-              // Verify Computer 2's backup folder
-              const computer2Dir = path.join(computersDir, "2")
-              const backupDir = path.join(
-                computer2Dir,
-                "backup",
-                "all",
-                "files"
-              )
+      // Define expected paths and contents for verification
+      const pathVerifications = [
+        {
+          desc: "spaces in path",
+          path: path.join(computer1Dir, "path with spaces", "test.lua"),
+          content: "print('spaces')",
+        },
+        {
+          desc: "deep nested path",
+          path: path.join(
+            computer1Dir,
+            "very",
+            "deep",
+            "nested",
+            "target",
+            "deep.lua"
+          ),
+          content: "print('deep')",
+        },
+        {
+          desc: "Windows-style target path",
+          path: path.join(
+            computer1Dir,
+            "windows",
+            "target",
+            "folder",
+            "win.lua"
+          ),
+          content: "print('windows')",
+        },
+        {
+          desc: "mixed style target path",
+          path: path.join(
+            computer1Dir,
+            "mixed",
+            "style",
+            "target",
+            "mixed.lua"
+          ),
+          content: "print('mixed')",
+        },
+      ]
 
-              // All files should be in backup
-              for (const file of testFiles) {
-                const filename = path.basename(file.path)
-                const exists = await fs.exists(path.join(backupDir, filename))
-                if (!exists) {
-                  throw new Error(`Backup file not found: ${filename}`)
-                }
-              }
+      // Systematically verify each path and its content
+      for (const verify of pathVerifications) {
+        const exists = await fs.exists(verify.path)
+        expect(exists).toBe(true)
 
-              await manualController.stop()
-              await syncManager.stop()
-              resolve()
-            } catch (err) {
-              await syncManager.stop()
-              reject(err)
-            }
-          }
-        )
+        if (exists) {
+          const content = await fs.readFile(verify.path, "utf8")
+          expect(content).toBe(verify.content)
+        }
+      }
 
-        manualController.on(SyncEvent.SYNC_ERROR, async (error) => {
-          await syncManager.stop()
-          reject(error.message)
-        })
-      })
+      // Verify Computer 2's backup folder
+      const computer2Dir = path.join(computersDir, "2")
+      const backupDir = path.join(computer2Dir, "backup", "all", "files")
+
+      // Verify all files were copied Computer 2 backup/
+      for (const file of testFiles) {
+        const filename = path.basename(file.path)
+        const exists = await fs.exists(path.join(backupDir, filename))
+        expect(exists).toBe(true)
+
+        if (exists) {
+          const content = await fs.readFile(
+            path.join(backupDir, filename),
+            "utf8"
+          )
+          expect(content).toBe(file.content)
+        }
+      }
     } finally {
+      // Ensure cleanup happens regardless of test outcome
       await syncManager.stop()
     }
   })
@@ -685,14 +735,21 @@ function normalizeOutput(output: string[]): string {
   // Join all output lines
   const joinedOutput = output.join("\n")
 
-  // Replace timestamps with placeholder to make tests more stable
-  const withoutTimestamps = joinedOutput.replace(
-    /\[\d{1,2}\/\d{1,2}\/\d{4},\s+\d{1,2}:\d{2}:\d{2}\s+[APM]{2}\]/g,
-    "[TIMESTAMP]"
-  )
+  // Replace variable content with placeholders
+  const normalized = joinedOutput
+    // Replace timestamps
+    .replace(
+      /\[\d{1,2}\/\d{1,2}\/\d{4},\s+\d{1,2}:\d{2}:\d{2}\s+[APM]{2}\]/g,
+      "[TIMESTAMP]"
+    )
+    // Replace file paths but preserve filenames
+    // eslint-disable-next-line no-useless-escape
+    .replace(/([\\\/][\w\-\.]+){2,}([\\\/]([\w\-\.]+))/g, "[PATH]/$3")
+    // Replace elapsed time references
+    .replace(/\d+[ms](?: \d+[ms])* ago/g, "[TIME] ago")
 
   // Strip the ANSI color codes and return the normalized output
-  return stripAnsi(withoutTimestamps)
+  return stripAnsi(normalized)
 }
 
 describe("Integration: UI", () => {
@@ -767,28 +824,27 @@ describe("Integration: UI", () => {
       const manualController = await syncManager.startManualMode()
 
       // Wait for the sync to complete
-      const syncResult = await waitForEvent<SyncResult>(
+      const syncResult = await waitForEvent<SyncOperationResult>(
         manualController,
         SyncEvent.SYNC_COMPLETE
       )
 
       // Check results
-      expect(syncResult.successCount).toBe(1)
-      expect(syncResult.errorCount).toBe(0)
+      expect(syncResult.summary.fullySuccessfulComputers).toBe(1)
+      expect(syncResult.summary.failedComputers).toBe(0)
 
       // Get the captured output
-      const capturedOutput = outputCapture.getOutput()
-      const normalizedOutput = normalizeOutput(capturedOutput)
+      const normalizedOutput = normalizeOutput(outputCapture.getOutput())
 
       // Verify expected output contents
-      expect(normalizedOutput).toContain(
-        "Attempted to sync 1 total file to 1 computer"
+      expect(normalizedOutput).toMatch(
+        /\[TIMESTAMP\] Attempted to sync 1 total file to 1 computer/
       )
-      expect(normalizedOutput).toContain("Computer 1")
-      expect(normalizedOutput).toContain("/program.lua")
-      expect(normalizedOutput).not.toContain("No files synced")
-      expect(normalizedOutput).not.toContain("Error")
-      expect(normalizedOutput).not.toContain("Warning")
+      expect(normalizedOutput).toMatch(/Computer 1/)
+      expect(normalizedOutput).toMatch(/\/program.lua/)
+      expect(normalizedOutput).not.toMatch(/No files synced/)
+      expect(normalizedOutput).not.toMatch(/Error/)
+      expect(normalizedOutput).not.toMatch(/Warning/)
     } finally {
       await syncManager.stop()
     }
@@ -820,16 +876,23 @@ describe("Integration: UI", () => {
       const manualController = await syncManager.startManualMode()
 
       // Wait for the sync to complete
-      await waitForEvent<SyncResult>(manualController, SyncEvent.SYNC_COMPLETE)
+      await waitForEvent<SyncOperationResult>(
+        manualController,
+        SyncEvent.SYNC_COMPLETE
+      )
 
       // Get the captured output
-      const capturedOutput = outputCapture.getOutput()
-      const normalizedOutput = normalizeOutput(capturedOutput)
+      const normalizedOutput = normalizeOutput(outputCapture.getOutput())
 
       // Verify expected output contents
-      expect(normalizedOutput).toContain("Attempted to sync 0 total files")
-      expect(normalizedOutput).toContain("No files synced")
-      expect(normalizedOutput).toContain("No matching files found for")
+      // Check header appears first
+      expect(normalizedOutput).toMatch(/^#1 \[TIMESTAMP\]/m)
+
+      // Verify summary contains correct values
+      expect(normalizedOutput).toMatch(/Attempted to sync 0 total files/)
+
+      expect(normalizedOutput).toMatch(/No files synced/)
+      expect(normalizedOutput).toMatch(/No matching files found for/)
     } finally {
       await syncManager.stop()
     }
@@ -843,8 +906,8 @@ describe("Integration: UI", () => {
       minecraftSavePath: savePath,
       rules: [
         {
-          source: "",
-          target: "",
+          source: "program.lua",
+          target: "/program.lua",
           computers: ["555", "888", "999"],
         },
       ],
@@ -867,17 +930,46 @@ describe("Integration: UI", () => {
       const manualController = await syncManager.startManualMode()
 
       // Wait for the sync to complete
-      await waitForEvent<SyncResult>(manualController, SyncEvent.SYNC_COMPLETE)
+      const syncResult = await waitForEvent<SyncOperationResult>(
+        manualController,
+        SyncEvent.SYNC_COMPLETE
+      )
+
+      // Verify the actual sync result structure for missing computers
+      expect(syncResult.summary.missingComputers).toBe(2) // 888 and 999
+
+      // Verify all computers are represented in the results
+      expect(syncResult.computerResults).toHaveLength(3)
+
+      // Verify which computers exist and which don't
+      const existingComputers = syncResult.computerResults.filter(
+        (c) => c.exists
+      )
+      const missingComputers = syncResult.computerResults.filter(
+        (c) => !c.exists
+      )
+
+      expect(existingComputers).toHaveLength(1)
+      expect(existingComputers[0].computerId).toBe("555")
+      expect(existingComputers[0].successCount).toBe(1) // Successfully copied the file
+
+      expect(missingComputers).toHaveLength(2)
+      expect(missingComputers.map((c) => c.computerId)).toContain("888")
+      expect(missingComputers.map((c) => c.computerId)).toContain("999")
 
       // Get the captured output
-      const capturedOutput = outputCapture.getOutput()
-      const normalizedOutput = normalizeOutput(capturedOutput)
+      const normalizedOutput = normalizeOutput(outputCapture.getOutput())
 
-      // Verify expected output contents
-      expect(normalizedOutput).toContain("Missing computer")
-      expect(normalizedOutput).toContain("888")
-      expect(normalizedOutput).toContain("999")
-      expect(normalizedOutput).not.toContain("555")
+      // Verify the output contains computer 555 with success indicator
+      expect(normalizedOutput).toContain("Computer 555")
+      expect(normalizedOutput).toContain("✔") // Success icon next to 555
+
+      // Verify missing computers are shown with appropriate indicators
+      // Verify the warning message contains just the missing computers
+      expect(normalizedOutput).toContain("Missing computers: 888, 999")
+
+      // Verify 555 is not listed as missing
+      expect(normalizedOutput).not.toMatch(/555.*Missing computer/)
     } finally {
       await syncManager.stop()
     }
@@ -913,11 +1005,13 @@ describe("Integration: UI", () => {
       const manualController = await syncManager.startManualMode()
 
       // Wait for the sync to complete
-      await waitForEvent<SyncResult>(manualController, SyncEvent.SYNC_COMPLETE)
+      await waitForEvent<SyncOperationResult>(
+        manualController,
+        SyncEvent.SYNC_COMPLETE
+      )
 
       // Get the captured output
-      const capturedOutput = outputCapture.getOutput()
-      const normalizedOutput = normalizeOutput(capturedOutput)
+      const normalizedOutput = normalizeOutput(outputCapture.getOutput())
 
       // Verify expected output contents
       expect(normalizedOutput).toContain(
@@ -954,7 +1048,10 @@ describe("Integration: UI", () => {
       const manualController = await syncManager.startManualMode()
 
       // First sync
-      await waitForEvent<SyncResult>(manualController, SyncEvent.SYNC_COMPLETE)
+      await waitForEvent<SyncOperationResult>(
+        manualController,
+        SyncEvent.SYNC_COMPLETE
+      )
 
       // Clear current output to analyze the next round
       outputCapture.clear()
@@ -963,11 +1060,13 @@ describe("Integration: UI", () => {
       manualController.performSyncCycle()
 
       // Wait for the second sync to complete
-      await waitForEvent<SyncResult>(manualController, SyncEvent.SYNC_COMPLETE)
+      await waitForEvent<SyncOperationResult>(
+        manualController,
+        SyncEvent.SYNC_COMPLETE
+      )
 
       // Get the captured output
-      const capturedOutput = outputCapture.getOutput()
-      const normalizedOutput = normalizeOutput(capturedOutput)
+      const normalizedOutput = normalizeOutput(outputCapture.getOutput())
 
       // Check that it shows the second sync operation
       expect(normalizedOutput).toContain("#2")

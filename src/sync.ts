@@ -3,7 +3,6 @@ import path from "node:path"
 import type { Config } from "./config"
 import {
   type Computer,
-  type SyncResult,
   createTypedEmitter,
   type ManualSyncEvents,
   type WatchSyncEvents,
@@ -11,8 +10,9 @@ import {
   type ResolvedFileRule,
   type ComputerSyncResult,
   SyncMode,
-  SyncOperationResult,
+  SyncStatus,
   type BaseControllerEvents,
+  type SyncOperationResult,
 } from "./types"
 import {
   validateMinecraftSave,
@@ -269,6 +269,10 @@ export class SyncManager {
           changedFiles
         )
 
+        this.log.warn(
+          `missing computers: ${ruleResolution.missingComputerIds.join(" , ")}`
+        )
+
         // Add resolved files to the plan
         plan.resolvedFileRules = ruleResolution.resolvedFileRules
         plan.availableComputers = ruleResolution.availableComputers
@@ -415,14 +419,15 @@ export class SyncManager {
     }
   }
 
-  public async performSync(syncPlan: SyncPlan): Promise<SyncResult> {
+  public async performSync(syncPlan: SyncPlan): Promise<SyncOperationResult> {
     if (this.state !== SyncManagerState.RUNNING) {
       throw new Error("Cannot perform sync when not in RUNNING state")
     }
 
     const computerResults: ComputerSyncResult[] = []
-
     const allComputerIds = new Set<string>()
+    let warnings = 0
+    const errors: string[] = []
 
     let totalAttemptedFiles = 0
 
@@ -442,6 +447,8 @@ export class SyncManager {
             computerId,
             exists: isExisting,
             files: [],
+            successCount: 0,
+            failureCount: 0,
           })
         }
 
@@ -456,22 +463,12 @@ export class SyncManager {
         // Add file entry with explicit type information
         computerResult.files.push({
           targetPath,
-          targetType: fileRule.target.type,
           sourcePath: fileRule.sourceAbsolutePath,
           success: false, // Mark all as unsuccessful initially
         })
         totalAttemptedFiles++
       }
     }
-
-    const result: SyncResult = {
-      successCount: 0,
-      errorCount: 0,
-      missingCount: syncPlan.missingComputerIds.length,
-    }
-
-    // Record warnings during sync for UI display
-    const warningMessages: string[] = []
 
     /**
      * Execute the actual sync operation for each available computer:
@@ -515,13 +512,17 @@ export class SyncManager {
 
           for (const fileEntry of fileEntries) {
             fileEntry.success = true
+            computerResult.successCount++
           }
         }
       }
 
       // Handle errors
       if (syncResult.errors.length > 0) {
-        result.errorCount++
+        // Add all errors to the computer result
+        for (const error of syncResult.errors) {
+          errors.push(`Error copying to computer ${computer.id}: ${error}`)
+        }
 
         // Report each error to the UI
         if (this.ui) {
@@ -532,30 +533,69 @@ export class SyncManager {
             )
           })
         }
-      } else if (syncResult.copiedFiles.length > 0) {
-        result.successCount++
       }
 
       // Handle skipped files as warnings
       if (syncResult.skippedFiles.length > 0) {
         const skipMessage = `Skipped ${syncResult.skippedFiles.length} file(s) for computer ${computer.id}`
-        warningMessages.push(skipMessage)
 
-        if (this.ui) {
-          this.ui.addMessage(UIMessageType.WARNING, skipMessage)
-        }
+        warnings++
+
+        // Update computer failure count
+        computerResult.failureCount += syncResult.skippedFiles.length
+
+        this.ui?.addMessage(UIMessageType.WARNING, skipMessage)
       }
+
+      // Update computer success/failure counts
+      computerResult.successCount = computerResult.files.filter(
+        (f) => f.success
+      ).length
+      computerResult.failureCount =
+        computerResult.files.length - computerResult.successCount
     }
 
-    // Determine overall operation result
-    let operationResult = SyncOperationResult.SUCCESS
+    // Calculate summary statistics
+    const summary = {
+      totalFiles: totalAttemptedFiles,
+      successfulFiles: computerResults.reduce(
+        (sum, cr) => sum + cr.successCount,
+        0
+      ),
+      failedFiles: computerResults.reduce(
+        (sum, cr) => sum + cr.failureCount,
+        0
+      ),
+      totalComputers: allComputerIds.size,
+      fullySuccessfulComputers: computerResults.filter(
+        (cr) => cr.exists && cr.files.length > 0 && cr.failureCount === 0
+      ).length,
+      partiallySuccessfulComputers: computerResults.filter(
+        (cr) => cr.exists && cr.successCount > 0 && cr.failureCount > 0
+      ).length,
+      failedComputers: computerResults.filter(
+        (cr) => cr.exists && cr.files.length > 0 && cr.successCount === 0
+      ).length,
+      missingComputers: syncPlan.missingComputerIds.length,
+    } as SyncOperationResult["summary"]
 
-    if (result.errorCount > 0 && result.successCount === 0) {
-      operationResult = SyncOperationResult.ERROR
-    } else if (result.errorCount > 0) {
-      operationResult = SyncOperationResult.PARTIAL
-    } else if (warningMessages.length > 0) {
-      operationResult = SyncOperationResult.WARNING
+    // Determine overall operation status
+    let status = SyncStatus.SUCCESS
+
+    if (summary.successfulFiles === 0 && summary.failedFiles > 0) {
+      status = SyncStatus.ERROR
+    } else if (summary.failedFiles > 0) {
+      status = SyncStatus.PARTIAL
+    } else if (warnings > 0) {
+      status = SyncStatus.WARNING
+    }
+
+    const result: SyncOperationResult = {
+      status,
+      timestamp: Date.now(),
+      summary,
+      computerResults,
+      errors,
     }
 
     this.log.info(
@@ -568,11 +608,11 @@ export class SyncManager {
             exists: cr.exists,
             files: {
               planned: cr.files.length,
-              successful: cr.files.filter((f) => f.success).length,
+              successful: cr.successCount,
             },
           }
         }),
-        operationResult,
+        status,
       },
       "performSync completed"
     )
@@ -584,7 +624,7 @@ export class SyncManager {
         totalComputers: allComputerIds.size,
       })
       this.ui.updateComputerResults(computerResults)
-      this.ui.completeOperation(operationResult)
+      this.ui.completeOperation(result)
     }
 
     // Cache invalidation for watch mode
@@ -827,6 +867,31 @@ abstract class BaseController<T extends BaseControllerEvents> {
   }
 
   /**
+   * Creates a basic error operation result from an error message
+   */
+  protected createErrorOperationResult(
+    errorMessage: string,
+    missingComputerIds: string[] = []
+  ): SyncOperationResult {
+    return {
+      status: SyncStatus.ERROR,
+      timestamp: Date.now(),
+      summary: {
+        totalFiles: 0,
+        successfulFiles: 0,
+        failedFiles: 0,
+        totalComputers: 0,
+        fullySuccessfulComputers: 0,
+        partiallySuccessfulComputers: 0,
+        failedComputers: 0,
+        missingComputers: missingComputerIds.length,
+      },
+      computerResults: [],
+      errors: [errorMessage],
+    }
+  }
+
+  /**
    * Base cleanup functionality for controllers
    */
   protected async cleanupBase(): Promise<void> {
@@ -913,15 +978,20 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
       // Check if the plan has critical issues
       if (!syncPlan.isValid) {
         // Create an AppError and emit it
-        const errorMessages = getSyncPlanErrorMessage(syncPlan)
+        const errorMessage = getSyncPlanErrorMessage(syncPlan)
 
         const syncPlanError = AppError.error(
-          "Sync plan creation failed: " + errorMessages,
+          "Sync plan creation failed: " + errorMessage,
           "ManualModeController.createSyncPlan"
         )
         this.emit(SyncEvent.SYNC_ERROR, syncPlanError)
 
-        this.ui?.completeOperation(SyncOperationResult.ERROR)
+        this.ui?.completeOperation(
+          this.createErrorOperationResult(
+            errorMessage,
+            syncPlan.missingComputerIds
+          )
+        )
 
         return // Stop here, don't proceed with sync
       }
@@ -1125,12 +1195,11 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       )
 
       // Update UI to show sync is starting
-      if (this.ui) {
-        this.ui.addMessage(
-          UIMessageType.INFO,
-          `File changed: ${path.basename(changedPath)}`
-        )
-      }
+
+      this.ui?.addMessage(
+        UIMessageType.INFO,
+        `File changed: ${path.basename(changedPath)}`
+      )
     }
 
     try {
@@ -1145,18 +1214,23 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       // Check if the plan has critical issues
       if (!syncPlan.isValid) {
         // Create an AppError and emit it
-        const errorMessages = syncPlan.issues
+        const errorMessage = syncPlan.issues
           .filter((issue) => issue.severity === SyncPlanIssueSeverity.ERROR)
           .map((issue) => issue.message)
           .join(", ")
 
         const syncPlanError = AppError.error(
-          "Sync plan creation failed: " + errorMessages,
+          "Sync plan creation failed: " + errorMessage,
           "ManualModeController.createSyncPlan"
         )
         this.emit(SyncEvent.SYNC_ERROR, syncPlanError)
 
-        this.ui?.completeOperation(SyncOperationResult.ERROR)
+        this.ui?.completeOperation(
+          this.createErrorOperationResult(
+            errorMessage,
+            syncPlan.missingComputerIds
+          )
+        )
 
         return // Stop here, don't proceed with sync
       }

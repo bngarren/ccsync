@@ -19,6 +19,7 @@ import {
 import { stringify } from "yaml"
 import { SyncEvent, SyncStatus, type SyncOperationResult } from "../src/types"
 import figures from "figures"
+import { setTimeout } from "node:timers/promises"
 
 describe("Integration: SyncManager", () => {
   let tempDir: string
@@ -1077,6 +1078,91 @@ describe("Integration: UI", () => {
         "Attempted to sync 1 total file to 1 computer"
       )
     } finally {
+      await syncManager.stop()
+    }
+  })
+
+  test("shows warning UI message when files are removed during watch", async () => {
+    // This test will specifically check the UI message when files are removed
+    const configPath = path.join(tempDir, ".ccsync.yaml")
+    const fileToDelete = path.join(sourceDir, "temp-watched-file.lua")
+
+    // Create the test file
+    await fs.writeFile(
+      fileToDelete,
+      "print('I will be deleted to trigger warning')"
+    )
+
+    // Create a config with a rule matching our file
+    const configObject = withDefaultConfig({
+      sourceRoot: sourceDir,
+      minecraftSavePath: savePath,
+      rules: [
+        {
+          source: "*.lua",
+          target: "/",
+          computers: ["1"],
+        },
+      ],
+    })
+
+    await fs.writeFile(configPath, stringify(configObject))
+    await createTestComputer(computersDir, "1")
+
+    const { config } = await loadConfig(configPath)
+    if (!config) throw new Error("Failed to load config")
+
+    const outputCapture = captureUIOutput()
+    const syncManager = new SyncManager(config)
+
+    try {
+      const watchController = await syncManager.startWatchMode()
+
+      // Wait for initial sync to complete
+      await waitForEvent<SyncOperationResult>(
+        watchController,
+        SyncEvent.INITIAL_SYNC_COMPLETE
+      )
+
+      // Clear existing output to only capture new messages
+      outputCapture.clear()
+
+      // Delete the file to trigger a warning
+      await fs.unlink(fileToDelete)
+
+      // Give the watcher time to process the event and update UI
+      await setTimeout(1000)
+
+      // Get the captured output
+      const normalizedOutput = normalizeOutput(outputCapture.getOutput())
+
+      // Verify the warning message appears
+      expect(normalizedOutput).toContain("temp-watched-file.lua")
+      expect(normalizedOutput).toContain("removed or renamed")
+      expect(normalizedOutput).toContain("will no longer be watched")
+
+      // Modify source file to trigger watch
+      await fs.writeFile(
+        path.join(sourceDir, "program.lua"),
+        "print('Updated')"
+      )
+
+      outputCapture.clear()
+
+      const triggeredSyncResult = await waitForEvent<SyncOperationResult>(
+        watchController,
+        SyncEvent.SYNC_COMPLETE
+      )
+
+      expect(triggeredSyncResult.status).toBe(SyncStatus.SUCCESS)
+
+      const normalizedOutput2 = normalizeOutput(outputCapture.getOutput())
+
+      expect(normalizedOutput2).toContain("temp-watched-file.lua")
+      expect(normalizedOutput2).toContain("removed or renamed")
+      expect(normalizedOutput2).toContain("no longer being watched")
+    } finally {
+      outputCapture.restore()
       await syncManager.stop()
     }
   })

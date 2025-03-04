@@ -23,6 +23,7 @@ import {
   resolveTargetPath,
   processPath,
   filterFilesOnly,
+  getRelativePath,
 } from "./utils"
 import { KeyHandler } from "./keys"
 import { setTimeout } from "node:timers/promises"
@@ -1091,6 +1092,9 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
 
 class WatchModeController extends BaseController<WatchSyncEvents> {
   private watcher: ReturnType<typeof watch> | null = null
+
+  private originalWatchedFiles: Set<string> = new Set()
+
   /**
    * Files being watched or tracked for file changes
    */
@@ -1108,6 +1112,10 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     ui: UI | null = null
   ) {
     super(syncManager, ui)
+  }
+
+  getWatchedFiles() {
+    return [...this.watchedFiles]
   }
 
   async start(): Promise<void> {
@@ -1324,7 +1332,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     this.log.debug("watchController keyHandler started")
   }
 
-  private async resolveWatchPatterns(): Promise<string[]> {
+  private async resolveWatchPatterns(): Promise<void> {
     try {
       // Get all unique file paths from glob patterns
       const uniqueSourcePaths = new Set<string>()
@@ -1346,8 +1354,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       // Convert to array and store in watchedFiles
       const patterns = Array.from(uniqueSourcePaths)
       this.watchedFiles = new Set(patterns)
-
-      return patterns
+      this.originalWatchedFiles = new Set(this.watchedFiles)
     } catch (error) {
       const appError = AppError.fatal(
         `Failed to resolve watch patterns: ${getErrorMessage(error)}`,
@@ -1359,12 +1366,36 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     }
   }
 
+  /**
+   * Identifies the file paths that were in the original watcher and compares them to the files currently in the watcher. Then reports these file paths to the UI.
+   *
+   * This allows warning messages to be added to the UI when watched files are renamed or deleted, which removes them from the current watched files
+   */
+  private reportMissingWatchedFiles() {
+    if (this.originalWatchedFiles.size === 0 || this.watchedFiles.size === 0)
+      return
+
+    const noLongerWatchedFiles = this.originalWatchedFiles.difference(
+      this.watchedFiles
+    )
+    if (noLongerWatchedFiles.size > 0) {
+      const relativePaths = [...noLongerWatchedFiles].map((f) => {
+        return `"${getRelativePath(f, this.config.sourceRoot, { includeRootName: true })}"`
+      })
+      this.ui?.addMessage(
+        UIMessageType.WARNING,
+        `The following files were removed or renamed and are no longer being watched: ${relativePaths.join(", ")}`,
+        "Restart watch mode to update watched files"
+      )
+    }
+  }
+
   private async setupWatcher(): Promise<void> {
     try {
       // Get actual file paths to watch
-      const patterns = await this.resolveWatchPatterns()
+      await this.resolveWatchPatterns()
 
-      this.watcher = watch(patterns, {
+      this.watcher = watch([...this.watchedFiles], {
         ignoreInitial: true,
         awaitWriteFinish: {
           stabilityThreshold: 300,
@@ -1373,8 +1404,8 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       })
 
       this.log.debug(
-        patterns,
-        `watchController set up a chokidar watcher with patterns:`
+        { watchedFiles: [...this.watchedFiles] },
+        `watchController set up a chokidar watcher with:`
       )
 
       this.watcher.on("change", async (changedPath) => {
@@ -1386,6 +1417,9 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
         if (this.syncManager.getState() !== SyncManagerState.RUNNING) {
           return
         }
+
+        // check if we are no longer watching files from the original and add warning messages to the UI
+        this.reportMissingWatchedFiles()
 
         try {
           await this.performSyncCycle(changedPath)
@@ -1410,6 +1444,36 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
               `Unexpected problem occurred during sync: ${getErrorMessage(error)}`
             )
           }
+        }
+      })
+
+      // Handle file deletions or renames
+      this.watcher.on("unlink", (removedPath) => {
+        this.log.info(
+          { removedPath },
+          `watchController watcher detected file removal or rename`
+        )
+
+        // Remove from watched files set
+        const normalizedPath = processPath(removedPath)
+        if (this.watchedFiles.has(normalizedPath)) {
+          this.watchedFiles.delete(normalizedPath)
+
+          // Notify user through UI
+          if (this.ui) {
+            const filename = path.basename(removedPath)
+            this.ui.addMessage(
+              UIMessageType.WARNING,
+              `File '${filename}' was removed or renamed and will no longer be watched`,
+              "Restart watch mode to update watched files"
+            )
+            this.ui.writeMessages({ persist: true, clearMessagesOnWrite: true })
+          }
+
+          this.log.warn(
+            { removedPath },
+            "File was removed or renamed and will no longer be watched"
+          )
         }
       })
 

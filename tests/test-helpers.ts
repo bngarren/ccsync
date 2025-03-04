@@ -13,6 +13,7 @@ import { expect, mock } from "bun:test"
 import { DEFAULT_CONFIG, type SyncRule } from "../src/config"
 import * as yaml from "yaml"
 import type { IAppError } from "../src/errors"
+import stripAnsi from "strip-ansi"
 
 /**
  * Creates a new tmp directory in the operating system's default directory for temporary files.
@@ -367,6 +368,114 @@ export function captureUIOutput() {
       process.stdout.write = originalStdoutWrite
     },
   }
+}
+// ---- UI related helpers ----
+
+/**
+ * This function helps extract just the content we care about for testing.
+ *  It filters out styling/color codes and timestamps which would make tests brittle
+ */
+export function normalizeOutput(output: string[]): string {
+  // Join all output lines
+  const joinedOutput = output.join("\n")
+
+  // Replace variable content with placeholders
+  const normalized = joinedOutput
+    // Replace timestamps
+    .replace(
+      /\[\d{1,2}\/\d{1,2}\/\d{4},\s+\d{1,2}:\d{2}:\d{2}\s+[APM]{2}\]/g,
+      "[TIMESTAMP]"
+    )
+    // Replace file paths but preserve filenames
+    // eslint-disable-next-line no-useless-escape
+    .replace(/([\\\/][\w\-\.]+){2,}([\\\/]([\w\-\.]+))/g, "[PATH]/$3")
+    // Replace elapsed time references
+    .replace(/\d+[ms](?: \d+[ms])* ago/g, "[TIME] ago")
+
+  // Strip the ANSI color codes and return the normalized output
+  return stripAnsi(normalized)
+}
+
+/**
+ * Asserts that a computer's sync result in the UI output matches the provided conditions.
+ *
+ * @param testString - The string containing the sync result to be tested.
+ * @param computerId - The ID of the computer (e.g., 1, 2).
+ * @param options - Optional configuration for additional checks.
+ * @param options.successCount - The number of successfully synced files. (Optional)
+ * @param options.totalCount - The total number of files attempted to sync. (Optional)
+ * @param options.additionalString - Additional string or regular expression to match after the computer sync result. (Optional)
+ * @param options.computerIcon - A string or regex to match the computer icon before the "Computer X" string. (Optional)
+ *
+ * @example
+ * // Test for Computer 1 with a success icon, success count of 2, and total count of 2
+ * // e.g. "✔ Computer 1: (2/2) /program.lua"
+ * expectComputerResult(testString, 1, { computerIcon: figures.tick, successCount: 2, totalCount: 2 });
+ *
+ * @example
+ * // Test for Computer 2 with a success count of 1 and total count of 1, and check if a specific file path is mentioned
+ * // e.g. "Computer 2: (1/1) /program.lua"
+ * expectComputerResult(testString, 2, { successCount: 1, totalCount: 1, additionalString: '/program.lua' });
+ *
+ * @example
+ * // Test for Computer 1, success count of 2, and total count of 2, with a regex to check for any file paths
+ * // e.g. "Computer 1: (2/2) test.lua"
+ * expectComputerResult(testString, 1, { successCount: 2, totalCount: 2, additionalString: /\/.*\.lua/ });
+ */
+export function expectComputerResult(
+  testString: string,
+  computerId: number | string,
+  options: {
+    successCount?: number
+    totalCount?: number
+    additionalString?: string | RegExp
+    computerIcon?: string | RegExp
+  } = {}
+) {
+  // Regex to match "Computer X" (where X is the computer ID)
+  const computerRegex = new RegExp(`Computer ${String(computerId)}:`)
+
+  let regexPattern = computerRegex
+
+  // If options.computerIcon is provided, match the icon string before "Computer X"
+  if (options.computerIcon) {
+    const iconPattern =
+      options.computerIcon instanceof RegExp
+        ? options.computerIcon.source
+        : options.computerIcon
+    regexPattern = new RegExp(`(${iconPattern})?${regexPattern.source}`)
+  }
+
+  // If successCount and totalCount are provided, match them as well
+  if (options.successCount && options.totalCount) {
+    regexPattern = new RegExp(
+      `${regexPattern.source} \\(${options.successCount}/${options.totalCount}\\)`
+    )
+  } else if (options.successCount) {
+    regexPattern = new RegExp(
+      `${regexPattern.source} \\(${options.successCount}\\)`
+    )
+  } else if (options.totalCount) {
+    regexPattern = new RegExp(
+      `${regexPattern.source} \\(${options.totalCount}\\)`
+    )
+  }
+
+  // If additionalString is provided, use it as a regex or string
+  if (options.additionalString) {
+    if (options.additionalString instanceof RegExp) {
+      regexPattern = new RegExp(
+        `${regexPattern.source}.*${options.additionalString.source}`
+      )
+    } else {
+      regexPattern = new RegExp(
+        `${regexPattern.source}.*${options.additionalString}`
+      )
+    }
+  }
+
+  // Perform the actual test
+  expect(testString).toMatch(regexPattern)
 }
 
 // ---- Expect helpers ----

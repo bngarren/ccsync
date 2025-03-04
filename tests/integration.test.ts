@@ -13,10 +13,12 @@ import {
   waitForEvent,
   captureUIOutput,
   expectToBeDefined,
+  normalizeOutput,
+  expectComputerResult,
 } from "./test-helpers"
 import { stringify } from "yaml"
 import { SyncEvent, SyncStatus, type SyncOperationResult } from "../src/types"
-import stripAnsi from "strip-ansi"
+import figures from "figures"
 
 describe("Integration: SyncManager", () => {
   let tempDir: string
@@ -729,29 +731,6 @@ describe("Integration: SyncManager", () => {
   })
 })
 
-// This function helps extract just the content we care about for testing
-// It filters out styling/color codes and timestamps which would make tests brittle
-function normalizeOutput(output: string[]): string {
-  // Join all output lines
-  const joinedOutput = output.join("\n")
-
-  // Replace variable content with placeholders
-  const normalized = joinedOutput
-    // Replace timestamps
-    .replace(
-      /\[\d{1,2}\/\d{1,2}\/\d{4},\s+\d{1,2}:\d{2}:\d{2}\s+[APM]{2}\]/g,
-      "[TIMESTAMP]"
-    )
-    // Replace file paths but preserve filenames
-    // eslint-disable-next-line no-useless-escape
-    .replace(/([\\\/][\w\-\.]+){2,}([\\\/]([\w\-\.]+))/g, "[PATH]/$3")
-    // Replace elapsed time references
-    .replace(/\d+[ms](?: \d+[ms])* ago/g, "[TIME] ago")
-
-  // Strip the ANSI color codes and return the normalized output
-  return stripAnsi(normalized)
-}
-
 describe("Integration: UI", () => {
   let tempDir: string
   let sourceDir: string
@@ -840,8 +819,14 @@ describe("Integration: UI", () => {
       expect(normalizedOutput).toMatch(
         /\[TIMESTAMP\] Attempted to sync 1 total file to 1 computer/
       )
-      expect(normalizedOutput).toMatch(/Computer 1/)
-      expect(normalizedOutput).toMatch(/\/program.lua/)
+
+      expectComputerResult(normalizedOutput, 1, {
+        computerIcon: figures.tick,
+        successCount: 1,
+        totalCount: 1,
+        additionalString: /program.lua/,
+      })
+
       expect(normalizedOutput).not.toMatch(/No files synced/)
       expect(normalizedOutput).not.toMatch(/Error/)
       expect(normalizedOutput).not.toMatch(/Warning/)
@@ -961,6 +946,12 @@ describe("Integration: UI", () => {
       const normalizedOutput = normalizeOutput(outputCapture.getOutput())
 
       // Verify the output contains computer 555 with success indicator
+      expectComputerResult(normalizedOutput, 555, {
+        computerIcon: figures.tick, // ✔
+        successCount: 1,
+        totalCount: 1,
+        additionalString: /program.lua/,
+      })
       expect(normalizedOutput).toContain("Computer 555")
       expect(normalizedOutput).toContain("✔") // Success icon next to 555
 
@@ -1017,8 +1008,20 @@ describe("Integration: UI", () => {
       expect(normalizedOutput).toContain(
         "Attempted to sync 3 total files across 2 computers"
       )
-      expect(normalizedOutput).toContain("Computer 1: (2/2)")
-      expect(normalizedOutput).toContain("Computer 2: (1/1)")
+
+      expectComputerResult(normalizedOutput, 1, {
+        computerIcon: figures.tick,
+        successCount: 2,
+        totalCount: 2,
+        additionalString: /program.lua/,
+      })
+
+      expectComputerResult(normalizedOutput, 2, {
+        computerIcon: figures.tick,
+        successCount: 1,
+        totalCount: 1,
+        additionalString: /program.lua/,
+      })
     } finally {
       await syncManager.stop()
     }

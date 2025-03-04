@@ -730,6 +730,84 @@ describe("Integration: SyncManager", () => {
       await syncManager.stop()
     }
   })
+
+  test("missing computers results in a SyncStatus.WARNING status", async () => {
+    const configPath = path.join(tempDir, ".ccsync.yaml")
+    const configObject = withDefaultConfig({
+      sourceRoot: sourceDir,
+      minecraftSavePath: savePath,
+      rules: [
+        {
+          source: "program.lua",
+          target: "/program.lua",
+          computers: ["1", "999"],
+        }, /// 999 is missing
+      ],
+    })
+
+    const configContent = stringify(configObject)
+
+    await fs.writeFile(configPath, configContent)
+    await fs.mkdir(path.join(computersDir, "1"), { recursive: true })
+
+    const { config } = await loadConfig(configPath)
+
+    if (!config) throw new Error("Failed to load config")
+
+    const syncManager = new SyncManager(config)
+
+    try {
+      // Start manual mode and wait for first sync
+      const manualController = await syncManager.startManualMode()
+
+      const syncResult = await waitForEvent<SyncOperationResult>(
+        manualController,
+        SyncEvent.SYNC_COMPLETE
+      )
+
+      expect(syncResult.status).toBe(SyncStatus.WARNING)
+      expect(syncResult.summary.missingComputers).toBe(1)
+
+      // Missing computer 999
+      const computer999 = expectToBeDefined(
+        syncResult.computerResults.find((cr) => cr.computerId === "999")
+      )
+      expect(computer999.exists).toBeFalse()
+      expect(computer999.successCount).toBe(0)
+      expect(computer999.failureCount).toBe(0)
+
+      expect(await fs.exists(path.join(computersDir, "999"))).toBeFalse()
+
+      // Existing comptuer 1
+      // Should have still synced successfully with computer 1
+      // Verify file level details
+      const computer1 = expectToBeDefined(
+        syncResult.computerResults.find((cr) => cr.computerId === "1")
+      )
+      const fileResult = computer1.files[0]
+      expect(fileResult).toMatchObject({
+        targetPath: "/program.lua",
+        success: true,
+      })
+      expect(fileResult.sourcePath).toContain("program.lua")
+
+      // Verify no errors
+      expect(syncResult.errors).toHaveLength(0)
+      expect(syncResult.summary.successfulFiles).toBe(1)
+      expect(syncResult.summary.fullySuccessfulComputers).toBe(1)
+
+      // Verify actual files
+      const targetFile = path.join(computersDir, "1", "program.lua")
+      expect(await fs.exists(targetFile)).toBe(true)
+      const content = await fs.readFile(
+        path.join(computersDir, "1", "program.lua"),
+        "utf8"
+      )
+      expect(content).toBe("print('Hello')")
+    } finally {
+      await syncManager.stop()
+    }
+  })
 })
 
 describe("Integration: UI", () => {

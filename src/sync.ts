@@ -587,7 +587,7 @@ export class SyncManager {
       status = SyncStatus.ERROR
     } else if (summary.failedFiles > 0) {
       status = SyncStatus.PARTIAL
-    } else if (warnings > 0) {
+    } else if (warnings > 0 || summary.missingComputers > 0) {
       status = SyncStatus.WARNING
     }
 
@@ -1332,7 +1332,10 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     this.log.debug("watchController keyHandler started")
   }
 
-  private async resolveWatchPatterns(): Promise<void> {
+  /**
+   * Compiles a Set of unique file paths from the sync rules in the config, using `glob` to match files based on glob patterns
+   */
+  private async resolveFilesForWatcher(): Promise<void> {
     try {
       // Get all unique file paths from glob patterns
       const uniqueSourcePaths = new Set<string>()
@@ -1380,12 +1383,16 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     )
     if (noLongerWatchedFiles.size > 0) {
       const relativePaths = [...noLongerWatchedFiles].map((f) => {
-        return `"${getRelativePath(f, this.config.sourceRoot, { includeRootName: true })}"`
+        return `${getRelativePath(f, this.config.sourceRoot, { includeRootName: true })}`
       })
       this.ui?.addMessage(
         UIMessageType.WARNING,
         `The following files were removed or renamed and are no longer being watched: ${relativePaths.join(", ")}`,
         "Restart watch mode to update watched files"
+      )
+      this.log.warn(
+        { noLongerWatchedFiles: relativePaths },
+        "Files are missing compared to when the watcher was initiated. Suspect they were renamed or deleted."
       )
     }
   }
@@ -1393,7 +1400,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
   private async setupWatcher(): Promise<void> {
     try {
       // Get actual file paths to watch
-      await this.resolveWatchPatterns()
+      await this.resolveFilesForWatcher()
 
       this.watcher = watch([...this.watchedFiles], {
         ignoreInitial: true,
@@ -1404,7 +1411,13 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       })
 
       this.log.debug(
-        { watchedFiles: [...this.watchedFiles] },
+        {
+          watchedFiles: [...this.watchedFiles].map((f) =>
+            getRelativePath(f, this.config.sourceRoot, {
+              includeRootName: true,
+            })
+          ),
+        },
         `watchController set up a chokidar watcher with:`
       )
 
@@ -1471,7 +1484,13 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
           }
 
           this.log.warn(
-            { removedPath },
+            {
+              removedPath: getRelativePath(
+                removedPath,
+                this.config.sourceRoot,
+                { includeRootName: true }
+              ),
+            },
             "File was removed or renamed and will no longer be watched"
           )
         }

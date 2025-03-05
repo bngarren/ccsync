@@ -37,16 +37,14 @@ export function getLogDirectory(): string {
 }
 
 // Helper to get the log file path
-export function getLogFilePath(): string {
+export function getLogFilePath(isTest = false): string {
   const logDir = getLogDirectory()
 
   // Create the log directory if it doesn't exist
   if (!fs.existsSync(logDir)) {
     fs.mkdirSync(logDir, { recursive: true })
   }
-
-  // Use ISO date format for the base log file name
-  return path.join(logDir, "ccsync")
+  return path.join(logDir, `ccsync${isTest ? ".test" : ""}`)
 }
 
 // Logger instance that will be exported and used throughout the app
@@ -58,6 +56,7 @@ let logger: pino.Logger = pino({
 export function initializeLogger(options: {
   logToFile: boolean
   logLevel: LogLevel
+  isTest?: boolean
 }): pino.Logger {
   if (!options.logToFile) {
     // If logging to file is disabled, return a disabled logger
@@ -70,18 +69,19 @@ export function initializeLogger(options: {
 
   // Setup file destination
   const logDir = getLogDirectory()
-  const logFilePath = getLogFilePath()
+  const logFilePath = getLogFilePath(options.isTest)
 
   // Setup transport with pino-roll
   const transport = pino.transport({
     target: "pino-roll",
     options: {
       file: logFilePath,
+      sync: options.isTest || false, // synchronous writes in test env
       frequency: LOG_ROTATION_FREQ, // Rotate logs daily
       mkdir: true, // Create the directory if it doesn't exist
       size: LOG_MAX_SIZE, // Also rotate if a log file reaches 10 MB
       extension: ".log", // Add .log extension to the files
-      symlink: true, // Create a symlink to the current log file
+      symlink: !options.isTest, // Create a symlink to the current log file
       dateFormat: "yyyy-MM-dd", // Format for date in filename
       limit: {
         count: LOG_RETENTION_COUNT, // Keep 2 days of logs

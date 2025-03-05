@@ -588,14 +588,29 @@ export async function resolveSyncRules(
       const matchedSourceFiles = await filterFilesOnly(matchedPaths)
 
       // Filter for 'selectedFiles', i.e. changed files from watch mode
-      const filesToResolve = selectedFiles
-        ? matchedSourceFiles.filter((file) => {
-            const relPath = processPath(path.relative(config.sourceRoot, file))
-            return Array.from(selectedFiles).some(
-              (changed) => processPath(changed) === relPath
-            )
-          })
-        : matchedSourceFiles
+      let filesToResolve
+
+      // TODO We should mandate whether the passed 'selectedFiles' are absolute or relative (to sourceRoot). Though we are accounting for either here, this feels messy.
+      if (selectedFiles) {
+        filesToResolve = matchedSourceFiles.filter((file) => {
+          // Get the absolute path of the file
+          const absolutePath = processPath(file)
+
+          // Check if this absolute path exists in selectedFiles
+          if (selectedFiles.has(absolutePath)) {
+            return true
+          }
+
+          // Also try checking with relative path (more reliable across platforms)
+          const relPath = getRelativePath(file, config.sourceRoot)
+          const relPathMatches = Array.from(selectedFiles).some(
+            (selectedFile) => pathsAreEqual(relPath, selectedFile)
+          )
+          return relPathMatches
+        })
+      } else {
+        filesToResolve = matchedSourceFiles
+      }
 
       if (filesToResolve.length === 0) {
         resolvedResult.errors.push(

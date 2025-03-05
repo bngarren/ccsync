@@ -1,36 +1,19 @@
 import { beforeAll, afterAll, mock } from "bun:test"
 import { initializeLogger } from "../src/log"
+import { setTimeout } from "node:timers/promises"
 
 // Store original console.log
 export const testLog = console.log
 
-beforeAll(() => {
-  // Initialize logger with testing configuration - silent and not to file
-  initializeLogger({
-    logToFile: false,
-    logLevel: "silent",
-  })
+const USE_FILE_LOGGING = true
 
-  // Mock the logger module for tests
-  mock.module("../src/logger", () => ({
-    default: {
-      trace: () => {},
-      debug: () => {},
-      info: () => {},
-      warn: () => {},
-      error: () => {},
-      fatal: () => {},
-    },
-    getLogger: () => ({
-      trace: () => {},
-      debug: () => {},
-      info: () => {},
-      warn: () => {},
-      error: () => {},
-      fatal: () => {},
-    }),
-    initializeLogger: () => {},
-  }))
+beforeAll(() => {
+  // Initialize logger with testing configuration
+  initializeLogger({
+    logToFile: USE_FILE_LOGGING,
+    logLevel: "trace",
+    isTest: true, // This will enable synchronous writes and change the filename
+  })
 
   // Trying not to pollute the terminal output when running tests since our program utilizes lots of console and stdout output
   console.log = mock(() => {})
@@ -38,10 +21,15 @@ beforeAll(() => {
   process.stdout.write = mock(() => false)
 })
 
-afterAll(() => {
+afterAll(async () => {
   // global teardown
   mock.restore()
 
   // Restore original console.log
   console.log = testLog
+
+  // small delay to finish writing logs
+  if (USE_FILE_LOGGING) {
+    await setTimeout(100)
+  }
 })

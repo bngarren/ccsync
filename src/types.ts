@@ -73,9 +73,9 @@ export interface ValidationResult {
 export enum SyncStatus {
   /** No sync operation has been attempted yet */
   NONE = "none",
-  /** All files were synced successfully with no warnings */
+  /** All files were synced successfully with no sync-related warnings. */
   SUCCESS = "success",
-  /** All files synced successfully but with some warnings */
+  /** All files synced successfully but with some sync-related warnings */
   WARNING = "warning",
   /** Operation failed completely with errors */
   ERROR = "error",

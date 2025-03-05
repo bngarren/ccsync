@@ -854,6 +854,7 @@ describe("Integration: SyncManager", () => {
     const outputCapture = captureUIOutput()
 
     const syncManager = new SyncManager(config)
+
     const watchController = await syncManager.startWatchMode()
 
     try {
@@ -876,31 +877,6 @@ describe("Integration: SyncManager", () => {
           watchController,
           SyncEvent.SYNC_COMPLETE,
           async () => {
-            // This runs after event listeners are registered but before waiting for the event
-            // testLog("Test: Writing files sequentially")
-
-            // // Write files sequentially with small delays to avoid timing issues
-            // await fs.writeFile(
-            //   path.join(sourceDir, "batch-test/file1.lua"),
-            //   "print('File 1 updated')"
-            // )
-            // await setTimeout(50)
-
-            // await fs.writeFile(
-            //   path.join(sourceDir, "batch-test/file2.lua"),
-            //   "print('File 2 updated')"
-            // )
-            // await setTimeout(50)
-
-            // await fs.writeFile(
-            //   path.join(sourceDir, "batch-test/file3.lua"),
-            //   "print('File 3 updated')"
-            // )
-
-            // // Wait longer than the debounce delay to ensure the timer fires
-            // testLog("Test: Waiting for debounce timer to fire (600ms)")
-            // await setTimeout(600)
-
             // This runs after event listeners are registered but before waiting for the event
             await Promise.all([
               fs.writeFile(

@@ -1380,9 +1380,16 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     if (this.originalWatchedFiles.size === 0 || this.watchedFiles.size === 0)
       return
 
-    const noLongerWatchedFiles = this.originalWatchedFiles.difference(
-      this.watchedFiles
+    // Set.difference() is a Node 22 built in
+    // const noLongerWatchedFiles = this.originalWatchedFiles.difference(
+    //   this.watchedFiles
+    // )
+
+    // Manually calculate the difference
+    const noLongerWatchedFiles = new Set(
+      [...this.originalWatchedFiles].filter((f) => !this.watchedFiles.has(f))
     )
+
     if (noLongerWatchedFiles.size > 0) {
       const relativePaths = [...noLongerWatchedFiles].map((f) => {
         return `${getRelativePath(f, this.config.sourceRoot, { includeRootName: true })}`

@@ -1356,18 +1356,19 @@ describe("Integration: UI", () => {
       expect(normalizedOutput).toContain("removed or renamed")
       expect(normalizedOutput).toContain("will no longer be watched")
 
-      // Modify source file to trigger watch
-      await fs.writeFile(
-        path.join(sourceDir, "program.lua"),
-        "print('Updated')"
-      )
-
       outputCapture.clear()
 
       const triggeredSyncResult =
         await waitForEventWithTrigger<SyncOperationResult>(
           watchController,
-          SyncEvent.SYNC_COMPLETE
+          SyncEvent.SYNC_COMPLETE,
+          async () => {
+            // Modify source file to trigger watch
+            await fs.writeFile(
+              path.join(sourceDir, "program.lua"),
+              "print('Updated')"
+            )
+          }
         )
 
       expect(triggeredSyncResult.status).toBe(SyncStatus.SUCCESS)

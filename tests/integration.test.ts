@@ -20,6 +20,7 @@ import { stringify } from "yaml"
 import { SyncEvent, SyncStatus, type SyncOperationResult } from "../src/types"
 import figures from "figures"
 import { setTimeout } from "node:timers/promises"
+import { UI } from "../src/ui"
 
 describe("Integration: SyncManager", () => {
   let tempDir: string
@@ -84,7 +85,7 @@ describe("Integration: SyncManager", () => {
 
     if (!config) throw new Error("Failed to load config")
 
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(config, new UI())
 
     try {
       // Start manual mode and wait for first sync
@@ -160,7 +161,7 @@ describe("Integration: SyncManager", () => {
 
     const { config } = await loadConfig(configPath)
     if (!config) throw new Error("Failed to load config")
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(config, new UI())
 
     const { controller, start } = syncManager.initWatchMode()
     try {
@@ -296,7 +297,7 @@ describe("Integration: SyncManager", () => {
     const { config } = await loadConfig(configPath)
     if (!config) throw new Error("Failed to load config")
 
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(config, new UI())
     const { controller, start } = syncManager.initManualMode()
 
     try {
@@ -414,7 +415,7 @@ describe("Integration: SyncManager", () => {
     const { config } = await loadConfig(configPath)
     if (!config) throw new Error("Failed to load config")
 
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(config, new UI())
 
     try {
       const { controller, start } = syncManager.initWatchMode()
@@ -631,7 +632,7 @@ describe("Integration: SyncManager", () => {
 
     const { config } = await loadConfig(configPath)
     if (!config) throw new Error("Failed to load config")
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(config, new UI())
 
     try {
       const { controller, start } = syncManager.initManualMode()
@@ -760,7 +761,7 @@ describe("Integration: SyncManager", () => {
 
     if (!config) throw new Error("Failed to load config")
 
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(config, new UI())
 
     try {
       // Start manual mode and wait for first sync
@@ -858,7 +859,7 @@ describe("Integration: SyncManager", () => {
     // Setup UI output capture to verify sync operations
     const outputCapture = captureUIOutput()
 
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(config, new UI())
 
     const { controller, start } = syncManager.initWatchMode()
 
@@ -1019,7 +1020,10 @@ describe("Integration: UI", () => {
     })
     if (!config) throw new Error("Failed to load config")
 
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(
+      config,
+      new UI({ renderDynamicElements: false })
+    )
 
     try {
       // Start manual mode and wait for sync
@@ -1078,7 +1082,10 @@ describe("Integration: UI", () => {
     })
     if (!config) throw new Error("Failed to load config")
 
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(
+      config,
+      new UI({ renderDynamicElements: false })
+    )
 
     try {
       // Start manual mode and wait for sync
@@ -1133,7 +1140,10 @@ describe("Integration: UI", () => {
     })
     if (!config) throw new Error("Failed to load config")
 
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(
+      config,
+      new UI({ renderDynamicElements: false })
+    )
 
     try {
       // Start manual mode and wait for sync
@@ -1215,7 +1225,10 @@ describe("Integration: UI", () => {
     const { config } = await loadConfig(configPath)
     if (!config) throw new Error("Failed to load config")
 
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(
+      config,
+      new UI({ renderDynamicElements: false })
+    )
 
     try {
       // Start manual mode and wait for sync
@@ -1271,7 +1284,10 @@ describe("Integration: UI", () => {
     const { config } = await loadConfig(configPath)
     if (!config) throw new Error("Failed to load config")
 
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(
+      config,
+      new UI({ renderDynamicElements: false })
+    )
 
     try {
       // Start manual mode
@@ -1340,7 +1356,10 @@ describe("Integration: UI", () => {
     const { config } = await loadConfig(configPath)
     if (!config) throw new Error("Failed to load config")
 
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(
+      config,
+      new UI({ renderDynamicElements: false })
+    )
 
     try {
       const { controller, start } = syncManager.initWatchMode()

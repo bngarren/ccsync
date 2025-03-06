@@ -96,7 +96,6 @@ export class SyncManager {
     return this._logger
   }
 
-  private ui: UI | null = null
   private activeModeController:
     | ManualModeController
     | WatchModeController
@@ -113,7 +112,10 @@ export class SyncManager {
     )
   }
 
-  constructor(private config: Config) {}
+  constructor(
+    private config: Config,
+    private ui: UI
+  ) {}
 
   // Public state query methods
   public isRunning(): boolean {
@@ -538,14 +540,12 @@ export class SyncManager {
         }
 
         // Report each error to the UI
-        if (this.ui) {
-          syncResult.errors.forEach((error) => {
-            this.ui?.addMessage(
-              UIMessageType.ERROR,
-              `Error copying to computer ${computer.id}: ${error}`
-            )
-          })
-        }
+        syncResult.errors.forEach((error) => {
+          this.ui.addMessage(
+            UIMessageType.ERROR,
+            `Error copying to computer ${computer.id}: ${error}`
+          )
+        })
       }
 
       // Handle skipped files as warnings
@@ -557,7 +557,7 @@ export class SyncManager {
         // Update computer failure count
         computerResult.failureCount += syncResult.skippedFiles.length
 
-        this.ui?.addMessage(UIMessageType.WARNING, skipMessage)
+        this.ui.addMessage(UIMessageType.WARNING, skipMessage)
       }
 
       // Update computer success/failure counts
@@ -633,14 +633,12 @@ export class SyncManager {
     )
 
     // Update UI with final results
-    if (this.ui) {
-      this.ui.updateOperationStats({
-        totalFiles: totalAttemptedFiles,
-        totalComputers: allComputerIds.size,
-      })
-      this.ui.updateComputerResults(computerResults)
-      this.ui.completeOperation(result)
-    }
+    this.ui.updateOperationStats({
+      totalFiles: totalAttemptedFiles,
+      totalComputers: allComputerIds.size,
+    })
+    this.ui.updateComputerResults(computerResults)
+    this.ui.completeOperation(result)
 
     // Cache invalidation for watch mode
     if (this.activeModeController instanceof WatchModeController) {
@@ -663,9 +661,7 @@ export class SyncManager {
     }
 
     try {
-      // Initialize UI for manual mode
-      this.ui = new UI(SyncMode.MANUAL)
-
+      this.ui.setMode(SyncMode.MANUAL)
       const manualController = new ManualModeController(this, this.ui)
       this.activeModeController = manualController
 
@@ -673,14 +669,14 @@ export class SyncManager {
       manualController.on(SyncEvent.STARTED, () => {
         this.setState(SyncManagerState.RUNNING)
         this.log.trace("manualController SyncEvent.STARTED")
-        this.ui?.start()
+        this.ui.start()
       })
 
       // The controller has already stopped
       manualController.on(SyncEvent.STOPPED, () => {
         this.setState(SyncManagerState.STOPPED)
         this.log.trace("manualController SyncEvent.STOPPED")
-        this.ui?.stop()
+        this.ui.stop()
       })
 
       // High level controller functions should emit a SYNC_ERROR when they catch thrown errors from subordinate functions
@@ -736,24 +732,6 @@ export class SyncManager {
     }
   }
 
-  /**
-   * @deprecated Use {@link initManualMode}
-   */
-  startManualMode(): ManualModeController {
-    const { controller, start } = this.initManualMode()
-    start()
-    return controller
-  }
-
-  /**
-   * @deprecated Use {@link initWatchMode}
-   */
-  startWatchMode(): WatchModeController {
-    const { controller, start } = this.initWatchMode()
-    start()
-    return controller
-  }
-
   initWatchMode(): {
     controller: WatchModeController
     start: () => void
@@ -767,8 +745,7 @@ export class SyncManager {
     }
 
     try {
-      // Initialize UI for watch mode
-      this.ui = new UI(SyncMode.WATCH)
+      this.ui.setMode(SyncMode.WATCH)
 
       const watchController = new WatchModeController(
         this,
@@ -781,13 +758,13 @@ export class SyncManager {
       watchController.on(SyncEvent.STARTED, () => {
         this.setState(SyncManagerState.RUNNING)
         this.log.trace("watchController SyncEvent.STARTED")
-        this.ui?.start()
+        this.ui.start()
       })
 
       watchController.on(SyncEvent.STOPPED, () => {
         this.setState(SyncManagerState.STOPPED)
         this.log.trace("watchController SyncEvent.STOPPED")
-        this.ui?.stop()
+        this.ui.stop()
       })
 
       watchController.on(SyncEvent.SYNC_ERROR, (error) => {
@@ -855,10 +832,7 @@ export class SyncManager {
     this.setState(SyncManagerState.STOPPING)
 
     try {
-      if (this.ui) {
-        this.ui.stop()
-        this.ui = null
-      }
+      this.ui.stop()
 
       if (this.activeModeController) {
         await this.activeModeController.stop()

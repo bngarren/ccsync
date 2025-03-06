@@ -18,6 +18,7 @@ import { SyncMode } from "./types"
 import { AppError, ErrorSeverity, getErrorMessage } from "./errors"
 import { getLogFilePath, getLogger, initializeLogger } from "./log"
 import { version } from "./version"
+import { UI } from "./ui"
 
 const initConfig = async () => {
   // Find all config files
@@ -247,13 +248,15 @@ async function main() {
 
     log.debug(`User selected sync mode: ${mode.toUpperCase()}`)
 
-    const syncManager = new SyncManager(config)
+    const ui = new UI()
+    const syncManager = new SyncManager(config, ui)
 
     // Handle process termination signals
     const cleanup = () => {
       syncManager.stop().catch((err: unknown) => {
         console.log(`Error could not stop syncManager on cleanup: ${err}`)
       })
+      ui.stop()
       gracefulExit()
     }
 

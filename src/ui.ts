@@ -87,7 +87,7 @@ export interface OperationStats {
 }
 
 interface UIState {
-  mode: SyncMode
+  mode: SyncMode | null
   status: UIStatus
   operationResult: SyncOperationResult | null
   operationsStats: OperationStats
@@ -98,6 +98,10 @@ interface UIState {
    * Past sync outputs
    */
   syncHistory: string[]
+}
+
+interface NewUIOptions {
+  renderDynamicElements?: boolean
 }
 
 // Minimal interval between renders (ms)
@@ -114,6 +118,8 @@ export class UI {
   private state: UIState
   private timer: ReturnType<typeof setInterval> | null = null
   private isActive = false
+
+  private shouldRenderDynamicElements
   private isRendering = false // lock to prevent concurrent renders
   private lastRenderTime = 0 // Timestamp of last render
   private renderTimer: ReturnType<typeof setTimeout> | null = null // Timer for debounced rendering
@@ -123,10 +129,9 @@ export class UI {
   private spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
   private spinnerIndex = 0
 
-  constructor(mode: SyncMode) {
-    // super();
+  constructor(opts?: NewUIOptions) {
     this.state = {
-      mode,
+      mode: null,
       status: UIStatus.IDLE,
       operationResult: null,
       operationsStats: {
@@ -138,6 +143,8 @@ export class UI {
       messages: [],
       syncHistory: [],
     }
+
+    this.shouldRenderDynamicElements = opts?.renderDynamicElements ?? true
 
     this.setupTerminationHandlers()
   }
@@ -165,7 +172,7 @@ export class UI {
     // Show the persistent header
     process.stdout.write(
       theme.primary(
-        `\nCC: Sync - ${theme.bold(this.state.mode.toUpperCase())} mode started at ${this.state.lastUpdated.toLocaleString()}`
+        `\nCC: Sync - ${theme.bold(this.state.mode?.toUpperCase())} mode started at ${this.state.lastUpdated.toLocaleString()}`
       ) +
         "\n" +
         theme.primary(symbols.lineDouble.repeat(process.stdout.columns || 80)) +
@@ -188,6 +195,10 @@ export class UI {
       // )
       stripAnsi(text)
     )
+  }
+
+  setMode(mode: SyncMode) {
+    this.updateState({ mode })
   }
 
   start(): void {
@@ -218,6 +229,7 @@ export class UI {
 
   stop(): void {
     this.isActive = false
+    this.updateState({ status: UIStatus.IDLE })
     if (this.timer) {
       clearInterval(this.timer)
       this.timer = null
@@ -645,6 +657,8 @@ export class UI {
   // This renders the dynamic elements that change frequently with logUpdate
   private renderDynamicElements(): void {
     if (!this.isActive) return
+
+    if (!this.shouldRenderDynamicElements) return
 
     this.isRendering = true
 

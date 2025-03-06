@@ -10,6 +10,6 @@
     "**/dist": true
   },
   "search.exclude": {
-    "**/dist/*/**": true,
-  },
+    "**/dist/*/**": true
+  }
 }

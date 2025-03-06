@@ -4,5 +4,12 @@
     "source.fixAll.eslint": "always"
   },
   "eslint.useFlatConfig": true,
-  "editor.formatOnSave": true
+  "editor.formatOnSave": true,
+  "files.exclude": {
+    "**/node_modules": true,
+    "**/dist": true
+  },
+  "search.exclude": {
+    "**/dist/*/**": true,
+  },
 }

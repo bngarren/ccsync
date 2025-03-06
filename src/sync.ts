@@ -1571,9 +1571,9 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       // Handle file deletions or renames
       this.watcher.on("unlink", this.handleWatchOnUnlink.bind(this))
 
-      this.watcher.on("all", (ev, path) => {
-        console.debug(ev, path)
-      })
+      // this.watcher.on("all", (ev, path) => {
+      //   console.debug(ev, path)
+      // })
 
       this.watcher.on("error", (error) => {
         const watcherError = AppError.fatal(

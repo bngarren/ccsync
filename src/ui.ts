@@ -209,7 +209,7 @@ export class UI {
       if (this.isActive) {
         // Update spinner index
         this.spinnerIndex = (this.spinnerIndex + 1) % this.spinnerFrames.length
-        this.renderDynamicElements()
+        this.queueDynamicRender({ immediate: true }) // Spinner updates should be immediate
       }
     }, 100)
 
@@ -242,7 +242,7 @@ export class UI {
     this.state = { ...this.state, ...update }
 
     // Queue a render with debouncing preserved
-    this.queueRender()
+    this.queueDynamicRender()
   }
 
   updateUIStatus(newStatus: UIStatus): void {
@@ -351,7 +351,7 @@ export class UI {
     this.clearMessages()
 
     // After logging static content, re-render dynamic elements
-    this.renderDynamicElements()
+    this.queueDynamicRender()
     this.syncsComplete++
   }
 
@@ -383,7 +383,7 @@ export class UI {
     }
 
     // Make sure dynamic elements are still rendered
-    this.renderDynamicElements()
+    this.queueDynamicRender()
   }
 
   private addToHistory(output: string): void {
@@ -617,18 +617,25 @@ export class UI {
     )
   }
 
-  private queueRender(): void {
+  private queueDynamicRender(options: { immediate?: boolean } = {}): void {
     if (!this.isActive) return
 
-    // If already rendering, don't queue another render
-    if (this.isRendering || this.renderTimer) return
+    // If already rendering, we can't do immediate anyway
+    if (this.isRendering) return
 
-    // Determine delay before next render
+    // For immediate renders that can't wait (like spinner animation)
+    if (options.immediate && !this.renderTimer) {
+      this.renderDynamicElements()
+      return
+    }
+
+    // Don't queue another render if one is already queued
+    if (this.renderTimer) return
+
     const now = Date.now()
     const timeSinceLastRender = now - this.lastRenderTime
     const delay = Math.max(0, MIN_RENDER_INTERVAL - timeSinceLastRender)
 
-    // Queue the render with appropriate delay
     this.renderTimer = setTimeout(() => {
       this.renderTimer = null
       this.renderDynamicElements()

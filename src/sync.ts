@@ -23,9 +23,11 @@ import {
   resolveTargetPath,
   processPath,
   filterFilesOnly,
+  getRelativePath,
 } from "./utils"
 import { KeyHandler } from "./keys"
-import { setTimeout } from "node:timers/promises"
+import { setTimeout as setTimeoutPromise } from "node:timers/promises"
+import { setTimeout } from "node:timers"
 import { glob } from "glob"
 import { AppError, ErrorSeverity, getErrorMessage } from "./errors"
 import { UI, UIMessageType } from "./ui"
@@ -130,7 +132,7 @@ export class SyncManager {
     if (changedFiles && changedFiles.size > 0) return false
 
     const timeSinceLastPlan = Date.now() - this.lastSyncPlan.timestamp
-    return timeSinceLastPlan < this.config.advanced.cache_ttl
+    return timeSinceLastPlan < this.config.advanced.cacheTTL
   }
 
   public invalidateCache(): void {
@@ -269,9 +271,11 @@ export class SyncManager {
           changedFiles
         )
 
-        this.log.warn(
-          `missing computers: ${ruleResolution.missingComputerIds.join(" , ")}`
-        )
+        if (ruleResolution.missingComputerIds.length > 0) {
+          this.log.warn(
+            `missing computers: ${ruleResolution.missingComputerIds.join(" , ")}`
+          )
+        }
 
         // Add resolved files to the plan
         plan.resolvedFileRules = ruleResolution.resolvedFileRules
@@ -404,7 +408,7 @@ export class SyncManager {
     )
 
     const copyResult = await copyFilesToComputer(filesToCopy, computer.path)
-    await setTimeout(100) // Small delay between computers
+    await setTimeoutPromise(100) // Small delay between computers
 
     this.log.info(
       {
@@ -582,11 +586,13 @@ export class SyncManager {
     // Determine overall operation status
     let status = SyncStatus.SUCCESS
 
-    if (summary.successfulFiles === 0 && summary.failedFiles > 0) {
+    if (summary.totalFiles === 0) {
+      status = SyncStatus.WARNING
+    } else if (summary.successfulFiles === 0 && summary.failedFiles > 0) {
       status = SyncStatus.ERROR
     } else if (summary.failedFiles > 0) {
       status = SyncStatus.PARTIAL
-    } else if (warnings > 0) {
+    } else if (warnings > 0 || summary.missingComputers > 0) {
       status = SyncStatus.WARNING
     }
 
@@ -1091,6 +1097,12 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
 
 class WatchModeController extends BaseController<WatchSyncEvents> {
   private watcher: ReturnType<typeof watch> | null = null
+
+  /**
+   * The initial set of files to be watched that were passed to the watcher. The actual, *current* set of watched files is {@link watchedFiles}, which will be different than 'originalWatchedFiles' when watched files are renamed, moved, or deleted during watch mode.
+   */
+  private originalWatchedFiles: Set<string> = new Set()
+
   /**
    * Files being watched or tracked for file changes
    */
@@ -1102,12 +1114,21 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
 
   private isInitialSync = true
 
+  // Debouncing/throttling
+  private onChangeSyncInProgress = false
+  private onChangeSyncDebounceTimer: ReturnType<typeof setTimeout> | null = null
+  private readonly debounceDelay = 200 // ms to wait for additional changes before syncing
+
   constructor(
     syncManager: SyncManager,
     private config: Config,
     ui: UI | null = null
   ) {
     super(syncManager, ui)
+  }
+
+  getWatchedFiles() {
+    return [...this.watchedFiles]
   }
 
   async start(): Promise<void> {
@@ -1128,7 +1149,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
 
       // Keep running until state changes
       while (this.syncManager.getState() === SyncManagerState.RUNNING) {
-        await new Promise((resolve) => setTimeout(100, resolve))
+        await new Promise((resolve) => setTimeoutPromise(100, resolve))
       }
     } catch (error) {
       // Convert error to AppError if needed
@@ -1162,7 +1183,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     return this.isInitialSync ? undefined : this.changedFiles
   }
 
-  private async performSyncCycle(changedPath?: string): Promise<void> {
+  private async performSyncCycle(): Promise<void> {
     if (this.syncManager.getState() !== SyncManagerState.RUNNING) {
       throw AppError.error(
         "Cannot perform sync when not in RUNNING state",
@@ -1173,40 +1194,27 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     // Update UI status
     this.ui?.startSyncOperation()
 
-    this.log.debug(`watchController started a new sync cycle.`)
-
     // Performance tracking
     const syncCycleStartTime = process.hrtime.bigint()
-
-    // If this is triggered by a file change, update the changedFiles set
-    if (changedPath) {
-      const relativePath = processPath(
-        path.relative(this.config.sourceRoot, changedPath)
-      )
-      this.log.debug(
-        `watchController was triggered by file change: '${relativePath}'`
-      )
-
-      this.changedFiles.add(relativePath)
-
-      this.log.trace(
-        { changedFiles: [...this.changedFiles] },
-        "updated changedFiles"
-      )
-
-      // Update UI to show sync is starting
-
-      this.ui?.addMessage(
-        UIMessageType.INFO,
-        `File changed: ${path.basename(changedPath)}`
-      )
-    }
 
     try {
       const syncPlan = await this.syncManager.createSyncPlan({
         changedFiles: this.isInitialSync ? undefined : this.changedFiles,
       })
+
       this.emit(SyncEvent.SYNC_PLANNED, syncPlan)
+
+      // If we're not in initial sync and have no files to sync, add a warning
+      if (
+        !this.isInitialSync &&
+        this.changedFiles.size > 0 &&
+        syncPlan.resolvedFileRules.length === 0
+      ) {
+        this.log.warn(
+          "No files matched for sync despite having changed files",
+          { changedFiles: [...this.changedFiles] }
+        )
+      }
 
       // Add each error message to UI
       displaySyncPlanIssues(syncPlan, this.ui, this.log)
@@ -1237,6 +1245,8 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
 
       // Perform sync
       const syncResult = await this.syncManager.performSync(syncPlan)
+
+      this.log.debug(`${this.isInitialSync ? "Initial " : ""}Sync Complete.`)
 
       // Emit appropriate event based on sync type
       if (this.isInitialSync) {
@@ -1324,7 +1334,10 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     this.log.debug("watchController keyHandler started")
   }
 
-  private async resolveWatchPatterns(): Promise<string[]> {
+  /**
+   * Compiles a Set of unique file paths from the sync rules in the config, using `glob` to match files based on glob patterns
+   */
+  private async resolveFilesForWatcher(): Promise<void> {
     try {
       // Get all unique file paths from glob patterns
       const uniqueSourcePaths = new Set<string>()
@@ -1346,8 +1359,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       // Convert to array and store in watchedFiles
       const patterns = Array.from(uniqueSourcePaths)
       this.watchedFiles = new Set(patterns)
-
-      return patterns
+      this.originalWatchedFiles = new Set(this.watchedFiles)
     } catch (error) {
       const appError = AppError.fatal(
         `Failed to resolve watch patterns: ${getErrorMessage(error)}`,
@@ -1359,59 +1371,213 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     }
   }
 
+  /**
+   * Identifies the file paths that were in the original watcher and compares them to the files currently in the watcher. Then reports these file paths to the UI.
+   *
+   * This allows warning messages to be added to the UI when watched files are renamed or deleted, which removes them from the current watched files
+   */
+  private reportMissingWatchedFiles() {
+    if (this.originalWatchedFiles.size === 0 || this.watchedFiles.size === 0)
+      return
+
+    // Set.difference() is a Node 22 built in
+    // const noLongerWatchedFiles = this.originalWatchedFiles.difference(
+    //   this.watchedFiles
+    // )
+
+    // Manually calculate the difference
+    const noLongerWatchedFiles = new Set(
+      [...this.originalWatchedFiles].filter((f) => !this.watchedFiles.has(f))
+    )
+
+    if (noLongerWatchedFiles.size > 0) {
+      const relativePaths = [...noLongerWatchedFiles].map((f) => {
+        return `${getRelativePath(f, this.config.sourceRoot, { includeRootName: true })}`
+      })
+      this.ui?.addMessage(
+        UIMessageType.WARNING,
+        `The following files were removed or renamed and are no longer being watched: ${relativePaths.join(", ")}`,
+        "Restart watch mode to update watched files"
+      )
+      this.log.warn(
+        { noLongerWatchedFiles: relativePaths },
+        "Files are missing compared to when the watcher was initiated. Suspect they were renamed or deleted."
+      )
+    }
+  }
+
+  private async handleWatcherOnChange(changedPath: string) {
+    this.log.info({ changedPath }, `watchController watcher detected change`)
+
+    if (this.syncManager.getState() !== SyncManagerState.RUNNING) {
+      return
+    }
+
+    // check if we are no longer watching files from the original and add warning messages to the UI
+    this.reportMissingWatchedFiles()
+
+    // Add the changed file to our set of pending changes
+    const normalizedPath = processPath(changedPath)
+    this.changedFiles.add(normalizedPath)
+
+    this.log.trace(
+      { changedFiles: [...this.changedFiles] },
+      "Added to pending changes, waiting for more changes before syncing"
+    )
+
+    // If we already have a timer, clear it
+    if (this.onChangeSyncDebounceTimer) {
+      clearTimeout(this.onChangeSyncDebounceTimer)
+      this.onChangeSyncDebounceTimer = null
+    }
+
+    // If sync is in progress, just record the file change for next sync
+    if (this.onChangeSyncInProgress) {
+      this.log.debug("Sync already in progress, queueing change for next sync")
+      return
+    }
+
+    // Set debounce timer to allow more file changes to be batched
+    this.onChangeSyncDebounceTimer = setTimeout(async () => {
+      // Take a snapshot of current changes to avoid race conditions
+      const filesToSync = new Set(this.changedFiles)
+
+      this.log.info(
+        { fileCount: filesToSync.size },
+        `watchController starting sync after debounce with ${filesToSync.size} changed files`
+      )
+
+      this.onChangeSyncDebounceTimer = null
+
+      // Only proceed if we have changes and no sync is in progress
+      if (this.changedFiles.size === 0 || this.onChangeSyncInProgress) {
+        this.log.warn(
+          "No changes to sync or sync already in progress, aborting debounced sync"
+        )
+        return
+      }
+
+      try {
+        this.onChangeSyncInProgress = true
+        this.log.debug("Beginning performSyncCycle for debounced changes")
+        await this.performSyncCycle()
+
+        // After successful sync, remove the files we just synced from the changed files set
+        for (const file of filesToSync) {
+          this.changedFiles.delete(file)
+        }
+      } catch (error) {
+        if (
+          error instanceof AppError &&
+          error.severity === ErrorSeverity.FATAL
+        ) {
+          this.emit(
+            SyncEvent.SYNC_ERROR,
+            AppError.fatal(
+              `Unexpected error during sync: ${getErrorMessage(error)}`,
+              "WatchModeController.performSyncCycle",
+              error
+            )
+          )
+        } else {
+          throw error
+        }
+      } finally {
+        this.onChangeSyncInProgress = false
+
+        // Check if more changes accumulated during sync
+        if (this.changedFiles.size > 0) {
+          this.log.info(
+            { pendingChanges: this.changedFiles.size },
+            "Additional changes detected during sync, scheduling another sync"
+          )
+
+          // Schedule another sync for any changes that accumulated during this sync
+          this.onChangeSyncDebounceTimer = setTimeout(() => {
+            this.onChangeSyncDebounceTimer = null
+            // This will trigger another sync cycle if still needed
+            this.watcher?.emit("change", [...this.changedFiles][0])
+          }, this.debounceDelay)
+        }
+      }
+    }, this.debounceDelay)
+  }
+
+  private async handleWatchOnUnlink(unlinkedPath: string) {
+    if (this.syncManager.getState() !== SyncManagerState.RUNNING) {
+      return
+    }
+
+    this.log.info(
+      { unlinkedPath },
+      `watchController watcher detected file removal or rename`
+    )
+
+    // Remove from watched files set
+    const normalizedPath = processPath(unlinkedPath)
+    if (this.watchedFiles.has(normalizedPath)) {
+      this.watchedFiles.delete(normalizedPath)
+
+      // Notify user through UI
+      if (this.ui) {
+        const filename = path.basename(unlinkedPath)
+        this.ui.addMessage(
+          UIMessageType.WARNING,
+          `File '${filename}' was removed or renamed and will no longer be watched`,
+          "Restart watch mode to update watched files"
+        )
+        this.ui.writeMessages({ persist: true, clearMessagesOnWrite: true })
+      }
+
+      this.log.warn(
+        {
+          removedPath: getRelativePath(unlinkedPath, this.config.sourceRoot, {
+            includeRootName: true,
+          }),
+        },
+        "File was removed or renamed and will no longer be watched"
+      )
+    }
+  }
+
   private async setupWatcher(): Promise<void> {
     try {
       // Get actual file paths to watch
-      const patterns = await this.resolveWatchPatterns()
+      await this.resolveFilesForWatcher()
 
-      this.watcher = watch(patterns, {
+      const usePolling =
+        process.env.CI === "true" || this.config.advanced.usePolling
+
+      this.watcher = watch([...this.watchedFiles], {
         ignoreInitial: true,
+        usePolling,
         awaitWriteFinish: {
-          stabilityThreshold: 300,
-          pollInterval: 100,
+          stabilityThreshold: 1000,
+          pollInterval: 100, // ms
         },
       })
 
       this.log.debug(
-        patterns,
-        `watchController set up a chokidar watcher with patterns:`
+        {
+          watchedFiles: [...this.watchedFiles].map((f) =>
+            getRelativePath(f, this.config.sourceRoot, {
+              includeRootName: true,
+            })
+          ),
+          strategy: usePolling ? "polling" : "native OS events",
+        },
+        `watchController set up a chokidar watcher with:`
       )
 
-      this.watcher.on("change", async (changedPath) => {
-        this.log.info(
-          { changedPath },
-          `watchController watcher detected change`
-        )
+      // Handle file change
+      this.watcher.on("change", this.handleWatcherOnChange.bind(this))
 
-        if (this.syncManager.getState() !== SyncManagerState.RUNNING) {
-          return
-        }
+      // Handle file deletions or renames
+      this.watcher.on("unlink", this.handleWatchOnUnlink.bind(this))
 
-        try {
-          await this.performSyncCycle(changedPath)
-        } catch (error) {
-          // Most error handling is done within performSyncCycle,
-          // but fatal errors might be thrown
-          if (
-            error instanceof AppError &&
-            error.severity === ErrorSeverity.FATAL
-          ) {
-            this.emit(
-              SyncEvent.SYNC_ERROR,
-              AppError.fatal(
-                `Unexpected error during sync: ${getErrorMessage(error)}`,
-                "WatchModeController.performSyncCycle",
-                error
-              )
-            )
-          } else {
-            // For non-fatal errors, just log and continue watching
-            this.log.error(
-              `Unexpected problem occurred during sync: ${getErrorMessage(error)}`
-            )
-          }
-        }
-      })
+      // this.watcher.on("all", (ev, path) => {
+      //   console.debug(ev, path)
+      // })
 
       this.watcher.on("error", (error) => {
         const watcherError = AppError.fatal(
@@ -1420,6 +1586,13 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
           error
         )
         this.emit(SyncEvent.SYNC_ERROR, watcherError)
+      })
+
+      return await new Promise((resolve) => {
+        this.watcher?.on("ready", () => {
+          this.log.info("watcher is ready")
+          resolve()
+        })
       })
     } catch (error) {
       throw AppError.fatal(
@@ -1432,6 +1605,11 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
 
   private async cleanup(): Promise<void> {
     await this.cleanupBase()
+
+    if (this.onChangeSyncDebounceTimer) {
+      clearTimeout(this.onChangeSyncDebounceTimer)
+      this.onChangeSyncDebounceTimer = null
+    }
 
     if (this.watcher) {
       try {

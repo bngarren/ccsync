@@ -73,9 +73,9 @@ export interface ValidationResult {
 export enum SyncStatus {
   /** No sync operation has been attempted yet */
   NONE = "none",
-  /** All files were synced successfully with no warnings */
+  /** All files were synced successfully with no sync-related warnings. */
   SUCCESS = "success",
-  /** All files synced successfully but with some warnings */
+  /** All files synced successfully but with some sync-related warnings */
   WARNING = "warning",
   /** Operation failed completely with errors */
   ERROR = "error",
@@ -234,3 +234,9 @@ export function createTypedEmitter<T extends Record<string, any>>() {
 }
 
 export type TargetType = "directory" | "file"
+
+// ---- HELPERS ----
+
+export type DeepPartial<T> = {
+  [P in keyof T]?: T[P] extends object ? DeepPartial<T[P]> : T[P]
+}

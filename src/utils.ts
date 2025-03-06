@@ -201,6 +201,41 @@ export const toSystemPath = (filepath: string): string => {
   return process.platform === "win32" ? filepath.replace(/\//g, "\\") : filepath
 }
 
+/**
+ * Returns a user-friendly display path of a file relative to the given root directory
+ *
+ * @param filePath Absolute path to the file
+ * @param rootPath Absolute path to the root directory
+ * @param options Options for formatting the relative path
+ * @returns A formatted relative path for display
+ */
+export function getRelativePath(
+  filePath: string,
+  rootPath: string,
+  options: {
+    includeRootName?: boolean // Include the source root directory name
+    normalize?: boolean // Normalize path separators to forward slashes
+  } = {}
+): string {
+  const { includeRootName = false, normalize = true } = options
+
+  // Get the relative path (will use OS-specific separators)
+  let relativePath = path.relative(rootPath, filePath)
+
+  // Optionally include root dir name
+  if (includeRootName) {
+    const rootName = path.basename(rootPath)
+    relativePath = path.join(rootName, relativePath)
+  }
+
+  // Normalize slashes for display if requested (useful for consistent UI)
+  if (normalize) {
+    relativePath = normalizePath(relativePath)
+  }
+
+  return relativePath
+}
+
 export const isRecursiveGlob = (pattern: string): boolean => {
   // Match any pattern containing ** which indicates recursion
   const result = pattern.includes("**")
@@ -553,14 +588,29 @@ export async function resolveSyncRules(
       const matchedSourceFiles = await filterFilesOnly(matchedPaths)
 
       // Filter for 'selectedFiles', i.e. changed files from watch mode
-      const filesToResolve = selectedFiles
-        ? matchedSourceFiles.filter((file) => {
-            const relPath = processPath(path.relative(config.sourceRoot, file))
-            return Array.from(selectedFiles).some(
-              (changed) => processPath(changed) === relPath
-            )
-          })
-        : matchedSourceFiles
+      let filesToResolve
+
+      // TODO We should mandate whether the passed 'selectedFiles' are absolute or relative (to sourceRoot). Though we are accounting for either here, this feels messy.
+      if (selectedFiles) {
+        filesToResolve = matchedSourceFiles.filter((file) => {
+          // Get the absolute path of the file
+          const absolutePath = processPath(file)
+
+          // Check if this absolute path exists in selectedFiles
+          if (selectedFiles.has(absolutePath)) {
+            return true
+          }
+
+          // Also try checking with relative path (more reliable across platforms)
+          const relPath = getRelativePath(file, config.sourceRoot)
+          const relPathMatches = Array.from(selectedFiles).some(
+            (selectedFile) => pathsAreEqual(relPath, selectedFile)
+          )
+          return relPathMatches
+        })
+      } else {
+        filesToResolve = matchedSourceFiles
+      }
 
       if (filesToResolve.length === 0) {
         resolvedResult.errors.push(

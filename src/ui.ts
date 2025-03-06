@@ -277,8 +277,25 @@ export class UI {
     })
   }
 
+  private writeOutput(output: string): void {
+    // First clear any dynamic content
+    logUpdate.clear()
+
+    // Refresh the screen with history
+    this.refreshScreen()
+
+    // Store in history before logging
+    this.addToHistory(output)
+
+    // Write the new output
+    process.stdout.write(output)
+
+    // After logging static content, re-render dynamic elements
+    this.renderDynamicElements()
+  }
+
   startSyncOperation(
-    options: { clearMessages: boolean } = { clearMessages: true }
+    options: { clearMessages: boolean } = { clearMessages: false }
   ): void {
     const updates: Partial<UIState> = {
       status: UIStatus.SYNCING,
@@ -309,15 +326,14 @@ export class UI {
       },
       computerResults: result.computerResults,
       lastUpdated: new Date(),
-      messages: this.state.messages,
     }
 
     // Generate the current log content
     const header = this.renderHeaderLine()
     const computerResults = this.renderComputerResults()
-    const messages = this.renderMessages()
+    const messages = this.renderMessages("\n")
     const separator = theme.dim("─".repeat(process.stdout.columns || 80))
-    const currentOutput = `${header}\n${computerResults}${messages}\n${separator}`
+    const currentOutput = `${header}\n${computerResults}${messages}\n${separator}\n`
 
     // Refresh the screen with history and new output
     this.refreshScreen()
@@ -326,20 +342,13 @@ export class UI {
     this.addToHistory(currentOutput)
 
     // Write the new output with colors
-    process.stdout.write(
-      header +
-        "\n" +
-        computerResults +
-        "\n" +
-        messages +
-        "\n" +
-        theme.dim("─".repeat(process.stdout.columns || 80)) +
-        "\n"
-    )
+    process.stdout.write(currentOutput)
 
     this.log.debug(
       `UI received a 'completedOperation: ${result.status.toUpperCase()}`
     )
+
+    this.clearMessages()
 
     // After logging static content, re-render dynamic elements
     this.queueDynamicRender()
@@ -511,7 +520,7 @@ export class UI {
     return output
   }
 
-  private renderMessages(): string {
+  private renderMessages(prefix = ""): string {
     if (this.state.messages.length === 0) {
       return ""
     }
@@ -527,7 +536,7 @@ export class UI {
       byType[msg.type].push(msg)
     })
 
-    const output: string[] = ["\n"]
+    const output: string[] = [prefix]
 
     // Render errors first
     if (byType[UIMessageType.ERROR].length > 0) {
@@ -631,19 +640,6 @@ export class UI {
       this.renderTimer = null
       this.renderDynamicElements()
     }, delay)
-  }
-
-  // This logs the sync results to the console and doesn't use logUpdate
-  private logSyncSummary(): void {
-    const header = this.renderHeaderLine()
-    const computerResults = this.renderComputerResults()
-    const messages = this.renderMessages()
-
-    // Log the static output
-    console.log(header)
-    console.log(computerResults)
-    console.log(messages)
-    console.log(theme.dim("─".repeat(process.stdout.columns || 80))) // Separator line
   }
 
   // This renders the dynamic elements that change frequently with logUpdate

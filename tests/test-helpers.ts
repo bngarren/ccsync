@@ -12,7 +12,7 @@ import * as p from "@clack/prompts"
 import { expect, mock } from "bun:test"
 import { DEFAULT_CONFIG, type SyncRule } from "../src/config"
 import * as yaml from "yaml"
-import type { IAppError } from "../src/errors"
+import { getErrorMessage, type IAppError } from "../src/errors"
 import stripAnsi from "strip-ansi"
 
 /**
@@ -296,14 +296,22 @@ export class TempCleaner {
 }
 
 /**
- * Creates a promise that resolves when an event is emitted or rejects on error/timeout
+ * Waits for an event to be emitted after executing a trigger function.
+ * This ensures the event listener is registered before the action that causes the event.
+ *
+ * @param emitter The event emitter object
+ * @param awaitedEvent The event to wait for
+ * @param triggerFn The function to execute that will trigger the event
+ * @param timeoutMs Maximum time to wait for the event in milliseconds
+ * @returns Promise that resolves with the event data
  */
-export function waitForEvent<T>(
+export function waitForEventWithTrigger<T>(
   emitter: {
     on: (event: any, callback: any) => void
     off: (event: any, callback: any) => void
   },
   awaitedEvent: SyncEvent,
+  triggerFn?: () => Promise<void>, // Function that triggers the event
   timeoutMs = 5000
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -330,16 +338,25 @@ export function waitForEvent<T>(
     }
 
     // Clean up listeners
-    // The specific event listeners (handleSuccess and handleError) are removed so they don't continue to listen for events after the promise has settled
     const cleanup = () => {
       clearTimeout(timeout)
       emitter.off(awaitedEvent, handleSuccess)
       emitter.off(SyncEvent.SYNC_ERROR, handleError)
     }
 
-    // Register listeners
+    // Register listeners FIRST
     emitter.on(awaitedEvent, handleSuccess)
     emitter.on(SyncEvent.SYNC_ERROR, handleError)
+
+    // THEN execute the trigger function
+    if (triggerFn) {
+      triggerFn().catch((error) => {
+        cleanup()
+        reject(
+          new Error(`Failed to execute trigger: ${getErrorMessage(error)}`)
+        )
+      })
+    }
   })
 }
 
@@ -485,7 +502,11 @@ export function expectComputerResult(
  * @param value
  * @returns value (cast to T) or it fails the expect
  */
-export const expectToBeDefined = <T>(value: T | undefined | null): T => {
-  expect(value).toBeDefined() // Fail the test if value is undefined or null
+export const expectToBeDefined = <T>(
+  value: T | undefined | null,
+  name?: string
+): T => {
+  const msg = name && `'${name}' should not be undefined!`
+  expect(value, msg).toBeDefined() // Fail the test if value is undefined or null
   return value as T // Return the value, which TypeScript can now narrow
 }

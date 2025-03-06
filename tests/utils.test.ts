@@ -157,7 +157,7 @@ describe("Computer Discovery", () => {
     expect(computers[0]).toMatchObject({
       id: "1",
       path: path.join(computersDir, "1"),
-      shortPath: expect.stringContaining("1"),
+      shortPath: expect.stringContaining("1") as string,
     })
   })
 
@@ -338,11 +338,11 @@ describe("Path Handling", () => {
 
   test("handles empty and invalid inputs", () => {
     expect(processPath("")).toBe("")
-    expect(() => processPath(undefined as any)).toThrow(TypeError)
-    expect(() => processPath(null as any)).toThrow(TypeError)
+    expect(() => processPath(undefined as unknown as string)).toThrow(TypeError)
+    expect(() => processPath(null as unknown as string)).toThrow(TypeError)
   })
 
-  test("handles path comparison based on OS", async () => {
+  test("handles path comparison based on OS", () => {
     // This test verifies path comparison works correctly on both Windows and Unix
     const tests = [
       {
@@ -1240,7 +1240,7 @@ describe("File Operations", () => {
       await fs.writeFile(path.join(sourceDir, "program.lua"), "print('test')")
       await fs.mkdir(path.join(computersDir, "1"), { recursive: true })
 
-      const spy = spyOn(fs, "copyFile").mockImplementation(async () => {
+      const spy = spyOn(fs, "copyFile").mockImplementation(() => {
         const err = new Error(
           "EBUSY: resource busy or locked"
         ) as NodeJS.ErrnoException

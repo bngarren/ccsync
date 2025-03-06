@@ -29,6 +29,7 @@ afterAll(async () => {
   console.log = testLog
 
   // small delay to finish writing logs
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
   if (USE_FILE_LOGGING) {
     await setTimeout(100)
   }

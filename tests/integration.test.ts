@@ -88,11 +88,12 @@ describe("Integration: SyncManager", () => {
 
     try {
       // Start manual mode and wait for first sync
-      const manualController = await syncManager.startManualMode()
+      const { controller, start } = syncManager.initManualMode()
 
       const syncResult = await waitForEventWithTrigger<SyncOperationResult>(
-        manualController,
-        SyncEvent.SYNC_COMPLETE
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        start
       )
 
       expect(syncResult.status).toBe(SyncStatus.SUCCESS)
@@ -161,12 +162,13 @@ describe("Integration: SyncManager", () => {
     if (!config) throw new Error("Failed to load config")
     const syncManager = new SyncManager(config)
 
-    const watchController = await syncManager.startWatchMode()
+    const { controller, start } = syncManager.initWatchMode()
     try {
       const initialSyncResult =
         await waitForEventWithTrigger<SyncOperationResult>(
-          watchController,
-          SyncEvent.INITIAL_SYNC_COMPLETE
+          controller,
+          SyncEvent.INITIAL_SYNC_COMPLETE,
+          start
         )
 
       // Verify initial sync results
@@ -201,7 +203,7 @@ describe("Integration: SyncManager", () => {
 
       const triggeredSyncResult =
         await waitForEventWithTrigger<SyncOperationResult>(
-          watchController,
+          controller,
           SyncEvent.SYNC_COMPLETE
         )
 
@@ -295,12 +297,13 @@ describe("Integration: SyncManager", () => {
     if (!config) throw new Error("Failed to load config")
 
     const syncManager = new SyncManager(config)
-    const manualController = await syncManager.startManualMode()
+    const { controller, start } = syncManager.initManualMode()
 
     try {
       const syncResult = await waitForEventWithTrigger<SyncOperationResult>(
-        manualController,
-        SyncEvent.SYNC_COMPLETE
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        start
       )
 
       expect(syncResult.status).toBe(SyncStatus.SUCCESS)
@@ -315,7 +318,6 @@ describe("Integration: SyncManager", () => {
         verifyComputer2Files(path.join(computersDir, "2")),
       ])
     } finally {
-      await manualController.stop()
       await syncManager.stop()
     }
   })
@@ -348,9 +350,9 @@ describe("Integration: SyncManager", () => {
 
   async function verifyComputer2Files(computer2Dir: string) {
     // Verify lib files exist in root lib directory
-    await expect(
-      fs.exists(path.join(computer2Dir, "lib/utils.lua"))
-    ).resolves.toBe(true)
+    expect(fs.exists(path.join(computer2Dir, "lib/utils.lua"))).resolves.toBe(
+      true
+    )
 
     // Check all directory has files with preserved structure
     const allDirFiles = await Promise.all([
@@ -413,16 +415,16 @@ describe("Integration: SyncManager", () => {
     if (!config) throw new Error("Failed to load config")
 
     const syncManager = new SyncManager(config)
-    let watchController
 
     try {
-      watchController = await syncManager.startWatchMode()
+      const { controller, start } = syncManager.initWatchMode()
 
       // Step 1: Wait for initial sync to complete
       const initialSyncResult =
         await waitForEventWithTrigger<SyncOperationResult>(
-          watchController,
-          SyncEvent.INITIAL_SYNC_COMPLETE
+          controller,
+          SyncEvent.INITIAL_SYNC_COMPLETE,
+          start
         )
 
       // Verify initial sync
@@ -471,16 +473,17 @@ describe("Integration: SyncManager", () => {
       expect(thirdContent).toBe("print('Third')")
 
       // Step 2: Modify one file to trigger watch
-      await fs.writeFile(
-        path.join(sourceDir, "second.lua"),
-        "print('Updated Second')"
-      )
-
       // Step 3: Wait for the file change sync to complete
       const fileChangeSyncResult =
         await waitForEventWithTrigger<SyncOperationResult>(
-          watchController,
-          SyncEvent.SYNC_COMPLETE
+          controller,
+          SyncEvent.SYNC_COMPLETE,
+          async () => {
+            await fs.writeFile(
+              path.join(sourceDir, "second.lua"),
+              "print('Updated Second')"
+            )
+          }
         )
 
       // Verify change-triggered sync
@@ -631,12 +634,13 @@ describe("Integration: SyncManager", () => {
     const syncManager = new SyncManager(config)
 
     try {
-      const manualController = await syncManager.startManualMode()
+      const { controller, start } = syncManager.initManualMode()
 
       // Wait for sync completion with explicit timeout
       const syncResult = await waitForEventWithTrigger<SyncOperationResult>(
-        manualController,
-        SyncEvent.SYNC_COMPLETE
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        start
       )
 
       // Verify overall success
@@ -760,11 +764,12 @@ describe("Integration: SyncManager", () => {
 
     try {
       // Start manual mode and wait for first sync
-      const manualController = await syncManager.startManualMode()
+      const { controller, start } = syncManager.initManualMode()
 
       const syncResult = await waitForEventWithTrigger<SyncOperationResult>(
-        manualController,
-        SyncEvent.SYNC_COMPLETE
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        start
       )
 
       expect(syncResult.status).toBe(SyncStatus.WARNING)
@@ -855,14 +860,15 @@ describe("Integration: SyncManager", () => {
 
     const syncManager = new SyncManager(config)
 
-    const watchController = await syncManager.startWatchMode()
+    const { controller, start } = syncManager.initWatchMode()
 
     try {
       // Wait for initial sync to complete
       const initialSyncResult =
         await waitForEventWithTrigger<SyncOperationResult>(
-          watchController,
-          SyncEvent.INITIAL_SYNC_COMPLETE
+          controller,
+          SyncEvent.INITIAL_SYNC_COMPLETE,
+          start
         )
 
       // Verify initial sync results
@@ -874,7 +880,7 @@ describe("Integration: SyncManager", () => {
 
       const batchedSyncResult =
         await waitForEventWithTrigger<SyncOperationResult>(
-          watchController,
+          controller,
           SyncEvent.SYNC_COMPLETE,
           async () => {
             // This runs after event listeners are registered but before waiting for the event
@@ -1017,12 +1023,13 @@ describe("Integration: UI", () => {
 
     try {
       // Start manual mode and wait for sync
-      const manualController = await syncManager.startManualMode()
+      const { controller, start } = syncManager.initManualMode()
 
       // Wait for the sync to complete
       const syncResult = await waitForEventWithTrigger<SyncOperationResult>(
-        manualController,
-        SyncEvent.SYNC_COMPLETE
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        start
       )
 
       // Check results
@@ -1075,12 +1082,13 @@ describe("Integration: UI", () => {
 
     try {
       // Start manual mode and wait for sync
-      const manualController = await syncManager.startManualMode()
+      const { controller, start } = syncManager.initManualMode()
 
       // Wait for the sync to complete
       await waitForEventWithTrigger<SyncOperationResult>(
-        manualController,
-        SyncEvent.SYNC_COMPLETE
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        start
       )
 
       // Get the captured output
@@ -1129,12 +1137,13 @@ describe("Integration: UI", () => {
 
     try {
       // Start manual mode and wait for sync
-      const manualController = await syncManager.startManualMode()
+      const { controller, start } = syncManager.initManualMode()
 
       // Wait for the sync to complete
       const syncResult = await waitForEventWithTrigger<SyncOperationResult>(
-        manualController,
-        SyncEvent.SYNC_COMPLETE
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        start
       )
 
       // Verify the actual sync result structure for missing computers
@@ -1210,12 +1219,13 @@ describe("Integration: UI", () => {
 
     try {
       // Start manual mode and wait for sync
-      const manualController = await syncManager.startManualMode()
+      const { controller, start } = syncManager.initManualMode()
 
       // Wait for the sync to complete
       await waitForEventWithTrigger<SyncOperationResult>(
-        manualController,
-        SyncEvent.SYNC_COMPLETE
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        start
       )
 
       // Get the captured output
@@ -1265,24 +1275,26 @@ describe("Integration: UI", () => {
 
     try {
       // Start manual mode
-      const manualController = await syncManager.startManualMode()
+      const { controller, start } = syncManager.initManualMode()
 
       // First sync
       await waitForEventWithTrigger<SyncOperationResult>(
-        manualController,
-        SyncEvent.SYNC_COMPLETE
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        start
       )
 
       // Clear current output to analyze the next round
       outputCapture.clear()
 
-      // Trigger another sync by simulating a key press
-      manualController.performSyncCycle()
-
       // Wait for the second sync to complete
       await waitForEventWithTrigger<SyncOperationResult>(
-        manualController,
-        SyncEvent.SYNC_COMPLETE
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        async () => {
+          // Trigger another sync by simulating a key press
+          await controller.performSyncCycle()
+        }
       )
 
       // Get the captured output
@@ -1331,12 +1343,13 @@ describe("Integration: UI", () => {
     const syncManager = new SyncManager(config)
 
     try {
-      const watchController = await syncManager.startWatchMode()
+      const { controller, start } = syncManager.initWatchMode()
 
       // Wait for initial sync to complete
       await waitForEventWithTrigger<SyncOperationResult>(
-        watchController,
-        SyncEvent.INITIAL_SYNC_COMPLETE
+        controller,
+        SyncEvent.INITIAL_SYNC_COMPLETE,
+        start
       )
 
       // Clear existing output to only capture new messages
@@ -1360,7 +1373,7 @@ describe("Integration: UI", () => {
 
       const triggeredSyncResult =
         await waitForEventWithTrigger<SyncOperationResult>(
-          watchController,
+          controller,
           SyncEvent.SYNC_COMPLETE,
           async () => {
             // Modify source file to trigger watch

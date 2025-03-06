@@ -44,6 +44,7 @@ export class KeyHandler {
       process.stdin.resume()
 
       // Bind the handler
+      // eslint-disable-next-line @typescript-eslint/no-misused-promises
       this.currentHandler = this.handleKeypress.bind(this)
       process.stdin.removeAllListeners("data") // Remove any existing listeners
       process.stdin.on("data", this.currentHandler)

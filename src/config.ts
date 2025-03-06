@@ -370,7 +370,7 @@ export async function loadConfig(
     const resolvedPath = resolvePath(configFilePath)
     const file = await fs.readFile(resolvedPath, "utf-8")
 
-    const rawConfig = parse(file)
+    const rawConfig = parse(file) as unknown
 
     const parseResult = ConfigSchema.safeParse(rawConfig)
 
@@ -557,8 +557,7 @@ export function findCircularGroupReferences(
   groups: Record<string, ComputerGroup>
 ): string[] {
   // Helper to check if a string is a number (computer ID) or a group name
-  const isGroupName = (name: string) =>
-    isNaN(Number(name)) && groups[name] !== undefined
+  const isGroupName = (name: string) => isNaN(Number(name)) && groups[name]
 
   // Depth-first search to find cycles
   function dfs(

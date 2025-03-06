@@ -4,9 +4,9 @@ import logUpdate from "log-update"
 import figures from "figures"
 import chalk from "chalk"
 import {
+  SyncMode,
   SyncStatus,
   type ComputerSyncResult,
-  type SyncMode,
   type SyncOperationResult,
 } from "./types"
 import boxen from "boxen"
@@ -579,7 +579,7 @@ export class UI {
 
   private renderControls(title = "Controls"): string {
     const controls = [
-      { key: "SPACE", desc: "Re-sync", mode: "manual" },
+      { key: "SPACE", desc: "Re-sync", mode: SyncMode.MANUAL },
       { key: "ESC", desc: "Exit" },
     ].filter((c) => !c.mode || c.mode === this.state.mode)
 
@@ -658,7 +658,7 @@ export class UI {
       }
 
       const controlsTitle =
-        this.state.mode === "manual"
+        this.state.mode === SyncMode.MANUAL
           ? `Awaiting user input ${symbols.ellipsis}`
           : `Watching for file changes ${symbols.ellipsis}`
 

@@ -188,8 +188,8 @@ export enum SyncEvent {
 }
 
 export type BaseControllerEvents = {
-  [SyncEvent.STOPPED]: void
-  [SyncEvent.STARTED]: void
+  [SyncEvent.STOPPED]: undefined
+  [SyncEvent.STARTED]: undefined
   [SyncEvent.SYNC_PLANNED]: SyncPlan
   [SyncEvent.SYNC_COMPLETE]: SyncOperationResult
   [SyncEvent.SYNC_ERROR]: IAppError
@@ -203,30 +203,30 @@ export type WatchSyncEvents = {
 } & BaseControllerEvents
 
 // Type-safe event emitter factory
-export function createTypedEmitter<T extends Record<string, any>>() {
+export function createTypedEmitter<T extends Record<string, unknown>>() {
   const emitter = new EventEmitter()
   return {
     emit<K extends keyof T>(
       event: K,
-      data?: T[K] extends void ? void : T[K]
+      data?: T[K] extends undefined ? never : T[K]
     ): boolean {
       return emitter.emit(event as string, data)
     },
     on<K extends keyof T>(
       event: K,
-      listener: T[K] extends void ? () => void : (data: T[K]) => void
+      listener: T[K] extends undefined ? () => void : (data: T[K]) => void
     ): void {
       emitter.on(event as string, listener)
     },
     once<K extends keyof T>(
       event: K,
-      listener: T[K] extends void ? () => void : (data: T[K]) => void
+      listener: T[K] extends undefined ? () => void : (data: T[K]) => void
     ): void {
       emitter.once(event as string, listener)
     },
     off<K extends keyof T>(
       event: K,
-      listener: T[K] extends void ? () => void : (data: T[K]) => void
+      listener: T[K] extends undefined ? () => void : (data: T[K]) => void
     ): void {
       emitter.off(event as string, listener)
     },

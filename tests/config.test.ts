@@ -145,14 +145,14 @@ describe("Computer Group", () => {
 describe("YAML Config Parsing for Paths", () => {
   test("correctly parses POSIX paths", () => {
     const yamlWithPosixPath = `path: /home/user/directory`
-    const parsed = parse(yamlWithPosixPath)
+    const parsed = parse(yamlWithPosixPath) as { path: string }
     expect(parsed.path).toBe("/home/user/directory")
   })
 
   test("correctly parses Windows paths", () => {
     // If Windows backslashes are put in quotes, you would have to double them
     const yamlWithWindowsPath = String.raw`path: "C:\\Users\\name\\Documents"`
-    const parsed = parse(yamlWithWindowsPath)
+    const parsed = parse(yamlWithWindowsPath) as { path: string }
     expect(parsed.path).toBe(String.raw`C:\Users\name\Documents`)
   })
 
@@ -160,13 +160,13 @@ describe("YAML Config Parsing for Paths", () => {
     // Without quotes, YAML may interpret backslashes
     // (this test confirms actual behavior)
     const yamlWithUnquotedWindowsPath = String.raw`path: C:\Users\name\Documents`
-    const parsed = parse(yamlWithUnquotedWindowsPath)
+    const parsed = parse(yamlWithUnquotedWindowsPath) as { path: string }
     expect(parsed.path).toBe(String.raw`C:\Users\name\Documents`)
   })
 
   test("handles paths with special characters", () => {
     const yamlWithSpecialChars = `path: "/path with spaces/and-special_chars/"`
-    const parsed = parse(yamlWithSpecialChars)
+    const parsed = parse(yamlWithSpecialChars) as { path: string }
     expect(parsed.path).toBe("/path with spaces/and-special_chars/")
   })
 })

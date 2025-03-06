@@ -187,7 +187,7 @@ export class SyncManager {
             )
           })
 
-          if (saveDirValidation.missingFiles?.length > 0) {
+          if (saveDirValidation.missingFiles.length > 0) {
             plan.issues.push(
               createSyncPlanIssue(
                 `Missing files in save directory: ${saveDirValidation.missingFiles.join(", ")}`,
@@ -430,6 +430,10 @@ export class SyncManager {
 
     const computerResults: ComputerSyncResult[] = []
     const allComputerIds = new Set<string>()
+    // A set of available computer IDs for faster lookup
+    const availableComputerIds = new Set(
+      syncPlan.availableComputers.map((c) => c.id)
+    )
     let warnings = 0
     const errors: string[] = []
 
@@ -443,9 +447,7 @@ export class SyncManager {
           allComputerIds.add(computerId)
 
           // Check if this is a missing computer
-          const isExisting = syncPlan.availableComputers.some(
-            (c) => c.id === computerId
-          )
+          const isExisting = availableComputerIds.has(computerId)
 
           computerResults.push({
             computerId,
@@ -459,7 +461,14 @@ export class SyncManager {
         // Get the computer result
         const computerResult = computerResults.find(
           (cr) => cr.computerId === computerId
-        )!
+        )
+
+        if (!computerResult) {
+          throw AppError.error(
+            `Computer result not found for computerId: ${computerId}`,
+            "performSync"
+          )
+        }
 
         // Prepare target path based on target type
         const targetPath = resolveTargetPath(fileRule)
@@ -641,7 +650,10 @@ export class SyncManager {
     return result
   }
 
-  async startManualMode(): Promise<ManualModeController> {
+  initManualMode(): {
+    controller: ManualModeController
+    start: () => void
+  } {
     if (this.state !== SyncManagerState.IDLE) {
       // throw error directly, this is a programming error
       throw AppError.fatal(
@@ -651,8 +663,6 @@ export class SyncManager {
     }
 
     try {
-      this.setState(SyncManagerState.STARTING)
-
       // Initialize UI for manual mode
       this.ui = new UI(SyncMode.MANUAL)
 
@@ -667,41 +677,51 @@ export class SyncManager {
       })
 
       // The controller has already stopped
-      manualController.on(SyncEvent.STOPPED, async () => {
+      manualController.on(SyncEvent.STOPPED, () => {
         this.setState(SyncManagerState.STOPPED)
         this.log.trace("manualController SyncEvent.STOPPED")
         this.ui?.stop()
       })
 
       // High level controller functions should emit a SYNC_ERROR when they catch thrown errors from subordinate functions
-      manualController.on(SyncEvent.SYNC_ERROR, async (error) => {
-        // TODO Not sure if we should send to UI here. I think we just log...It should have been sent to the UI from the controller. Same for watchController
-        // if (this.ui) {
-        //   this.ui.addMessage(UIMessageType.ERROR, error.message)
-        // }
+      manualController.on(SyncEvent.SYNC_ERROR, (error) => {
         // Handle based on severity
         if (error.severity === ErrorSeverity.FATAL) {
           this.log.fatal(error, "startManualMode")
           this.setState(SyncManagerState.ERROR)
-          await this.stop()
+          this.stop().catch((err: unknown) => {
+            this.log.error(
+              `Error during stop after fatal error: ${getErrorMessage(err)}`
+            )
+          })
         } else {
           this.log.error(error, "startManualMode")
         }
       })
 
-      manualController.start().catch(async (error) => {
-        // Controller start failed - this is a fatal error
-        this.setState(SyncManagerState.ERROR)
+      const manualControllerStart = () => {
+        this.setState(SyncManagerState.STARTING)
 
-        await this.stop()
+        manualController.start().catch((error: unknown) => {
+          // Controller start failed - this is a fatal error
+          this.setState(SyncManagerState.ERROR)
 
-        throw AppError.fatal(
-          `Failed to start manual mode: ${getErrorMessage(error)}`,
-          "SyncManager.startManualMode",
-          error
-        )
-      })
-      return manualController
+          this.stop().catch((err: unknown) => {
+            console.error(err)
+          })
+
+          throw AppError.fatal(
+            `Failed to start manual mode: ${getErrorMessage(error)}`,
+            "SyncManager.initManualMode",
+            error
+          )
+        })
+      }
+
+      return {
+        controller: manualController,
+        start: manualControllerStart.bind(this),
+      }
     } catch (error) {
       this.setState(SyncManagerState.ERROR)
       // If error is already AppError, rethrow it
@@ -715,7 +735,29 @@ export class SyncManager {
       )
     }
   }
-  async startWatchMode(): Promise<WatchModeController> {
+
+  /**
+   * @deprecated Use {@link initManualMode}
+   */
+  startManualMode(): ManualModeController {
+    const { controller, start } = this.initManualMode()
+    start()
+    return controller
+  }
+
+  /**
+   * @deprecated Use {@link initWatchMode}
+   */
+  startWatchMode(): WatchModeController {
+    const { controller, start } = this.initWatchMode()
+    start()
+    return controller
+  }
+
+  initWatchMode(): {
+    controller: WatchModeController
+    start: () => void
+  } {
     if (this.state !== SyncManagerState.IDLE) {
       // throw error directly, this is a programming error
       throw AppError.fatal(
@@ -725,8 +767,6 @@ export class SyncManager {
     }
 
     try {
-      this.setState(SyncManagerState.STARTING)
-
       // Initialize UI for watch mode
       this.ui = new UI(SyncMode.WATCH)
 
@@ -744,39 +784,50 @@ export class SyncManager {
         this.ui?.start()
       })
 
-      watchController.on(SyncEvent.STOPPED, async () => {
+      watchController.on(SyncEvent.STOPPED, () => {
         this.setState(SyncManagerState.STOPPED)
         this.log.trace("watchController SyncEvent.STOPPED")
         this.ui?.stop()
       })
 
-      watchController.on(SyncEvent.SYNC_ERROR, async (error) => {
+      watchController.on(SyncEvent.SYNC_ERROR, (error) => {
         // Handle based on severity
         if (error.severity === ErrorSeverity.FATAL) {
           this.log.fatal(error, "startWatchMode")
           this.setState(SyncManagerState.ERROR)
-          await this.stop()
+          this.stop().catch((err: unknown) => {
+            this.log.error(
+              `Error during stop after fatal error: ${getErrorMessage(err)}`
+            )
+          })
         } else {
           this.log.error(error, "startWatchMode")
         }
       })
 
-      // Start the watch controller (do NOT await it!)
-      watchController.start().catch(async (error) => {
-        // Controller start failed - this is a fatal error
-        this.setState(SyncManagerState.ERROR)
+      const watchControllerStart = () => {
+        this.setState(SyncManagerState.STARTING)
 
-        await this.stop()
+        watchController.start().catch((error: unknown) => {
+          // Controller start failed - this is a fatal error
+          this.setState(SyncManagerState.ERROR)
 
-        // Convert to AppError and rethrow
-        throw AppError.fatal(
-          `Failed to start watch mode: ${getErrorMessage(error)}`,
-          "SyncManager.startWatchMode",
-          error
-        )
-      })
+          this.stop().catch((err: unknown) => {
+            console.error(err)
+          })
 
-      return watchController
+          throw AppError.fatal(
+            `Failed to start watch mode: ${getErrorMessage(error)}`,
+            "SyncManager.initWatchMode",
+            error
+          )
+        })
+      }
+
+      return {
+        controller: watchController,
+        start: watchControllerStart.bind(this),
+      }
     } catch (error) {
       this.setState(SyncManagerState.ERROR)
       // If error is already AppError, rethrow it
@@ -847,27 +898,30 @@ abstract class BaseController<T extends BaseControllerEvents> {
     protected ui: UI | null = null
   ) {}
 
-  emit<K extends keyof T>(event: K, data?: T[K] extends void ? void : T[K]) {
+  emit<K extends keyof T>(
+    event: K,
+    data?: T[K] extends undefined ? never : T[K]
+  ) {
     return this.events.emit(event, data)
   }
 
   on<K extends keyof T>(
     event: K,
-    listener: T[K] extends void ? () => void : (data: T[K]) => void
+    listener: T[K] extends undefined ? () => void : (data: T[K]) => void
   ) {
     this.events.on(event, listener)
   }
 
   once<K extends keyof T>(
     event: K,
-    listener: T[K] extends void ? () => void : (data: T[K]) => void
+    listener: T[K] extends undefined ? () => void : (data: T[K]) => void
   ) {
     this.events.once(event, listener)
   }
 
   off<K extends keyof T>(
     event: K,
-    listener: T[K] extends void ? () => void : (data: T[K]) => void
+    listener: T[K] extends undefined ? () => void : (data: T[K]) => void
   ) {
     this.events.off(event, listener)
   }
@@ -900,7 +954,7 @@ abstract class BaseController<T extends BaseControllerEvents> {
   /**
    * Base cleanup functionality for controllers
    */
-  protected async cleanupBase(): Promise<void> {
+  protected cleanupBase(): void {
     if (this.keyHandler) {
       this.keyHandler.stop()
       this.keyHandler = null
@@ -931,7 +985,7 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
         await this.waitForUserInput()
       }
     } catch (error) {
-      await this.cleanup()
+      this.cleanup()
 
       // Errors caught here should be fatal as they were not handled within performSyncCycle or waitForUserInput
       if (error instanceof AppError) {
@@ -945,9 +999,10 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
     }
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await
   async stop(): Promise<void> {
     try {
-      await this.cleanup()
+      this.cleanup()
       this.emit(SyncEvent.STOPPED)
     } catch (error) {
       // Log but don't throw during stop to ensure clean shutdown
@@ -1045,7 +1100,7 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
     }
 
     this.keyHandler = new KeyHandler({
-      onSpace: async () => {
+      onSpace: () => {
         this.log.info(
           { action: "manual_sync", trigger: "keypress_space" },
           "User triggered manual sync"
@@ -1090,8 +1145,8 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
     this.log.debug("manualController keyHandler started")
   }
 
-  private async cleanup(): Promise<void> {
-    await this.cleanupBase()
+  private cleanup() {
+    this.cleanupBase()
   }
 }
 
@@ -1149,7 +1204,10 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
 
       // Keep running until state changes
       while (this.syncManager.getState() === SyncManagerState.RUNNING) {
-        await new Promise((resolve) => setTimeoutPromise(100, resolve))
+        await new Promise((resolve) => {
+          // eslint-disable-next-line @typescript-eslint/no-floating-promises
+          setTimeoutPromise(100, resolve)
+        })
       }
     } catch (error) {
       // Convert error to AppError if needed
@@ -1392,7 +1450,9 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
 
     if (noLongerWatchedFiles.size > 0) {
       const relativePaths = [...noLongerWatchedFiles].map((f) => {
-        return `${getRelativePath(f, this.config.sourceRoot, { includeRootName: true })}`
+        return getRelativePath(f, this.config.sourceRoot, {
+          includeRootName: true,
+        })
       })
       this.ui?.addMessage(
         UIMessageType.WARNING,
@@ -1406,7 +1466,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     }
   }
 
-  private async handleWatcherOnChange(changedPath: string) {
+  private handleWatcherOnChange(changedPath: string) {
     this.log.info({ changedPath }, `watchController watcher detected change`)
 
     if (this.syncManager.getState() !== SyncManagerState.RUNNING) {
@@ -1438,6 +1498,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     }
 
     // Set debounce timer to allow more file changes to be batched
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises
     this.onChangeSyncDebounceTimer = setTimeout(async () => {
       // Take a snapshot of current changes to avoid race conditions
       const filesToSync = new Set(this.changedFiles)
@@ -1503,7 +1564,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     }, this.debounceDelay)
   }
 
-  private async handleWatchOnUnlink(unlinkedPath: string) {
+  private handleWatchOnUnlink(unlinkedPath: string) {
     if (this.syncManager.getState() !== SyncManagerState.RUNNING) {
       return
     }
@@ -1604,7 +1665,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
   }
 
   private async cleanup(): Promise<void> {
-    await this.cleanupBase()
+    this.cleanupBase()
 
     if (this.onChangeSyncDebounceTimer) {
       clearTimeout(this.onChangeSyncDebounceTimer)

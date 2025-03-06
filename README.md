@@ -13,7 +13,7 @@
     <img src="assets/icon.svg" alt="Logo" width="150" height="150">
   </a>
 
-  <h1 align="center">CC: Sync</h3>
+  <h1 align="center">CC: Sync</h1>
 
 </div>
 
@@ -56,10 +56,23 @@
 
 CC: Sync is a command-line tool that helps you develop ComputerCraft (i.e. [CC: Tweaked](https://tweaked.cc/)) software by automatically syncing files from your development environment to computers in your Minecraft world.
 
+It's a ***simple*** as:
+1. Choose your source file(s) (what you want copied)
+2. Choose your computer(s) (where you want them copied)
+3. Run CC: Sync to keep them synced!
+
+## Why?
+- Are you tired of manually copying files to each Minecraft computer after every change?
+- Do you want to avoid developing your code inside of a Minecraft save?
+- Do you want your keep your code physically distinct from the in-game files?
+
+If any of these describe you, CC: Sync may help!
+
 # Features
 
-- 🔄 Real-time file syncing with watch mode
-- 🎮 Manual sync mode for controlled updates
+- 📃 Simple YAML config file
+- 🔄 Manual mode for controlled updates
+- 👀 Watch mode for continuous syncing
 - 👥 Computer groups for easy targeting
 - 🌟 Glob pattern support for file selection
 - ⚡ Fast and lightweight
@@ -69,7 +82,7 @@ CC: Sync is a command-line tool that helps you develop ComputerCraft (i.e. [CC: 
 # Getting Started
 
 ## Prerequisites
-- Node.js 16.0.0+
+- Node.js 18.0.0+
 - Minecraft with ComputerCraft/CC:Tweaked mod installed
 - A Minecraft world with CC:Tweaked computers
 
@@ -146,7 +159,7 @@ bun add -g @bngarren/ccsync
 
 </details>
 
-> **Note**: Node.js 16.0.0 or higher is required
+> **Note**: Node.js 18 or higher is required
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -245,7 +258,8 @@ The program can operate in two modes, depending on the level of control you desi
 
 <br>
 
-> Warning: At this time, any files added to the source path AFTER the program has started will not be recognized or synced, even if they would be matched by file name or glob pattern. Restart the program for these files to sync.
+> Warning: At this time, any files added to the source directory AFTER the program has started will not be recognized or synced, even if they would be matched by file name or glob pattern. Restart the program for these files to sync.<br><br>
+> Similarly, any files renamed, moved, or deleted AFTER the program has started will no longer be recognized or synced. Restart the program for these files to sync.
 
 ## Configuration
 The config for CC: Sync is a `.ccsync.yaml` file in your project root. If no file is present, running the CLI will generate a default config file.
@@ -263,23 +277,21 @@ The config for CC: Sync is a `.ccsync.yaml` file in your project root. If no fil
 |                   |  - `computers`: Computer IDs or group names to sync to. 
 |                   | The following fields are ***optional***:
 |                   |  - `flatten` (default true): Whether the matched source files should be flattened into the target directory. If a recursive glob pattern (e.g., **/*.lua) is used and `flatten` is false, the source directory structure will be preserved in the target directory.
-
-> Should use forward slashes (/) in paths, even on Windows:<br> 
->`"C:/Users/name/path"`
 <br>
-> Otherwise, backslashes need to be properly escaped: `"C:\\Users\\name\\path"`
+> You should use forward slashes (/) in paths, even on Windows:<br> 
+>`"C:/Users/name/path"`<br>
+> Otherwise, backslashes need to be properly escaped:<br> `"C:\\Users\\name\\path"`
 
 ### Advanced Options
 These shouldn't need to be modified—mostly for debugging and performance.
-| Key               | Description                                                                                                     |
+| Key               | Description |
 |-------------------|-----------------------------------------------------------------------------------------------------------------|
 | `logToFile`      | Default: false. Enable logging to file.   |
 | `logLevel`      | Default: 'debug'. Options: 'silent', 'trace', 'debug', 'info', 'warn', 'error', 'fatal' |
 | `cacheTTL`      | Default: 5000. Cache duration in milliseconds. This reduces how many times the source/target parameters must be validated on quick, repetitive re-syncs. |
 | `usePolling`  | Default: false. If true, will use a polling-based strategy during watch mode rather than native operating system events (default). Consider using polling if watch mode is missing file changes. Polling _may_ result in higher CPU usage (but likely only significant with a large number of watched files)
-
-> Note: Log files are written to a log directory depending on the operating system:
 <br>
+> Note: Log files are written to a log directory depending on the operating system: <br>
 > - Windows: `%USER%\AppData\Local\ccsync\logs`
 > - macOS: `~/Library/Logs/ccsync`
 > - Linux/Unix: `~/.local/share/ccsync/logs`

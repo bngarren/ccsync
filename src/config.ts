@@ -7,8 +7,9 @@ import path from "path"
 import * as fs from "node:fs/promises"
 
 import { merge } from "ts-deepmerge"
+import type { DeepPartial } from "./types"
 
-export const CONFIG_VERSION = "2.0"
+export const CONFIG_VERSION = "2.1"
 export const DEFAULT_CONFIG_FILENAME = ".ccsync.yaml"
 export const DEFAULT_CONFIG: Config = {
   version: CONFIG_VERSION,
@@ -19,7 +20,8 @@ export const DEFAULT_CONFIG: Config = {
   advanced: {
     logToFile: false,
     logLevel: "debug",
-    cache_ttl: 5000,
+    cacheTTL: 5000,
+    usePolling: false,
   },
 }
 
@@ -187,12 +189,13 @@ const AdvancedOptionsSchema = z.object({
       "fatal",
     ] as const)
     .default("debug"),
-  cache_ttl: z
+  cacheTTL: z
     .number({
       invalid_type_error: "Cache TTL must be a number",
     })
     .min(0, "Cache TTL cannot be negative")
     .default(5000),
+  usePolling: z.boolean({ coerce: true }).default(false),
 })
 
 const ComputerGroupsSchema = z
@@ -224,7 +227,7 @@ export const ConfigSchema = z
     computerGroups: ComputerGroupsSchema,
     rules: z.array(SyncRuleSchema),
     advanced: AdvancedOptionsSchema.default({
-      cache_ttl: 5000,
+      cacheTTL: 5000,
     }),
   })
   .superRefine((config, ctx) => {
@@ -310,12 +313,12 @@ export type SyncRule = z.infer<typeof SyncRuleSchema>
 
 // ---- CONFIG METHODS ----
 
-export const withDefaultConfig = (config: Partial<Config>): Config => {
+export const withDefaultConfig = (config: DeepPartial<Config>): Config => {
   return merge.withOptions({ mergeArrays: false }, DEFAULT_CONFIG, config, {
     rules:
       config.rules?.map((rule) => ({
         ...rule,
-        flatten: rule.flatten ?? true, // Default to true if undefined
+        flatten: rule?.flatten ?? true, // Default to true if undefined
       })) || [],
   }) as Config
 }
@@ -517,7 +520,10 @@ advanced:
   
   # How long to cache validation results (milliseconds)
   # Lower = more accurate but more CPU intensive, Higher = faster but may miss changes
-  cache_ttl: 5000
+  cacheTTL: 5000
+
+  # To use polling during match mode rather than native OS events (default). This may be necessary if watch mode is missing file changes. Polling may result in higher CPU usage (with a large number of watched files).
+  usePolling: false
 `
 
   await fs.writeFile(configPath, configContent, "utf-8")

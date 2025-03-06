@@ -132,7 +132,7 @@ export class SyncManager {
     if (changedFiles && changedFiles.size > 0) return false
 
     const timeSinceLastPlan = Date.now() - this.lastSyncPlan.timestamp
-    return timeSinceLastPlan < this.config.advanced.cache_ttl
+    return timeSinceLastPlan < this.config.advanced.cacheTTL
   }
 
   public invalidateCache(): void {
@@ -1545,12 +1545,15 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       // Get actual file paths to watch
       await this.resolveFilesForWatcher()
 
+      const usePolling =
+        process.env.CI === "true" || this.config.advanced.usePolling
+
       this.watcher = watch([...this.watchedFiles], {
         ignoreInitial: true,
-        usePolling: process.env.CI === "true" || true,
+        usePolling,
         awaitWriteFinish: {
           stabilityThreshold: 1000,
-          pollInterval: 100,
+          pollInterval: 100, // ms
         },
       })
 
@@ -1561,6 +1564,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
               includeRootName: true,
             })
           ),
+          strategy: usePolling ? "polling" : "native OS events",
         },
         `watchController set up a chokidar watcher with:`
       )

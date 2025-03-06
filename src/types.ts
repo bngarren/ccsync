@@ -234,3 +234,9 @@ export function createTypedEmitter<T extends Record<string, any>>() {
 }
 
 export type TargetType = "directory" | "file"
+
+// ---- HELPERS ----
+
+export type DeepPartial<T> = {
+  [P in keyof T]?: T[P] extends object ? DeepPartial<T[P]> : T[P]
+}

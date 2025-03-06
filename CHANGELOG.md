@@ -1,5 +1,40 @@
 # Changelog
 
+## [1.0.0-beta.3](https://github.com/bngarren/ccsync/compare/v1.0.0-beta.2...v1.0.0-beta.3) (2025-03-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* **config:** updated config to version 2.0 given the removal of the "verbose" option and addition of log options. Updated  the default config to include these new options.
+
+### Features
+
+* **log:** Added pino logging support with pino-roll for rotation. Log to file and log level options added to config. ([7a8d749](https://github.com/bngarren/ccsync/commit/7a8d749f0973adb244f4a1f4c8729f2ff1b1e463))
+* **sync:** added a 'usePolling' option to the config (advanced). This bumps config VERSION to 2.1 ([322de00](https://github.com/bngarren/ccsync/commit/322de007e135ae8ca196cf99e7c54dc2b8ea3046))
+* **sync:** adds batch processing with debouncing to watch mode so that multiple files changed at once or in quick succession are processed more efficiently ([#23](https://github.com/bngarren/ccsync/issues/23)) ([322de00](https://github.com/bngarren/ccsync/commit/322de007e135ae8ca196cf99e7c54dc2b8ea3046))
+* **workflow:** add a version.ts file that can be bundled with code ([89e891c](https://github.com/bngarren/ccsync/commit/89e891cb39d132926e71efa34a3d1779c93cc2bf))
+* **workflow:** add version-check ([#17](https://github.com/bngarren/ccsync/issues/17)) that verifies that package.json, version.ts, and latest git tag (if applicable) match prior to pull request. ([89e891c](https://github.com/bngarren/ccsync/commit/89e891cb39d132926e71efa34a3d1779c93cc2bf))
+
+
+### Bug Fixes
+
+* **config:** updated config to version 2.0 given the removal of the "verbose" option and addition of log options. Updated  the default config to include these new options. ([7a8d749](https://github.com/bngarren/ccsync/commit/7a8d749f0973adb244f4a1f4c8729f2ff1b1e463))
+* **log:** logs added throughout main code, using child loggers to categorize by component ([7a8d749](https://github.com/bngarren/ccsync/commit/7a8d749f0973adb244f4a1f4c8729f2ff1b1e463))
+* **script:** updated watch-log.sh to allow a file name to be passed so that this file is tailed rather than current.log ([322de00](https://github.com/bngarren/ccsync/commit/322de007e135ae8ca196cf99e7c54dc2b8ea3046))
+* **sync:** add UI warnings when a watched file is renamed or deleted (will no longer be watched until mode is restarted) ([322de00](https://github.com/bngarren/ccsync/commit/322de007e135ae8ca196cf99e7c54dc2b8ea3046))
+* **sync:** chokidar watcher will use polling strategy if process.env.CI is 'true' so that tests can pass in CI ([322de00](https://github.com/bngarren/ccsync/commit/322de007e135ae8ca196cf99e7c54dc2b8ea3046))
+* **sync:** fixed bug where missing computers were not resulting in correct sync status ([322de00](https://github.com/bngarren/ccsync/commit/322de007e135ae8ca196cf99e7c54dc2b8ea3046))
+* **sync:** missing computers appropriately treated as warnings, added integration test for missing computer scenario ([322de00](https://github.com/bngarren/ccsync/commit/322de007e135ae8ca196cf99e7c54dc2b8ea3046))
+* **ui:** UI now uses process.stdout.write instead of console.log for terminal output ([7a8d749](https://github.com/bngarren/ccsync/commit/7a8d749f0973adb244f4a1f4c8729f2ff1b1e463))
+* **utils:** improved check for 'computercraft/computer' dir within the minecraft save dir, and fixed associated test ([#20](https://github.com/bngarren/ccsync/issues/20)) ([bf3ca51](https://github.com/bngarren/ccsync/commit/bf3ca51208167847e1465acdf2390591b2707893))
+* **workflow:** get release-please to automatically update version.ts ([#18](https://github.com/bngarren/ccsync/issues/18)) ([85aad90](https://github.com/bngarren/ccsync/commit/85aad9011812ed6d0117db8b43690dc15ac1c482))
+* **workflow:** updated release-please workflow to correctly checkout code and use config file ([89e891c](https://github.com/bngarren/ccsync/commit/89e891cb39d132926e71efa34a3d1779c93cc2bf))
+
+
+### Miscellaneous Chores
+
+* release as 1.0.0-beta.3 ([b750add](https://github.com/bngarren/ccsync/commit/b750add4df5c781fb5ac219c172f222e39201413))
+
 ## [1.0.0-beta.2](https://github.com/bngarren/ccsync/compare/v1.0.0-beta.1...v1.0.0-beta.2) (2025-03-01)
 
 

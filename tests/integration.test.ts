@@ -989,6 +989,7 @@ describe("Integration: UI", () => {
       )
     }
     outputCapture.restore()
+    outputCapture.clear()
     mock.restore()
     clackPromptsSpy.cleanup()
   })
@@ -1327,7 +1328,6 @@ describe("Integration: UI", () => {
     const { config } = await loadConfig(configPath)
     if (!config) throw new Error("Failed to load config")
 
-    const outputCapture = captureUIOutput()
     const syncManager = new SyncManager(config)
 
     try {
@@ -1379,7 +1379,6 @@ describe("Integration: UI", () => {
       expect(normalizedOutput2).toContain("removed or renamed")
       expect(normalizedOutput2).toContain("no longer being watched")
     } finally {
-      outputCapture.restore()
       await syncManager.stop()
     }
   })

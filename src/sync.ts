@@ -1547,6 +1547,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
 
       this.watcher = watch([...this.watchedFiles], {
         ignoreInitial: true,
+        usePolling: process.env.CI === "true" || true,
         awaitWriteFinish: {
           stabilityThreshold: 1000,
           pollInterval: 100,
@@ -1570,6 +1571,10 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       // Handle file deletions or renames
       this.watcher.on("unlink", this.handleWatchOnUnlink.bind(this))
 
+      this.watcher.on("all", (ev, path) => {
+        console.debug(ev, path)
+      })
+
       this.watcher.on("error", (error) => {
         const watcherError = AppError.fatal(
           `File watcher error: ${getErrorMessage(error)}`,
@@ -1577,6 +1582,13 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
           error
         )
         this.emit(SyncEvent.SYNC_ERROR, watcherError)
+      })
+
+      return await new Promise((resolve) => {
+        this.watcher?.on("ready", () => {
+          this.log.info("watcher is ready")
+          resolve()
+        })
       })
     } catch (error) {
       throw AppError.fatal(

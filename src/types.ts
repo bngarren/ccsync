@@ -181,10 +181,6 @@ export enum SyncEvent {
   SYNC_COMPLETE,
   SYNC_ERROR,
   INITIAL_SYNC_COMPLETE,
-  INITIAL_SYNC_ERROR,
-  FILE_SYNC,
-  FILE_SYNC_ERROR,
-  WATCHER_ERROR,
 }
 
 export type BaseControllerEvents = {

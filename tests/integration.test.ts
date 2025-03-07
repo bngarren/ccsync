@@ -952,6 +952,113 @@ describe("Integration: SyncManager", () => {
       await syncManager.stop()
     }
   })
+
+  test("handles file changes that occur during sync operations", async () => {
+    const configPath = path.join(tempDir, ".ccsync.yaml")
+    const configObject = withDefaultConfig({
+      sourceRoot: sourceDir,
+      minecraftSavePath: savePath,
+      rules: [
+        {
+          source: "*.lua",
+          target: "/",
+          computers: ["1"],
+        },
+      ],
+    })
+
+    const configContent = stringify(configObject)
+    await fs.writeFile(configPath, configContent)
+
+    // Create target computers
+    await createTestComputer(computersDir, "1")
+
+    // Create initial test files
+    await fs.writeFile(path.join(sourceDir, "program.lua"), "print('Original')")
+    await fs.writeFile(path.join(sourceDir, "startup.lua"), "print('Original')")
+
+    const { config } = await loadConfig(configPath)
+    if (!config) throw new Error("Failed to load config")
+
+    // Create a custom output capture to track sync events
+    const outputCapture = captureUIOutput()
+    const syncManager = new SyncManager(
+      config,
+      new UI({ renderDynamicElements: false })
+    )
+
+    const { controller, start } = syncManager.initWatchMode()
+
+    try {
+      // Wait for initial sync to complete
+      const initialSyncResult =
+        await waitForEventWithTrigger<SyncOperationResult>(
+          controller,
+          SyncEvent.INITIAL_SYNC_COMPLETE,
+          start
+        )
+
+      expect(initialSyncResult.status).toBe(SyncStatus.SUCCESS)
+
+      // Clear output to start fresh
+      outputCapture.clear()
+
+      // Create a promise that will resolve after we've seen two SYNC_COMPLETE events
+      let syncCount = 0
+      const twoSyncsCompleted = new Promise<void>((resolve) => {
+        controller.on(SyncEvent.SYNC_COMPLETE, () => {
+          syncCount++
+          if (syncCount >= 2) {
+            resolve()
+          }
+        })
+      })
+
+      // Use a deliberate sequence to test race condition handling:
+      // 1. Modify program.lua to trigger first sync
+      await fs.writeFile(
+        path.join(sourceDir, "program.lua"),
+        "print('First change')"
+      )
+
+      // 2. Wait the duration of the debounce delay to ensure that the next write file is not batched with the first
+      await setTimeout(controller.getInternalState().debounceDelay + 1)
+
+      // 3. Modify startup.lua while first sync is in progress
+      await fs.writeFile(
+        path.join(sourceDir, "startup.lua"),
+        "print('Changed during sync')"
+      )
+
+      // Wait for both syncs to complete (with timeout)
+      await Promise.race([
+        twoSyncsCompleted,
+        setTimeout(5000).then(() => {
+          throw new Error("Timeout waiting for two sync operations to complete")
+        }),
+      ])
+
+      // Verify both files were properly synced to disk with correct content
+      const program1Content = await fs.readFile(
+        path.join(computersDir, "1", "program.lua"),
+        "utf8"
+      )
+      expect(program1Content).toBe("print('First change')")
+
+      const startup1Content = await fs.readFile(
+        path.join(computersDir, "1", "startup.lua"),
+        "utf8"
+      )
+      expect(startup1Content).toBe("print('Changed during sync')")
+
+      // Check the output to ensure both files were actually processed
+      const normalizedOutput = normalizeOutput(outputCapture.getOutput())
+      expect(normalizedOutput).toContain("program.lua")
+      expect(normalizedOutput).toContain("startup.lua")
+    } finally {
+      await syncManager.stop()
+    }
+  })
 })
 
 describe("Integration: UI", () => {

@@ -1136,10 +1136,18 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
    * Files being watched or tracked for file changes
    */
   private watchedFiles: Set<string> = new Set()
+
   /**
-   * Temp set of files that have just changed that will be synced. Clear when synced.
+   * Files that have changed and are waiting to be synced in the next operation.
+   * Changes are accumulated here during debounce periods or while a sync is in progress.
    */
-  private changedFiles: Set<string> = new Set()
+  private pendingChanges: Set<string> = new Set()
+
+  /**
+   * Files that are currently being processed in an active sync operation.
+   * This is an atomic snapshot of pendingChanges at the moment a sync begins.
+   */
+  private activeChanges: Set<string> = new Set()
 
   private isInitialSync = true
 
@@ -1156,8 +1164,31 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     super(syncManager, ui)
   }
 
+  getInternalState() {
+    return {
+      isInitialSync: this.isInitialSync,
+      debounceDelay: this.debounceDelay,
+    }
+  }
+
+  /**
+   * Returns the set of files currently being watched by the watcher.
+   *
+   * @returns Array of absolute file paths being watched
+   */
   getWatchedFiles() {
     return [...this.watchedFiles]
+  }
+
+  /**
+   * Returns the set of files that should be synced in the current operation.
+   * During the initial sync, returns undefined to sync all matching files.
+   * For subsequent syncs, returns the activeChanges set.
+   *
+   * @returns Set of file paths to sync, or undefined for initial sync
+   */
+  getChangedFiles(): Set<string> | undefined {
+    return this.isInitialSync ? undefined : this.activeChanges
   }
 
   async start(): Promise<void> {
@@ -1211,10 +1242,6 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     }
   }
 
-  getChangedFiles(): Set<string> | undefined {
-    return this.isInitialSync ? undefined : this.changedFiles
-  }
-
   private async performSyncCycle(): Promise<void> {
     if (this.syncManager.getState() !== SyncManagerState.RUNNING) {
       throw AppError.error(
@@ -1231,7 +1258,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
 
     try {
       const syncPlan = await this.syncManager.createSyncPlan({
-        changedFiles: this.isInitialSync ? undefined : this.changedFiles,
+        changedFiles: this.isInitialSync ? undefined : this.activeChanges,
       })
 
       this.emit(SyncEvent.SYNC_PLANNED, syncPlan)
@@ -1239,12 +1266,12 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       // If we're not in initial sync and have no files to sync, add a warning
       if (
         !this.isInitialSync &&
-        this.changedFiles.size > 0 &&
+        this.activeChanges.size > 0 &&
         syncPlan.resolvedFileRules.length === 0
       ) {
         this.log.warn(
           "No files matched for sync despite having changed files",
-          { changedFiles: [...this.changedFiles] }
+          { changedFiles: [...this.activeChanges] }
         )
       }
 
@@ -1287,7 +1314,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       } else {
         this.emit(SyncEvent.SYNC_COMPLETE, syncResult)
         // Clear changed files after successful non-initial sync
-        this.changedFiles.clear()
+        this.activeChanges.clear()
       }
       // Set back to ready state after operation completes
       this.ui?.setReady()
@@ -1440,6 +1467,86 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     }
   }
 
+  /**
+   * Processes any pending file changes by moving them to activeChanges and
+   * triggering a sync operation. Handles race conditions by ensuring changes
+   * that occur during sync are captured for the next sync cycle.
+   *
+   * @returns Promise that resolves when the sync is complete
+   * @throws AppError if the sync operation fails
+   */
+  private async processPendingChanges(): Promise<void> {
+    // Safety check - only proceed if we have changes
+    if (this.pendingChanges.size === 0) {
+      return
+    }
+
+    try {
+      this.onChangeSyncInProgress = true
+
+      // Transfer pending to active - atomic operation
+      this.activeChanges = new Set(this.pendingChanges)
+      this.pendingChanges.clear()
+
+      this.log.debug(
+        {
+          fileCount: this.activeChanges.size,
+        },
+        "Processing changes"
+      )
+
+      // Execute sync with current set of changes
+      await this.performSyncCycle()
+    } catch (error) {
+      // Error handling
+      if (error instanceof AppError && error.severity === ErrorSeverity.FATAL) {
+        this.emit(
+          SyncEvent.SYNC_ERROR,
+          AppError.fatal(
+            `Failed to sync changes: ${getErrorMessage(error)}`,
+            "WatchModeController.processPendingChanges",
+            error
+          )
+        )
+      } else {
+        throw error
+      }
+    } finally {
+      this.onChangeSyncInProgress = false
+      this.activeChanges.clear()
+
+      // Process any changes that accumulated during sync
+      if (this.pendingChanges.size > 0) {
+        this.log.info(
+          { pendingChangeCount: this.pendingChanges.size },
+          "Additional changes detected during sync, processing"
+        )
+
+        // Schedule processing of new changes
+        this.onChangeSyncDebounceTimer = setTimeout(() => {
+          this.onChangeSyncDebounceTimer = null
+          this.processPendingChanges().catch((error: unknown) => {
+            this.emit(
+              SyncEvent.SYNC_ERROR,
+              AppError.error(
+                `Error processing pending changes: ${getErrorMessage(error)}`,
+                "WatchModeController.processPendingChanges",
+                error
+              )
+            )
+          })
+        }, this.debounceDelay)
+      }
+    }
+  }
+
+  /**
+   * Handles file change events from the watcher.
+   * Adds the changed file to pendingChanges and schedules processing.
+   * If a sync is already in progress, the change will be picked up afterward.
+   *
+   * @param changedPath The absolute path of the changed file
+   */
   private handleWatcherOnChange(changedPath: string) {
     this.log.info({ changedPath }, `watchController watcher detected change`)
 
@@ -1452,10 +1559,10 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
 
     // Add the changed file to our set of pending changes
     const normalizedPath = processPath(changedPath)
-    this.changedFiles.add(normalizedPath)
+    this.pendingChanges.add(normalizedPath)
 
     this.log.trace(
-      { changedFiles: [...this.changedFiles] },
+      { changedFiles: [...this.pendingChanges] },
       "Added to pending changes, waiting for more changes before syncing"
     )
 
@@ -1465,77 +1572,15 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       this.onChangeSyncDebounceTimer = null
     }
 
-    // If sync is in progress, just record the file change for next sync
-    if (this.onChangeSyncInProgress) {
-      this.log.debug("Sync already in progress, queueing change for next sync")
-      return
+    // Don't schedule if sync already in progress - it will be picked up afterwards
+    if (!this.onChangeSyncInProgress) {
+      this.onChangeSyncDebounceTimer = setTimeout(() => {
+        this.onChangeSyncDebounceTimer = null
+        this.processPendingChanges().catch((error: unknown) => {
+          this.log.error(error, "Unexpected error in processPendingChanges")
+        })
+      }, this.debounceDelay)
     }
-
-    // Set debounce timer to allow more file changes to be batched
-    // eslint-disable-next-line @typescript-eslint/no-misused-promises
-    this.onChangeSyncDebounceTimer = setTimeout(async () => {
-      // Take a snapshot of current changes to avoid race conditions
-      const filesToSync = new Set(this.changedFiles)
-
-      this.log.info(
-        { fileCount: filesToSync.size },
-        `watchController starting sync after debounce with ${filesToSync.size} changed files`
-      )
-
-      this.onChangeSyncDebounceTimer = null
-
-      // Only proceed if we have changes and no sync is in progress
-      if (this.changedFiles.size === 0 || this.onChangeSyncInProgress) {
-        this.log.warn(
-          "No changes to sync or sync already in progress, aborting debounced sync"
-        )
-        return
-      }
-
-      try {
-        this.onChangeSyncInProgress = true
-        this.log.debug("Beginning performSyncCycle for debounced changes")
-        await this.performSyncCycle()
-
-        // After successful sync, remove the files we just synced from the changed files set
-        for (const file of filesToSync) {
-          this.changedFiles.delete(file)
-        }
-      } catch (error) {
-        if (
-          error instanceof AppError &&
-          error.severity === ErrorSeverity.FATAL
-        ) {
-          this.emit(
-            SyncEvent.SYNC_ERROR,
-            AppError.fatal(
-              `Unexpected error during sync: ${getErrorMessage(error)}`,
-              "WatchModeController.performSyncCycle",
-              error
-            )
-          )
-        } else {
-          throw error
-        }
-      } finally {
-        this.onChangeSyncInProgress = false
-
-        // Check if more changes accumulated during sync
-        if (this.changedFiles.size > 0) {
-          this.log.info(
-            { pendingChanges: this.changedFiles.size },
-            "Additional changes detected during sync, scheduling another sync"
-          )
-
-          // Schedule another sync for any changes that accumulated during this sync
-          this.onChangeSyncDebounceTimer = setTimeout(() => {
-            this.onChangeSyncDebounceTimer = null
-            // This will trigger another sync cycle if still needed
-            this.watcher?.emit("change", [...this.changedFiles][0])
-          }, this.debounceDelay)
-        }
-      }
-    }, this.debounceDelay)
   }
 
   private handleWatchOnUnlink(unlinkedPath: string) {
@@ -1575,6 +1620,13 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     }
   }
 
+  /**
+   * Sets up the file watcher for the source files defined in the configuration.
+   * Resolves all glob patterns to actual file paths and starts watching those files.
+   *
+   * @returns Promise that resolves when the watcher is ready
+   * @throws AppError if watcher setup fails
+   */
   private async setupWatcher(): Promise<void> {
     try {
       // Get actual file paths to watch
@@ -1623,10 +1675,20 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
         this.emit(SyncEvent.SYNC_ERROR, watcherError)
       })
 
-      return await new Promise((resolve) => {
+      return await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error("Watcher failed to become ready after timeout"))
+        }, 10000) // 10 second timeout
+
         this.watcher?.on("ready", () => {
+          clearTimeout(timeout)
           this.log.info("watcher is ready")
           resolve()
+        })
+
+        this.watcher?.on("error", (err) => {
+          clearTimeout(timeout)
+          reject(AppError.from(err))
         })
       })
     } catch (error) {
@@ -1654,7 +1716,8 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       }
       this.watcher = null
     }
-    this.changedFiles.clear()
+    this.pendingChanges.clear()
+    this.activeChanges.clear()
     this.watchedFiles.clear()
   }
 }

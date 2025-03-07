@@ -703,7 +703,11 @@ export class SyncManager {
           this.setState(SyncManagerState.ERROR)
 
           this.stop().catch((err: unknown) => {
-            console.error(err)
+            throw AppError.error(
+              "Unexpected error with SyncManager stop()",
+              "SyncManager - failed to start manual mode",
+              err
+            )
           })
 
           throw AppError.fatal(
@@ -790,7 +794,11 @@ export class SyncManager {
           this.setState(SyncManagerState.ERROR)
 
           this.stop().catch((err: unknown) => {
-            console.error(err)
+            throw AppError.error(
+              "Unexpected error with SyncManager stop()",
+              "SyncManager - failed to start watch mode",
+              err
+            )
           })
 
           throw AppError.fatal(
@@ -925,19 +933,9 @@ abstract class BaseController<T extends BaseControllerEvents> {
     }
   }
 
-  /**
-   * Base cleanup functionality for controllers
-   */
-  protected cleanupBase(): void {
-    if (this.keyHandler) {
-      this.keyHandler.stop()
-      this.keyHandler = null
-      this.log.trace("keyHandler stopped.")
-    }
-  }
-
   abstract start(): Promise<void>
   abstract stop(): Promise<void>
+  abstract cleanup(): Promise<void>
 }
 
 class ManualModeController extends BaseController<ManualSyncEvents> {
@@ -959,7 +957,7 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
         await this.waitForUserInput()
       }
     } catch (error) {
-      this.cleanup()
+      await this.cleanup()
 
       // Errors caught here should be fatal as they were not handled within performSyncCycle or waitForUserInput
       if (error instanceof AppError) {
@@ -973,16 +971,24 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/require-await
   async stop(): Promise<void> {
     try {
-      this.cleanup()
+      await this.cleanup()
       this.emit(SyncEvent.STOPPED)
     } catch (error) {
       // Log but don't throw during stop to ensure clean shutdown
       this.log.error(
         `Error during ManualController cleanup: ${getErrorMessage(error)}`
       )
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/require-await
+  async cleanup() {
+    if (this.keyHandler) {
+      this.keyHandler.stop()
+      this.keyHandler = null
+      this.log.trace("keyHandler stopped.")
     }
   }
 
@@ -1118,10 +1124,6 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
     this.keyHandler.start()
     this.log.debug("manualController keyHandler started")
   }
-
-  private cleanup() {
-    this.cleanupBase()
-  }
 }
 
 class WatchModeController extends BaseController<WatchSyncEvents> {
@@ -1240,6 +1242,32 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
         `Error during controller cleanup: ${getErrorMessage(error)}`
       )
     }
+  }
+
+  async cleanup(): Promise<void> {
+    if (this.keyHandler) {
+      this.keyHandler.stop()
+      this.keyHandler = null
+      this.log.trace("keyHandler stopped.")
+    }
+
+    if (this.onChangeSyncDebounceTimer) {
+      clearTimeout(this.onChangeSyncDebounceTimer)
+      this.onChangeSyncDebounceTimer = null
+    }
+
+    if (this.watcher) {
+      try {
+        this.watcher.removeAllListeners()
+        await this.watcher.close()
+      } catch (err) {
+        this.log.error(`Error closing watcher: ${err}`)
+      }
+      this.watcher = null
+    }
+    this.pendingChanges.clear()
+    this.activeChanges.clear()
+    this.watchedFiles.clear()
   }
 
   private async performSyncCycle(): Promise<void> {
@@ -1698,26 +1726,5 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
         error
       )
     }
-  }
-
-  private async cleanup(): Promise<void> {
-    this.cleanupBase()
-
-    if (this.onChangeSyncDebounceTimer) {
-      clearTimeout(this.onChangeSyncDebounceTimer)
-      this.onChangeSyncDebounceTimer = null
-    }
-
-    if (this.watcher) {
-      try {
-        await this.watcher.close()
-      } catch (err) {
-        this.log.error(`Error closing watcher: ${err}`)
-      }
-      this.watcher = null
-    }
-    this.pendingChanges.clear()
-    this.activeChanges.clear()
-    this.watchedFiles.clear()
   }
 }

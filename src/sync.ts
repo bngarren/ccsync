@@ -110,6 +110,15 @@ export class SyncManager {
     this.log.trace(
       `State transition: ${SyncManagerState[oldState]} → ${SyncManagerState[newState]}`
     )
+
+    if (newState === SyncManagerState.ERROR) {
+      // Perform emergency cleanup/logging
+      this.stop().catch((err: unknown) => {
+        this.log.error(
+          `Failed to gracefully stop after ERROR state: ${getErrorMessage(err)}`
+        )
+      })
+    }
   }
 
   constructor(
@@ -427,7 +436,10 @@ export class SyncManager {
 
   public async performSync(syncPlan: SyncPlan): Promise<SyncOperationResult> {
     if (this.state !== SyncManagerState.RUNNING) {
-      throw new Error("Cannot perform sync when not in RUNNING state")
+      throw AppError.error(
+        "Cannot perform sync when not in RUNNING state",
+        "SyncManager.performSync"
+      )
     }
 
     const computerResults: ComputerSyncResult[] = []
@@ -685,36 +697,32 @@ export class SyncManager {
         if (error.severity === ErrorSeverity.FATAL) {
           this.log.fatal(error, "startManualMode")
           this.setState(SyncManagerState.ERROR)
-          this.stop().catch((err: unknown) => {
-            this.log.error(
-              `Error during stop after fatal error: ${getErrorMessage(err)}`
-            )
-          })
         } else {
           this.log.error(error, "startManualMode")
+          // continue operations
         }
       })
 
       const manualControllerStart = () => {
         this.setState(SyncManagerState.STARTING)
 
-        manualController.start().catch((error: unknown) => {
-          // Controller start failed - this is a fatal error
+        manualController.run().catch((error: unknown) => {
+          // Fatal exception from run
           this.setState(SyncManagerState.ERROR)
 
           this.stop().catch((err: unknown) => {
-            throw AppError.error(
-              "Unexpected error with SyncManager stop()",
-              "SyncManager - failed to start manual mode",
-              err
-            )
+            throw AppError.from(err, {
+              defaultMessage: "Unexpected error stopping",
+              severity: ErrorSeverity.ERROR,
+              source: "SyncManager",
+            })
           })
 
-          throw AppError.fatal(
-            `Failed to start manual mode: ${getErrorMessage(error)}`,
-            "SyncManager.initManualMode",
-            error
-          )
+          throw AppError.from(error, {
+            defaultMessage: "Fatal exception during manualController run",
+            severity: ErrorSeverity.FATAL,
+            source: "SyncManager",
+          })
         })
       }
 
@@ -724,15 +732,10 @@ export class SyncManager {
       }
     } catch (error) {
       this.setState(SyncManagerState.ERROR)
-      // If error is already AppError, rethrow it
-      if (error instanceof AppError) {
-        throw error
-      }
-      throw AppError.fatal(
-        `Manual mode initialization failed: ${getErrorMessage(error)}`,
-        "SyncManager.startManualMode",
-        error
-      )
+      throw AppError.from(error, {
+        severity: ErrorSeverity.FATAL,
+        source: "SyncManager",
+      })
     }
   }
 
@@ -776,36 +779,32 @@ export class SyncManager {
         if (error.severity === ErrorSeverity.FATAL) {
           this.log.fatal(error, "startWatchMode")
           this.setState(SyncManagerState.ERROR)
-          this.stop().catch((err: unknown) => {
-            this.log.error(
-              `Error during stop after fatal error: ${getErrorMessage(err)}`
-            )
-          })
         } else {
           this.log.error(error, "startWatchMode")
+          // continue operations
         }
       })
 
       const watchControllerStart = () => {
         this.setState(SyncManagerState.STARTING)
 
-        watchController.start().catch((error: unknown) => {
-          // Controller start failed - this is a fatal error
+        watchController.run().catch((error: unknown) => {
+          // Fatal exception from run
           this.setState(SyncManagerState.ERROR)
 
           this.stop().catch((err: unknown) => {
-            throw AppError.error(
-              "Unexpected error with SyncManager stop()",
-              "SyncManager - failed to start watch mode",
-              err
-            )
+            throw AppError.from(err, {
+              defaultMessage: "Unexpected error stopping",
+              severity: ErrorSeverity.ERROR,
+              source: "SyncManager",
+            })
           })
 
-          throw AppError.fatal(
-            `Failed to start watch mode: ${getErrorMessage(error)}`,
-            "SyncManager.initWatchMode",
-            error
-          )
+          throw AppError.from(error, {
+            defaultMessage: "Fatal exception during watchController run",
+            severity: ErrorSeverity.FATAL,
+            source: "SyncManager",
+          })
         })
       }
 
@@ -815,15 +814,10 @@ export class SyncManager {
       }
     } catch (error) {
       this.setState(SyncManagerState.ERROR)
-      // If error is already AppError, rethrow it
-      if (error instanceof AppError) {
-        throw error
-      }
-      throw AppError.fatal(
-        `Watch mode initialization failed: ${getErrorMessage(error)}`,
-        "SyncManager.startWatchMode",
-        error
-      )
+      throw AppError.from(error, {
+        severity: ErrorSeverity.FATAL,
+        source: "SyncManager",
+      })
     }
   }
 
@@ -849,14 +843,10 @@ export class SyncManager {
       this.setState(SyncManagerState.STOPPED)
     } catch (error) {
       this.setState(SyncManagerState.ERROR)
-      if (error instanceof AppError) {
-        throw error
-      }
-      throw AppError.error(
-        `Failed to stop sync manager: ${getErrorMessage(error)}`,
-        "SyncManager.stop",
-        error
-      )
+      throw AppError.from(error, {
+        severity: ErrorSeverity.FATAL,
+        source: "SyncManager.stop",
+      })
     }
   }
 }
@@ -933,7 +923,7 @@ abstract class BaseController<T extends BaseControllerEvents> {
     }
   }
 
-  abstract start(): Promise<void>
+  abstract run(): Promise<void>
   abstract stop(): Promise<void>
   abstract cleanup(): Promise<void>
 }
@@ -943,7 +933,7 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
     super(syncManager, ui)
   }
 
-  async start(): Promise<void> {
+  async run(): Promise<void> {
     this.emit(SyncEvent.STARTED) // Signal ready to run
 
     try {
@@ -957,17 +947,14 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
         await this.waitForUserInput()
       }
     } catch (error) {
-      await this.cleanup()
+      await this.stop()
 
-      // Errors caught here should be fatal as they were not handled within performSyncCycle or waitForUserInput
-      if (error instanceof AppError) {
-        throw error
-      }
-      throw AppError.fatal(
-        `Manual mode operation failed: ${getErrorMessage(error)}`,
-        "ManualModeController.start",
-        error
-      )
+      const fatalAppError = AppError.from(error, {
+        severity: ErrorSeverity.FATAL,
+        source: "ManualModeController.start",
+      })
+      this.emit(SyncEvent.SYNC_ERROR)
+      throw fatalAppError
     }
   }
 
@@ -1040,20 +1027,12 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
       const syncResult = await this.syncManager.performSync(syncPlan)
       this.emit(SyncEvent.SYNC_COMPLETE, syncResult)
     } catch (error) {
-      // Convert to AppError if it isn't already
-      const appError =
-        error instanceof AppError
-          ? error
-          : AppError.fatal(
-              `Unexpected error during sync: ${getErrorMessage(error)}`,
-              "ManualModeController.performSyncCycle",
-              error
-            )
-
-      // Emit the error event
-      this.emit(SyncEvent.SYNC_ERROR, appError)
-
-      // Emitting a fatal error (above) will cause SyncManager to stop() this controller
+      const fatalAppError = AppError.from(error, {
+        severity: ErrorSeverity.FATAL,
+        source: "ManualModeController.performSyncCycle",
+      })
+      this.emit(SyncEvent.SYNC_ERROR, fatalAppError)
+      // Don't need to throw, as a fatal SYNC_ERROR will cause shutdown
     } finally {
       // Performance tracking
       const endTime = process.hrtime.bigint()
@@ -1092,18 +1071,7 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
           { action: "exit", trigger: "keypress_esc" },
           "User triggered exit"
         )
-        try {
-          await this.syncManager.stop()
-        } catch (error) {
-          // Convert to AppError and emit
-          const appError = AppError.from(
-            error,
-            "Failed to stop sync manager",
-            ErrorSeverity.ERROR,
-            "ManualModeController.keyHandler"
-          )
-          this.emit(SyncEvent.SYNC_ERROR, appError)
-        }
+        await this.syncManager.stop()
       },
       onCtrlC: async () => {
         this.log.info(
@@ -1193,7 +1161,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     return this.isInitialSync ? undefined : this.activeChanges
   }
 
-  async start(): Promise<void> {
+  async run(): Promise<void> {
     try {
       this.setupKeyHandler()
       await this.setupWatcher()
@@ -1217,18 +1185,13 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
         })
       }
     } catch (error) {
-      // Convert error to AppError if needed
-      if (error instanceof AppError) {
-        throw error
-      }
-      // Errors are fatal if caught here as they weren't handled by subordinates
-      throw AppError.fatal(
-        `Watch mode operation failed: ${getErrorMessage(error)}`,
-        "WatchModeController.start",
-        error
-      )
-    } finally {
       await this.stop()
+      const fatalAppError = AppError.from(error, {
+        severity: ErrorSeverity.FATAL,
+        source: "WatchModeController.start",
+      })
+      this.emit(SyncEvent.SYNC_ERROR)
+      throw fatalAppError
     }
   }
 
@@ -1309,14 +1272,11 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       // Check if the plan has critical issues
       if (!syncPlan.isValid) {
         // Create an AppError and emit it
-        const errorMessage = syncPlan.issues
-          .filter((issue) => issue.severity === SyncPlanIssueSeverity.ERROR)
-          .map((issue) => issue.message)
-          .join(", ")
+        const errorMessage = getSyncPlanErrorMessage(syncPlan)
 
         const syncPlanError = AppError.error(
           "Sync plan creation failed: " + errorMessage,
-          "ManualModeController.createSyncPlan"
+          "WatchModeController.createSyncPlan"
         )
         this.emit(SyncEvent.SYNC_ERROR, syncPlanError)
 
@@ -1347,20 +1307,12 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       // Set back to ready state after operation completes
       this.ui?.setReady()
     } catch (error) {
-      // Convert to AppError if it isn't already
-      const appError =
-        error instanceof AppError
-          ? error
-          : AppError.fatal(
-              `Unexpected error during sync: ${getErrorMessage(error)}`,
-              "WatchModeController.performSyncCycle",
-              error
-            )
-
-      // Emit the error event
-      this.emit(SyncEvent.SYNC_ERROR, appError)
-
-      // Emitting a fatal error (above) will cause SyncManager to stop() this controller
+      const fatalAppError = AppError.from(error, {
+        severity: ErrorSeverity.FATAL,
+        source: "WatchModeController.performSyncCycle",
+      })
+      this.emit(SyncEvent.SYNC_ERROR, fatalAppError)
+      // Don't need to throw, as a fatal SYNC_ERROR will cause shutdown
     } finally {
       // Performance tracking
       const endTime = process.hrtime.bigint()
@@ -1389,18 +1341,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
           { action: "exit", trigger: "keypress_esc" },
           "User triggered exit"
         )
-        try {
-          await this.syncManager.stop()
-        } catch (error) {
-          // Convert to AppError and emit
-          const appError = AppError.from(
-            error,
-            "Failed to stop sync manager",
-            ErrorSeverity.ERROR,
-            "WatchModeController.keyHandler"
-          )
-          this.emit(SyncEvent.SYNC_ERROR, appError)
-        }
+        await this.syncManager.stop()
       },
       onCtrlC: async () => {
         this.log.info(

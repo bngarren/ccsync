@@ -124,8 +124,10 @@ export class AppError extends Error implements IAppError {
    * @param defaultMessage Message to use if error is not an Error object
    * @param severity Default severity level
    * @param source Component that caught the error
+   *
+   * @deprecated
    */
-  static from(
+  static from_deprecated(
     error: unknown,
     defaultMessage = "An unknown error occurred",
     severity = ErrorSeverity.ERROR,
@@ -135,6 +137,39 @@ export class AppError extends Error implements IAppError {
       return error // Return the original AppError
     }
 
+    const message = error instanceof Error ? error.message : defaultMessage
+    return new AppError(message, severity, source, error)
+  }
+
+  /**
+   * Create an appropriate AppError from an unknown error object.
+   * @param error The original error
+   * @param options Optional configuration
+   * @param options.defaultMessage Message to use if error is not an Error object
+   * @param options.severity Default severity level
+   * @param options.source Component that caught the error
+   */
+  static from(
+    error: unknown,
+    options?: {
+      defaultMessage?: string
+      severity?: ErrorSeverity
+      source?: string
+    }
+  ): AppError {
+    // If already an AppError, return it directly
+    if (error instanceof AppError) {
+      return error
+    }
+
+    // Extract options with defaults
+    const {
+      defaultMessage = "An unknown error occurred",
+      severity = ErrorSeverity.ERROR,
+      source,
+    } = options || {}
+
+    // Create new AppError with appropriate message
     const message = error instanceof Error ? error.message : defaultMessage
     return new AppError(message, severity, source, error)
   }

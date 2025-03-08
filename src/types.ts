@@ -226,6 +226,13 @@ export function createTypedEmitter<T extends Record<string, unknown>>() {
     ): void {
       emitter.off(event as string, listener)
     },
+    removeAllListeners(event?: keyof T): void {
+      if (event !== undefined) {
+        emitter.removeAllListeners(event as string)
+      } else {
+        emitter.removeAllListeners()
+      }
+    },
   }
 }
 

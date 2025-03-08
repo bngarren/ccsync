@@ -868,7 +868,13 @@ abstract class BaseController<T extends BaseControllerEvents> {
   constructor(
     protected syncManager: SyncManager,
     protected ui: UI | null = null
-  ) {}
+  ) {
+    this.cleanup = this.cleanup.bind(this)
+    Object.defineProperty(this, "cleanup", {
+      writable: false, // Prevents reassigning in subclass
+      configurable: false, // Prevents deletion or redefinition
+    })
+  }
 
   emit<K extends keyof T>(
     event: K,
@@ -925,7 +931,20 @@ abstract class BaseController<T extends BaseControllerEvents> {
 
   abstract run(): Promise<void>
   abstract stop(): Promise<void>
-  abstract cleanup(): Promise<void>
+
+  /**
+   * This cleanup function should be called by child classes, and NOT overriden.
+   */
+  protected async cleanup() {
+    this.events.removeAllListeners()
+    this.log.trace("BaseController event emitter disposed")
+    await this.cleanupSpecific()
+  }
+
+  /**
+   * Should not be called by the child class directly. Instead, call the parent class's {@link cleanup} which will ensure common cleanup is performed in addition to controller-specific cleanup
+   */
+  protected abstract cleanupSpecific(): Promise<void>
 }
 
 class ManualModeController extends BaseController<ManualSyncEvents> {
@@ -960,6 +979,7 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
 
   async stop(): Promise<void> {
     try {
+      // Call the Base class cleanup which will include cleanupSpecific for this controller
       await this.cleanup()
       this.emit(SyncEvent.STOPPED)
     } catch (error) {
@@ -971,12 +991,13 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
-  async cleanup() {
+  protected async cleanupSpecific() {
     if (this.keyHandler) {
       this.keyHandler.stop()
       this.keyHandler = null
       this.log.trace("keyHandler stopped.")
     }
+    this.log.trace("ManualController specific cleanup complete.")
   }
 
   public async performSyncCycle(): Promise<void> {
@@ -1205,6 +1226,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
 
   async stop(): Promise<void> {
     try {
+      // Call the Base class cleanup which will include cleanupSpecific for this controller
       await this.cleanup()
       this.emit(SyncEvent.STOPPED)
     } catch (error) {
@@ -1215,7 +1237,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     }
   }
 
-  async cleanup(): Promise<void> {
+  protected async cleanupSpecific(): Promise<void> {
     if (this.keyHandler) {
       this.keyHandler.stop()
       this.keyHandler = null
@@ -1229,7 +1251,11 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
 
     if (this.watcher) {
       try {
-        this.watcher.removeAllListeners()
+        this.watcher.removeAllListeners("change")
+        this.watcher.removeAllListeners("unlink")
+        this.watcher.removeAllListeners("error")
+        this.watcher.removeAllListeners("ready")
+        this.watcher.removeAllListeners("all")
         await this.watcher.close()
       } catch (err) {
         this.log.error(`Error closing watcher: ${err}`)
@@ -1239,6 +1265,8 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     this.pendingChanges.clear()
     this.activeChanges.clear()
     this.watchedFiles.clear()
+
+    this.log.trace("WatchController specific cleanup complete.")
   }
 
   private async performSyncCycle(): Promise<void> {

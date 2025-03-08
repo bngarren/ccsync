@@ -48,8 +48,18 @@ export const toTildePath = (fullPath: string): string => {
   return fullPath.startsWith(home) ? fullPath.replace(home, "~") : fullPath
 }
 
+/**
+ * Determines if a path is likely a file rather than a directory.
+ *
+ * A path is considered a likely file if:
+ * 1. It doesn't end with a slash (after normalization)
+ * 2. The last segment contains a period that's not at the beginning
+ *
+ * @param pathStr Path to analyze
+ * @returns true if the path is likely a file, false if likely a directory
+ */
 export const pathIsLikelyFile = (pathStr: string): boolean => {
-  // Normalize and sanitize first
+  // Normalize and sanitize first, but preserve trailing slash
   const processedPath = processPath(pathStr)
 
   // If it has a trailing slash, it's definitely a directory
@@ -104,15 +114,17 @@ export function sanitizePath(pathStr: string): string {
 /**
  * Normalizes a file path to use forward slashes and handles trailing slashes consistently.
  *
+ * By default, we keep trailing slashes for normalized paths in our code. This preserves the semantic meaning of the path as a directory. We can explicitly strip them only when needed for specific operations.
+ *
  * Does NOT handle sanitization of control characters or ANSI sequences. See {@link sanitizePath}.
  *
  * @param filepath The path to normalize
- * @param stripTrailing Whether to remove trailing slash (default: true)
+ * @param stripTrailing Whether to remove trailing slash (default: false)
  * @returns Normalized path
  */
 export const normalizePath = (
   filepath: string,
-  stripTrailing = true
+  stripTrailing = false
 ): string => {
   if (typeof filepath !== "string") {
     throw new TypeError("Path must be a string")
@@ -121,13 +133,17 @@ export const normalizePath = (
   // Handle empty path
   if (!filepath) return ""
 
+  const trimmed = filepath.trim()
+
+  if (!trimmed) return ""
+
   // Special cases
-  if (filepath === "\\" || filepath === "/") return "/"
-  if (filepath === ".") return "."
-  if (filepath === "..") return ".."
+  if (trimmed === "\\" || trimmed === "/") return "/"
+  if (trimmed === ".") return "."
+  if (trimmed === "..") return ".."
 
   // Normalize using Node's path.normalize first (handles . and .., and removed duplicate slashes)
-  let normalized = path.posix.normalize(filepath)
+  let normalized = path.posix.normalize(trimmed)
 
   // Handle Windows drive letters consistently
   const hasWindowsDrive = /^[A-Z]:/i.test(normalized)
@@ -164,13 +180,13 @@ export const normalizePath = (
  *
  * Steps performed:
  * 1. Sanitize (remove ANSI, control chars)
- * 2. Normalize (handle backslashes, resolves . and .., and removed duplicate slashes)
+ * 2. Normalize (handle backslashes, resolves . and .., and remove duplicate slashes)
  *
  * @param filepath The path to process
- * @param stripTrailing Whether to remove trailing slash (default: true)
+ * @param stripTrailing Whether to remove trailing slash (default: false)
  * @returns A fully sanitized and normalized path
  */
-export function processPath(input: string, stripTrailing = true): string {
+export function processPath(input: string, stripTrailing = false): string {
   // First sanitize any problematic characters
   const sanitized = sanitizePath(input)
 
@@ -265,7 +281,7 @@ export const validateMinecraftSave = async (
   saveDir: string,
   computerModDir = "computercraft/computer"
 ): Promise<SaveValidationResult> => {
-  const savePath = resolvePath(saveDir)
+  const savePath = processPath(resolvePath(saveDir))
   const result: SaveValidationResult = {
     isValid: false,
     savePath,
@@ -352,7 +368,7 @@ export const getComputerShortPath = (saveName: string, computerId: string) => {
 export const findMinecraftComputers = async (savePath: string) => {
   try {
     // Build path to computercraft directory
-    const computercraftPath = normalizePath(
+    const computercraftPath = processPath(
       path.join(savePath, "computercraft", "computer")
     )
 
@@ -724,17 +740,22 @@ export async function resolveSyncRules(
 export function resolveTargetPath(rule: ResolvedFileRule): string {
   // For file targets, normalize and use the specified path directly
   if (rule.target.type === "file") {
-    return processPath(rule.target.path)
+    return processPath(rule.target.path, true) // strip trailing slash for files
   }
 
   // For directory targets
-  const targetDir = processPath(rule.target.path)
+  // Note: Always ensure the target directory path has a trailing slash
+  const targetDir = processPath(rule.target.path) + "/"
+
+  // Normalize the targetDir to ensure it has exactly one trailing slash
+  const normalizedTargetDir = targetDir.replace(/\/+$/, "/")
+
   const sourceFilename = path.basename(rule.sourceAbsolutePath)
 
   // When flattening, just append the filename to the target directory
   if (rule.flatten !== false) {
     // Default to true if undefined
-    return processPath(path.join(targetDir, sourceFilename))
+    return processPath(path.join(normalizedTargetDir, sourceFilename))
   }
 
   // When not flattening, preserve source directory structure
@@ -742,10 +763,14 @@ export function resolveTargetPath(rule: ResolvedFileRule): string {
 
   if (sourceDir === "." || sourceDir === "") {
     // Source file is directly in the source root
-    return processPath(path.join(targetDir, sourceFilename))
+    return processPath(path.join(normalizedTargetDir, sourceFilename))
   } else {
     // Source file is in a subdirectory, preserve that structure
-    return processPath(path.join(targetDir, sourceDir, sourceFilename))
+    // Ensure the sourceDir doesn't have trailing slashes
+    const normalizedSourceDir = processPath(sourceDir, true)
+    return processPath(
+      normalizedTargetDir + normalizedSourceDir + "/" + sourceFilename
+    )
   }
 }
 

@@ -10,6 +10,7 @@ import {
   pathsAreEqual,
   resolveTargetPath,
   processPath,
+  pathIsLikelyFile,
 } from "../src/utils"
 import path from "path"
 import { mkdir, rm, writeFile } from "node:fs/promises"
@@ -277,7 +278,13 @@ describe("Path Handling", () => {
       {
         input: "lib/folder/",
         target: "lib/folder/",
-        description: "keeps trailing slash when requested",
+        description: "keeps trailing slash",
+        stripTrailing: false,
+      },
+      {
+        input: "", // Empty string
+        target: "", // Should remain empty
+        description: "handles empty string with stripTrailing=false",
         stripTrailing: false,
       },
       // Root paths
@@ -286,6 +293,12 @@ describe("Path Handling", () => {
         target: "/",
         description: "preserves root slash",
         stripTrailing: true,
+      },
+      {
+        input: "/", // Root path
+        target: "/", // Should remain as root path
+        description: "preserves root slash even when not stripping trailing",
+        stripTrailing: false,
       },
       // Windows paths
       // Not using String.raw here as we want to include that trailing slash in the input
@@ -300,6 +313,12 @@ describe("Path Handling", () => {
         target: "C:/folder",
         description: "handles Windows drive letter with trailing slash",
         stripTrailing: true,
+      },
+      {
+        input: "C:/",
+        target: "C:/", // Should preserve the trailing slash
+        description: "preserves Windows drive root slash",
+        stripTrailing: false,
       },
     ]
 
@@ -338,6 +357,14 @@ describe("Path Handling", () => {
 
   test("handles empty and invalid inputs", () => {
     expect(processPath("")).toBe("")
+    // Test behavior with falsy but valid string inputs
+    expect(processPath("", false)).toBe("")
+    // Test behavior with whitespace-only strings
+    expect(processPath("  ", true)).toBe("")
+    expect(processPath("  ", false)).toBe("")
+    // Test with strings containing only slashes
+    expect(processPath("//////////", true)).toBe("/")
+    expect(processPath("//////////", false)).toBe("/")
     expect(() => processPath(undefined as unknown as string)).toThrow(TypeError)
     expect(() => processPath(null as unknown as string)).toThrow(TypeError)
   })
@@ -359,6 +386,126 @@ describe("Path Handling", () => {
 
     for (const test of tests) {
       expect(pathsAreEqual(test.path1, test.path2)).toBe(test.shouldMatch)
+    }
+  })
+
+  test("pathIsLikelyFile handles edge cases correctly", () => {
+    // Files with extensions
+    expect(pathIsLikelyFile("file.txt")).toBe(true)
+    expect(pathIsLikelyFile("path/to/file.txt")).toBe(true)
+
+    // Dot files (hidden files in Unix)
+    expect(pathIsLikelyFile(".gitignore")).toBe(false)
+    expect(pathIsLikelyFile("path/to/.env")).toBe(false)
+
+    // Files with multiple extensions
+    expect(pathIsLikelyFile("archive.tar.gz")).toBe(true)
+
+    // Directories with trailing slashes
+    expect(pathIsLikelyFile("path/to/dir/")).toBe(false)
+
+    // Directories without trailing slashes but with dots in name
+    expect(pathIsLikelyFile("path/to/version1.0")).toBe(true) // This might be a directory but would be detected as file
+
+    // Empty paths
+    expect(pathIsLikelyFile("")).toBe(false)
+
+    // Paths with trailing whitespace
+    expect(pathIsLikelyFile("file.txt ")).toBe(true)
+    expect(pathIsLikelyFile("directory/ ")).toBe(false)
+  })
+
+  test("resolveTargetPath handles unusual paths correctly", () => {
+    const unusualCases = [
+      {
+        name: "target with dots but no extension",
+        rule: createResolvedFile({
+          sourceRoot: "/src",
+          sourcePath: "program.lua",
+          targetPath: "version.1.0",
+          computers: "1",
+        }),
+        expected: "version.1.0",
+        description:
+          "should treat path with dots as a file if no trailing slash",
+      },
+      {
+        name: "target with trailing whitespace",
+        rule: createResolvedFile({
+          sourceRoot: "/src",
+          sourcePath: "program.lua",
+          targetPath: "folder/ ",
+          computers: "1",
+        }),
+        expected: "folder/program.lua",
+        description: "should normalize and handle trailing whitespace",
+      },
+      {
+        name: "target with Unicode characters",
+        rule: createResolvedFile({
+          sourceRoot: "/src",
+          sourcePath: "program.lua",
+          targetPath: "文件夹/",
+          computers: "1",
+        }),
+        expected: "文件夹/program.lua",
+        description: "should handle Unicode paths correctly",
+      },
+      {
+        name: "multiple consecutive slashes in target path",
+        rule: createResolvedFile({
+          sourceRoot: "/src",
+          sourcePath: "program.lua",
+          targetPath: "folder////subfolder///",
+          computers: "1",
+        }),
+        expected: "folder/subfolder/program.lua",
+        description: "should normalize multiple consecutive slashes",
+      },
+      {
+        name: "target with URL-encoded characters",
+        rule: createResolvedFile({
+          sourceRoot: "/src",
+          sourcePath: "program.lua",
+          targetPath: "folder%20with%20spaces/",
+          computers: "1",
+        }),
+        expected: "folder%20with%20spaces/program.lua",
+        description: "should preserve URL-encoded characters",
+      },
+      {
+        name: "dot segments in target path",
+        rule: createResolvedFile({
+          sourceRoot: "/src",
+          sourcePath: "program.lua",
+          targetPath: "./folder/./subfolder/.",
+          computers: "1",
+        }),
+        expected: "folder/subfolder/program.lua",
+        description: "should resolve dot segments in target path",
+      },
+      {
+        name: "double-dot segments in target path",
+        rule: createResolvedFile({
+          sourceRoot: "/src",
+          sourcePath: "program.lua",
+          targetPath: "folder/../other/",
+          computers: "1",
+        }),
+        expected: "other/program.lua",
+        description: "should resolve parent directory references",
+      },
+    ]
+
+    for (const test of unusualCases) {
+      try {
+        const result = resolveTargetPath(test.rule)
+        expect(result).toBe(test.expected)
+      } catch (err) {
+        throw new Error(
+          `Unusual case "${test.name}" failed: ${getErrorMessage(err)}\n${test.description}`
+        )
+      }
     }
   })
 
@@ -505,8 +652,8 @@ describe("Path Handling", () => {
             targetPath: "",
             computers: "1",
           }),
-          expected: "program.lua",
-          description: "empty directory target should just use filename",
+          expected: "/program.lua",
+          description: "empty target should just use `/filename`",
         },
         {
           name: "root target path",
@@ -706,7 +853,7 @@ describe("File Operations", () => {
       ).toBe("test/temp/file.lua")
 
       // Check target is correctly processed
-      expect(resolvedRule.target.path).toBe("/target/folder")
+      expect(resolvedRule.target.path).toBe("/target/folder/")
     })
 
     test("filters out directories when using glob without file extension", async () => {

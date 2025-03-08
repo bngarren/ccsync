@@ -41,7 +41,7 @@ import {
 import { getLogger } from "./log"
 import type pino from "pino"
 
-enum SyncManagerState {
+export enum SyncManagerState {
   IDLE,
   STARTING,
   RUNNING,
@@ -695,10 +695,10 @@ export class SyncManager {
       manualController.on(SyncEvent.SYNC_ERROR, (error) => {
         // Handle based on severity
         if (error.severity === ErrorSeverity.FATAL) {
-          this.log.fatal(error, "startManualMode")
+          this.log.fatal(error, "MANUAL mode")
           this.setState(SyncManagerState.ERROR)
         } else {
-          this.log.error(error, "startManualMode")
+          this.log.error(error, "MANUAL mode")
           // continue operations
         }
       })
@@ -777,10 +777,10 @@ export class SyncManager {
       watchController.on(SyncEvent.SYNC_ERROR, (error) => {
         // Handle based on severity
         if (error.severity === ErrorSeverity.FATAL) {
-          this.log.fatal(error, "startWatchMode")
+          this.log.fatal(error, "WATCH mode")
           this.setState(SyncManagerState.ERROR)
         } else {
-          this.log.error(error, "startWatchMode")
+          this.log.error(error, "WATCH mode")
           // continue operations
         }
       })
@@ -1025,6 +1025,14 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
       }
 
       const syncResult = await this.syncManager.performSync(syncPlan)
+
+      for (const error of syncResult.errors) {
+        this.emit(
+          SyncEvent.SYNC_ERROR,
+          AppError.error(error, "performSyncCycle")
+        )
+      }
+
       this.emit(SyncEvent.SYNC_COMPLETE, syncResult)
     } catch (error) {
       const fatalAppError = AppError.from(error, {
@@ -1292,6 +1300,13 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
 
       // Perform sync
       const syncResult = await this.syncManager.performSync(syncPlan)
+
+      for (const error of syncResult.errors) {
+        this.emit(
+          SyncEvent.SYNC_ERROR,
+          AppError.error(error, "performSyncCycle")
+        )
+      }
 
       this.log.debug(`${this.isInitialSync ? "Initial " : ""}Sync Complete.`)
 

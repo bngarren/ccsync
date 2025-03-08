@@ -10,7 +10,7 @@ import {
 } from "../src/utils"
 import * as p from "@clack/prompts"
 import { expect, mock } from "bun:test"
-import { DEFAULT_CONFIG, type SyncRule } from "../src/config"
+import { DEFAULT_CONFIG, type Config, type SyncRule } from "../src/config"
 import * as yaml from "yaml"
 import { getErrorMessage, type IAppError } from "../src/errors"
 import stripAnsi from "strip-ansi"
@@ -118,6 +118,15 @@ export const writeConfig = async (
 ) => {
   const config = { ...DEFAULT_CONFIG, ...configChanges }
   await writeFile(configPath, yaml.stringify(config))
+}
+
+/**
+ * Bypasses the normal `loadConfig` and instead returns a direct yaml.parse of the passed config string. Helpful for testing. Will throw on error.
+ * @param configString
+ * @returns Config
+ */
+export const unsafeParseConfig = (configString: string) => {
+  return yaml.parse(configString) as Config
 }
 
 // Cleanup helper
@@ -316,7 +325,8 @@ export function waitForEventWithTrigger<T>(
   },
   awaitedEvent: SyncEvent,
   triggerFn?: () => void | Promise<void>, // Function that triggers the event
-  timeoutMs = 5000
+  timeoutMs = 5000,
+  ignoreError = false
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     // Set timeout to avoid test hanging
@@ -337,6 +347,8 @@ export function waitForEventWithTrigger<T>(
 
     // Error handler
     const handleError = (error: IAppError) => {
+      if (ignoreError) return
+
       cleanup()
       reject(new Error(`Operation failed: ${error.message}`))
     }

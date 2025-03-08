@@ -1,8 +1,16 @@
-import { expect, test, describe, beforeEach, afterEach, mock } from "bun:test"
+import {
+  expect,
+  test,
+  describe,
+  beforeEach,
+  afterEach,
+  mock,
+  spyOn,
+} from "bun:test"
 import * as fs from "node:fs/promises"
 import path from "path"
 import { loadConfig, withDefaultConfig } from "../src/config"
-import { SyncManager } from "../src/sync"
+import { SyncManager, SyncManagerState } from "../src/sync"
 import {
   TempCleaner,
   createUniqueTempDir,
@@ -21,6 +29,8 @@ import { SyncEvent, SyncStatus, type SyncOperationResult } from "../src/types"
 import figures from "figures"
 import { setTimeout } from "node:timers/promises"
 import { UI } from "../src/ui"
+import { AppError, ErrorSeverity } from "../src/errors"
+import type { PathLike } from "node:fs"
 
 describe("Integration: SyncManager", () => {
   let tempDir: string
@@ -321,57 +331,57 @@ describe("Integration: SyncManager", () => {
     } finally {
       await syncManager.stop()
     }
+
+    async function verifyComputer1Files(computer1Dir: string) {
+      // Check root level files
+      const rootFiles = await Promise.all([
+        fs.exists(path.join(computer1Dir, "program.lua")), // from root
+        fs.exists(path.join(computer1Dir, "startup.lua")), // from root
+        fs.exists(path.join(computer1Dir, "main.lua")), // from programs/
+        fs.exists(path.join(computer1Dir, "lib/utils.lua")), // from lib/
+      ])
+      rootFiles.forEach((exists) => expect(exists).toBe(true))
+
+      // Check backup directory
+      const backupFiles = await Promise.all([
+        fs.exists(path.join(computer1Dir, "backup/program.lua")), // from root
+        fs.exists(path.join(computer1Dir, "backup/startup.lua")), // from root
+        fs.exists(path.join(computer1Dir, "backup/main.lua")), // from programs/
+      ])
+      backupFiles.forEach((exists) => expect(exists).toBe(true))
+
+      // Verify content of one file to ensure proper copying
+      const content = await fs.readFile(
+        path.join(computer1Dir, "program.lua"),
+        "utf8"
+      )
+      expect(content).toBe("print('Hello')")
+    }
+
+    async function verifyComputer2Files(computer2Dir: string) {
+      // Verify lib files exist in root lib directory
+      expect(fs.exists(path.join(computer2Dir, "lib/utils.lua"))).resolves.toBe(
+        true
+      )
+
+      // Check all directory has files with preserved structure
+      const allDirFiles = await Promise.all([
+        fs.exists(path.join(computer2Dir, "all/program.lua")), // from root
+        fs.exists(path.join(computer2Dir, "all/startup.lua")), // fromt root
+        fs.exists(path.join(computer2Dir, "all/programs/main.lua")), // from programs/
+        fs.exists(path.join(computer2Dir, "all/lib/utils.lua")), // from lib/
+      ])
+      allDirFiles.forEach((exists) => expect(exists).toBe(true))
+
+      // Verify files don't exist in root (except lib)
+      const rootFiles = await Promise.all([
+        fs.exists(path.join(computer2Dir, "program.lua")),
+        fs.exists(path.join(computer2Dir, "startup.lua")),
+        fs.exists(path.join(computer2Dir, "main.lua")),
+      ])
+      rootFiles.forEach((exists) => expect(exists).toBe(false))
+    }
   })
-
-  async function verifyComputer1Files(computer1Dir: string) {
-    // Check root level files
-    const rootFiles = await Promise.all([
-      fs.exists(path.join(computer1Dir, "program.lua")), // from root
-      fs.exists(path.join(computer1Dir, "startup.lua")), // from root
-      fs.exists(path.join(computer1Dir, "main.lua")), // from programs/
-      fs.exists(path.join(computer1Dir, "lib/utils.lua")), // from lib/
-    ])
-    rootFiles.forEach((exists) => expect(exists).toBe(true))
-
-    // Check backup directory
-    const backupFiles = await Promise.all([
-      fs.exists(path.join(computer1Dir, "backup/program.lua")), // from root
-      fs.exists(path.join(computer1Dir, "backup/startup.lua")), // from root
-      fs.exists(path.join(computer1Dir, "backup/main.lua")), // from programs/
-    ])
-    backupFiles.forEach((exists) => expect(exists).toBe(true))
-
-    // Verify content of one file to ensure proper copying
-    const content = await fs.readFile(
-      path.join(computer1Dir, "program.lua"),
-      "utf8"
-    )
-    expect(content).toBe("print('Hello')")
-  }
-
-  async function verifyComputer2Files(computer2Dir: string) {
-    // Verify lib files exist in root lib directory
-    expect(fs.exists(path.join(computer2Dir, "lib/utils.lua"))).resolves.toBe(
-      true
-    )
-
-    // Check all directory has files with preserved structure
-    const allDirFiles = await Promise.all([
-      fs.exists(path.join(computer2Dir, "all/program.lua")), // from root
-      fs.exists(path.join(computer2Dir, "all/startup.lua")), // fromt root
-      fs.exists(path.join(computer2Dir, "all/programs/main.lua")), // from programs/
-      fs.exists(path.join(computer2Dir, "all/lib/utils.lua")), // from lib/
-    ])
-    allDirFiles.forEach((exists) => expect(exists).toBe(true))
-
-    // Verify files don't exist in root (except lib)
-    const rootFiles = await Promise.all([
-      fs.exists(path.join(computer2Dir, "program.lua")),
-      fs.exists(path.join(computer2Dir, "startup.lua")),
-      fs.exists(path.join(computer2Dir, "main.lua")),
-    ])
-    rootFiles.forEach((exists) => expect(exists).toBe(false))
-  }
 
   /**
    * Tests the watch mode's ability to detect and sync changes to multiple files.
@@ -819,7 +829,9 @@ describe("Integration: SyncManager", () => {
 
   test("batches multiple file changes with debouncing in watch mode", async () => {
     // Create multiple test files
-    await fs.mkdir(path.join(sourceDir, "batch-test"), { recursive: true })
+    await fs.mkdir(path.join(sourceDir, "batch-test"), {
+      recursive: true,
+    })
     await fs.writeFile(
       path.join(sourceDir, "batch-test/file1.lua"),
       "print('File 1 original')"
@@ -1058,6 +1070,219 @@ describe("Integration: SyncManager", () => {
     } finally {
       await syncManager.stop()
     }
+  })
+
+  test("handles fatal error during sync plan creation", async () => {
+    const configObject = withDefaultConfig({
+      sourceRoot: sourceDir,
+      minecraftSavePath: savePath,
+      rules: [
+        {
+          source: "*.lua",
+          target: "/",
+          computers: ["1"],
+        },
+      ],
+    })
+
+    // Create target computers
+    await createTestComputer(computersDir, "1")
+
+    const ui = new UI({ renderDynamicElements: false })
+    const syncManager = new SyncManager(configObject, ui)
+
+    // Mock createSyncPlan to throw a fatal error
+    const spy = spyOn(syncManager, "createSyncPlan").mockImplementation(() => {
+      throw new AppError("Test fatal error", ErrorSeverity.FATAL, "test")
+    })
+
+    const { controller, start } = syncManager.initManualMode()
+
+    const appError = await waitForEventWithTrigger<AppError>(
+      controller,
+      SyncEvent.SYNC_ERROR,
+      start
+    )
+
+    expect(spy).toHaveBeenCalledTimes(1)
+
+    // Verify error handling
+    expect(appError.severity).toBe(ErrorSeverity.FATAL)
+    expect(appError.message).toContain("Test fatal error")
+
+    // Give some time for cleanup
+    await setTimeout(100)
+
+    // Verify sync manager is stopped
+    expect(syncManager.isRunning()).toBe(false)
+    expect(syncManager.getState()).toBe(SyncManagerState.STOPPED)
+
+    // Restore mock
+    spy.mockRestore()
+  })
+
+  test("handles file copy errors in manual mode and recovers for next sync", async () => {
+    const configObject = withDefaultConfig({
+      sourceRoot: sourceDir,
+      minecraftSavePath: savePath,
+      rules: [
+        {
+          source: "*.lua",
+          target: "/",
+          computers: ["1"],
+        },
+      ],
+    })
+
+    // Create target computers
+    await createTestComputer(computersDir, "1")
+
+    const ui = new UI({ renderDynamicElements: false })
+    const syncManager = new SyncManager(configObject, ui)
+
+    // Mock copyFilesToComputer to throw an error on first call only
+    const originalCopyFile = fs.copyFile
+    let callCount = 0
+    const copyFileSpy = spyOn(fs, "copyFile").mockImplementation(
+      (src: PathLike, dest: PathLike) => {
+        callCount++
+        if (callCount === 1) {
+          throw new Error("File system error during copy")
+        }
+        return originalCopyFile(src, dest)
+      }
+    )
+
+    const { controller, start } = syncManager.initManualMode()
+
+    // Wait for first error
+    const error = await waitForEventWithTrigger<AppError>(
+      controller,
+      SyncEvent.SYNC_ERROR,
+      start
+    )
+
+    expect(error.message).toContain("File system error during copy")
+    expect(copyFileSpy).toHaveBeenCalledTimes(2) // 2 files x 1 attempt
+    expect(syncManager.isRunning()).toBe(true)
+
+    // Try a second sync which should now succeed
+    const result = await waitForEventWithTrigger<SyncOperationResult>(
+      controller,
+      SyncEvent.SYNC_COMPLETE,
+      () => controller.performSyncCycle()
+    )
+
+    expect(copyFileSpy).toHaveBeenCalledTimes(4) // 2 files x 2 attempts
+    expect(result.status).toBe(SyncStatus.SUCCESS)
+
+    // Manager should still be running
+    expect(syncManager.isRunning()).toBe(true)
+
+    // Cleanup
+    await syncManager.stop()
+    copyFileSpy.mockRestore()
+  })
+
+  test("handle file sync errors in watch mode but continue watching", async () => {
+    const configObject = withDefaultConfig({
+      sourceRoot: sourceDir,
+      minecraftSavePath: savePath,
+      rules: [
+        {
+          source: "*.lua",
+          target: "/",
+          computers: ["1"],
+        },
+      ],
+    })
+
+    await createTestComputer(computersDir, "1")
+
+    const ui = new UI({ renderDynamicElements: false })
+    const syncManager = new SyncManager(configObject, ui)
+
+    // Mock copyFilesToComputer to throw an error on specific calls
+    const originalCopyFile = fs.copyFile
+    let callCount = 0
+    const copyFileSpy = spyOn(fs, "copyFile").mockImplementation(
+      (src: PathLike, dest: PathLike) => {
+        callCount++
+        // First sync (2 files = 2 calls) is success
+        if (callCount <= 2) {
+          return originalCopyFile(src, dest)
+        }
+        // Second sync (1 file = call 3) fails
+        if (callCount === 3) {
+          throw new Error("File system error during copy")
+        }
+        // Third sync (1 file = call 4) succeeds agains
+        return originalCopyFile(src, dest)
+      }
+    )
+
+    const { controller, start } = syncManager.initWatchMode()
+
+    // Wait for initial sync to complete
+    const syncResult1 = await waitForEventWithTrigger<SyncOperationResult>(
+      controller,
+      SyncEvent.INITIAL_SYNC_COMPLETE,
+      start
+    )
+
+    // Verify initial sync was successful
+    expect(syncResult1.status).toBe(SyncStatus.SUCCESS)
+    expect(syncResult1.computerResults.length).toBe(1)
+    expect(syncResult1.computerResults[0].successCount).toBeGreaterThan(0)
+    expect(syncResult1.computerResults[0].failureCount).toBe(0)
+    expect(callCount).toBe(2)
+
+    // Verify the sync manager is still running
+    expect(syncManager.isRunning()).toBe(true)
+
+    const syncResult2 = await waitForEventWithTrigger<SyncOperationResult>(
+      controller,
+      SyncEvent.SYNC_COMPLETE,
+      async () => {
+        await fs.writeFile(
+          path.join(sourceDir, "program.lua"),
+          "print('Program updated')"
+        )
+      },
+      undefined,
+      true // ignore the expected SyncError
+    )
+
+    expect(syncResult2.status).toBe(SyncStatus.ERROR)
+    expect(callCount).toBe(3)
+
+    // Despite errors, the manager should still be running
+    expect(syncManager.isRunning()).toBe(true)
+
+    // Now trigger a third sync that should succeed again
+    const syncResult3 = await waitForEventWithTrigger<SyncOperationResult>(
+      controller,
+      SyncEvent.SYNC_COMPLETE,
+      async () => {
+        await fs.writeFile(
+          path.join(sourceDir, "startup.lua"),
+          "print('Startup updated')"
+        )
+      }
+    )
+
+    expect(callCount).toBe(4)
+
+    // Verify the third sync was successful
+    expect(syncResult3.status).toBe(SyncStatus.SUCCESS)
+    expect(syncResult3.computerResults.length).toBe(1)
+    expect(syncResult3.computerResults[0].successCount).toBeGreaterThan(0)
+    expect(syncResult3.computerResults[0].failureCount).toBe(0)
+
+    await syncManager.stop()
+    expect(syncManager.getState()).toBe(SyncManagerState.STOPPED)
+
+    copyFileSpy.mockRestore()
   })
 })
 

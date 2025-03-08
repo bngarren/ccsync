@@ -10,6 +10,7 @@ import type {
 } from "./types"
 import { getErrorMessage, isNodeError } from "./errors"
 import stripAnsi from "strip-ansi"
+import { pathCache } from "./cache"
 
 // ---- Language ----
 export const pluralize = (text: string) => {
@@ -187,11 +188,25 @@ export const normalizePath = (
  * @returns A fully sanitized and normalized path
  */
 export function processPath(input: string, stripTrailing = false): string {
+  // Create a cache key that includes both the input and the stripTrailing flag
+  const cacheKey = `${input}::${stripTrailing ? 1 : 0}`
+
+  // Check if result is in cache
+  const cachedResult = pathCache.get<string>(cacheKey)
+  if (cachedResult !== undefined) {
+    return cachedResult
+  }
+
   // First sanitize any problematic characters
   const sanitized = sanitizePath(input)
 
   // Then perform standard path normalization
-  return normalizePath(sanitized, stripTrailing)
+  const result = normalizePath(sanitized, stripTrailing)
+
+  // Cache the result
+  pathCache.set(cacheKey, result)
+
+  return result
 }
 
 /**

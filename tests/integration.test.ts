@@ -1,8 +1,16 @@
-import { expect, test, describe, beforeEach, afterEach, mock } from "bun:test"
+import {
+  expect,
+  test,
+  describe,
+  beforeEach,
+  afterEach,
+  mock,
+  spyOn,
+} from "bun:test"
 import * as fs from "node:fs/promises"
 import path from "path"
 import { loadConfig, withDefaultConfig } from "../src/config"
-import { SyncManager } from "../src/sync"
+import { SyncManager, SyncManagerState } from "../src/sync"
 import {
   TempCleaner,
   createUniqueTempDir,
@@ -20,6 +28,9 @@ import { stringify } from "yaml"
 import { SyncEvent, SyncStatus, type SyncOperationResult } from "../src/types"
 import figures from "figures"
 import { setTimeout } from "node:timers/promises"
+import { UI } from "../src/ui"
+import { AppError, ErrorSeverity } from "../src/errors"
+import type { PathLike } from "node:fs"
 
 describe("Integration: SyncManager", () => {
   let tempDir: string
@@ -84,15 +95,16 @@ describe("Integration: SyncManager", () => {
 
     if (!config) throw new Error("Failed to load config")
 
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(config, new UI())
 
     try {
       // Start manual mode and wait for first sync
-      const manualController = await syncManager.startManualMode()
+      const { controller, start } = syncManager.initManualMode()
 
       const syncResult = await waitForEventWithTrigger<SyncOperationResult>(
-        manualController,
-        SyncEvent.SYNC_COMPLETE
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        start
       )
 
       expect(syncResult.status).toBe(SyncStatus.SUCCESS)
@@ -159,14 +171,15 @@ describe("Integration: SyncManager", () => {
 
     const { config } = await loadConfig(configPath)
     if (!config) throw new Error("Failed to load config")
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(config, new UI())
 
-    const watchController = await syncManager.startWatchMode()
+    const { controller, start } = syncManager.initWatchMode()
     try {
       const initialSyncResult =
         await waitForEventWithTrigger<SyncOperationResult>(
-          watchController,
-          SyncEvent.INITIAL_SYNC_COMPLETE
+          controller,
+          SyncEvent.INITIAL_SYNC_COMPLETE,
+          start
         )
 
       // Verify initial sync results
@@ -201,7 +214,7 @@ describe("Integration: SyncManager", () => {
 
       const triggeredSyncResult =
         await waitForEventWithTrigger<SyncOperationResult>(
-          watchController,
+          controller,
           SyncEvent.SYNC_COMPLETE
         )
 
@@ -294,13 +307,14 @@ describe("Integration: SyncManager", () => {
     const { config } = await loadConfig(configPath)
     if (!config) throw new Error("Failed to load config")
 
-    const syncManager = new SyncManager(config)
-    const manualController = await syncManager.startManualMode()
+    const syncManager = new SyncManager(config, new UI())
+    const { controller, start } = syncManager.initManualMode()
 
     try {
       const syncResult = await waitForEventWithTrigger<SyncOperationResult>(
-        manualController,
-        SyncEvent.SYNC_COMPLETE
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        start
       )
 
       expect(syncResult.status).toBe(SyncStatus.SUCCESS)
@@ -315,60 +329,59 @@ describe("Integration: SyncManager", () => {
         verifyComputer2Files(path.join(computersDir, "2")),
       ])
     } finally {
-      await manualController.stop()
       await syncManager.stop()
     }
+
+    async function verifyComputer1Files(computer1Dir: string) {
+      // Check root level files
+      const rootFiles = await Promise.all([
+        fs.exists(path.join(computer1Dir, "program.lua")), // from root
+        fs.exists(path.join(computer1Dir, "startup.lua")), // from root
+        fs.exists(path.join(computer1Dir, "main.lua")), // from programs/
+        fs.exists(path.join(computer1Dir, "lib/utils.lua")), // from lib/
+      ])
+      rootFiles.forEach((exists) => expect(exists).toBe(true))
+
+      // Check backup directory
+      const backupFiles = await Promise.all([
+        fs.exists(path.join(computer1Dir, "backup/program.lua")), // from root
+        fs.exists(path.join(computer1Dir, "backup/startup.lua")), // from root
+        fs.exists(path.join(computer1Dir, "backup/main.lua")), // from programs/
+      ])
+      backupFiles.forEach((exists) => expect(exists).toBe(true))
+
+      // Verify content of one file to ensure proper copying
+      const content = await fs.readFile(
+        path.join(computer1Dir, "program.lua"),
+        "utf8"
+      )
+      expect(content).toBe("print('Hello')")
+    }
+
+    async function verifyComputer2Files(computer2Dir: string) {
+      // Verify lib files exist in root lib directory
+      expect(fs.exists(path.join(computer2Dir, "lib/utils.lua"))).resolves.toBe(
+        true
+      )
+
+      // Check all directory has files with preserved structure
+      const allDirFiles = await Promise.all([
+        fs.exists(path.join(computer2Dir, "all/program.lua")), // from root
+        fs.exists(path.join(computer2Dir, "all/startup.lua")), // fromt root
+        fs.exists(path.join(computer2Dir, "all/programs/main.lua")), // from programs/
+        fs.exists(path.join(computer2Dir, "all/lib/utils.lua")), // from lib/
+      ])
+      allDirFiles.forEach((exists) => expect(exists).toBe(true))
+
+      // Verify files don't exist in root (except lib)
+      const rootFiles = await Promise.all([
+        fs.exists(path.join(computer2Dir, "program.lua")),
+        fs.exists(path.join(computer2Dir, "startup.lua")),
+        fs.exists(path.join(computer2Dir, "main.lua")),
+      ])
+      rootFiles.forEach((exists) => expect(exists).toBe(false))
+    }
   })
-
-  async function verifyComputer1Files(computer1Dir: string) {
-    // Check root level files
-    const rootFiles = await Promise.all([
-      fs.exists(path.join(computer1Dir, "program.lua")), // from root
-      fs.exists(path.join(computer1Dir, "startup.lua")), // from root
-      fs.exists(path.join(computer1Dir, "main.lua")), // from programs/
-      fs.exists(path.join(computer1Dir, "lib/utils.lua")), // from lib/
-    ])
-    rootFiles.forEach((exists) => expect(exists).toBe(true))
-
-    // Check backup directory
-    const backupFiles = await Promise.all([
-      fs.exists(path.join(computer1Dir, "backup/program.lua")), // from root
-      fs.exists(path.join(computer1Dir, "backup/startup.lua")), // from root
-      fs.exists(path.join(computer1Dir, "backup/main.lua")), // from programs/
-    ])
-    backupFiles.forEach((exists) => expect(exists).toBe(true))
-
-    // Verify content of one file to ensure proper copying
-    const content = await fs.readFile(
-      path.join(computer1Dir, "program.lua"),
-      "utf8"
-    )
-    expect(content).toBe("print('Hello')")
-  }
-
-  async function verifyComputer2Files(computer2Dir: string) {
-    // Verify lib files exist in root lib directory
-    await expect(
-      fs.exists(path.join(computer2Dir, "lib/utils.lua"))
-    ).resolves.toBe(true)
-
-    // Check all directory has files with preserved structure
-    const allDirFiles = await Promise.all([
-      fs.exists(path.join(computer2Dir, "all/program.lua")), // from root
-      fs.exists(path.join(computer2Dir, "all/startup.lua")), // fromt root
-      fs.exists(path.join(computer2Dir, "all/programs/main.lua")), // from programs/
-      fs.exists(path.join(computer2Dir, "all/lib/utils.lua")), // from lib/
-    ])
-    allDirFiles.forEach((exists) => expect(exists).toBe(true))
-
-    // Verify files don't exist in root (except lib)
-    const rootFiles = await Promise.all([
-      fs.exists(path.join(computer2Dir, "program.lua")),
-      fs.exists(path.join(computer2Dir, "startup.lua")),
-      fs.exists(path.join(computer2Dir, "main.lua")),
-    ])
-    rootFiles.forEach((exists) => expect(exists).toBe(false))
-  }
 
   /**
    * Tests the watch mode's ability to detect and sync changes to multiple files.
@@ -412,17 +425,17 @@ describe("Integration: SyncManager", () => {
     const { config } = await loadConfig(configPath)
     if (!config) throw new Error("Failed to load config")
 
-    const syncManager = new SyncManager(config)
-    let watchController
+    const syncManager = new SyncManager(config, new UI())
 
     try {
-      watchController = await syncManager.startWatchMode()
+      const { controller, start } = syncManager.initWatchMode()
 
       // Step 1: Wait for initial sync to complete
       const initialSyncResult =
         await waitForEventWithTrigger<SyncOperationResult>(
-          watchController,
-          SyncEvent.INITIAL_SYNC_COMPLETE
+          controller,
+          SyncEvent.INITIAL_SYNC_COMPLETE,
+          start
         )
 
       // Verify initial sync
@@ -471,16 +484,17 @@ describe("Integration: SyncManager", () => {
       expect(thirdContent).toBe("print('Third')")
 
       // Step 2: Modify one file to trigger watch
-      await fs.writeFile(
-        path.join(sourceDir, "second.lua"),
-        "print('Updated Second')"
-      )
-
       // Step 3: Wait for the file change sync to complete
       const fileChangeSyncResult =
         await waitForEventWithTrigger<SyncOperationResult>(
-          watchController,
-          SyncEvent.SYNC_COMPLETE
+          controller,
+          SyncEvent.SYNC_COMPLETE,
+          async () => {
+            await fs.writeFile(
+              path.join(sourceDir, "second.lua"),
+              "print('Updated Second')"
+            )
+          }
         )
 
       // Verify change-triggered sync
@@ -628,15 +642,16 @@ describe("Integration: SyncManager", () => {
 
     const { config } = await loadConfig(configPath)
     if (!config) throw new Error("Failed to load config")
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(config, new UI())
 
     try {
-      const manualController = await syncManager.startManualMode()
+      const { controller, start } = syncManager.initManualMode()
 
       // Wait for sync completion with explicit timeout
       const syncResult = await waitForEventWithTrigger<SyncOperationResult>(
-        manualController,
-        SyncEvent.SYNC_COMPLETE
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        start
       )
 
       // Verify overall success
@@ -756,15 +771,16 @@ describe("Integration: SyncManager", () => {
 
     if (!config) throw new Error("Failed to load config")
 
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(config, new UI())
 
     try {
       // Start manual mode and wait for first sync
-      const manualController = await syncManager.startManualMode()
+      const { controller, start } = syncManager.initManualMode()
 
       const syncResult = await waitForEventWithTrigger<SyncOperationResult>(
-        manualController,
-        SyncEvent.SYNC_COMPLETE
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        start
       )
 
       expect(syncResult.status).toBe(SyncStatus.WARNING)
@@ -813,7 +829,9 @@ describe("Integration: SyncManager", () => {
 
   test("batches multiple file changes with debouncing in watch mode", async () => {
     // Create multiple test files
-    await fs.mkdir(path.join(sourceDir, "batch-test"), { recursive: true })
+    await fs.mkdir(path.join(sourceDir, "batch-test"), {
+      recursive: true,
+    })
     await fs.writeFile(
       path.join(sourceDir, "batch-test/file1.lua"),
       "print('File 1 original')"
@@ -853,16 +871,17 @@ describe("Integration: SyncManager", () => {
     // Setup UI output capture to verify sync operations
     const outputCapture = captureUIOutput()
 
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(config, new UI())
 
-    const watchController = await syncManager.startWatchMode()
+    const { controller, start } = syncManager.initWatchMode()
 
     try {
       // Wait for initial sync to complete
       const initialSyncResult =
         await waitForEventWithTrigger<SyncOperationResult>(
-          watchController,
-          SyncEvent.INITIAL_SYNC_COMPLETE
+          controller,
+          SyncEvent.INITIAL_SYNC_COMPLETE,
+          start
         )
 
       // Verify initial sync results
@@ -874,7 +893,7 @@ describe("Integration: SyncManager", () => {
 
       const batchedSyncResult =
         await waitForEventWithTrigger<SyncOperationResult>(
-          watchController,
+          controller,
           SyncEvent.SYNC_COMPLETE,
           async () => {
             // This runs after event listeners are registered but before waiting for the event
@@ -945,6 +964,326 @@ describe("Integration: SyncManager", () => {
       await syncManager.stop()
     }
   })
+
+  test("handles file changes that occur during sync operations", async () => {
+    const configPath = path.join(tempDir, ".ccsync.yaml")
+    const configObject = withDefaultConfig({
+      sourceRoot: sourceDir,
+      minecraftSavePath: savePath,
+      rules: [
+        {
+          source: "*.lua",
+          target: "/",
+          computers: ["1"],
+        },
+      ],
+    })
+
+    const configContent = stringify(configObject)
+    await fs.writeFile(configPath, configContent)
+
+    // Create target computers
+    await createTestComputer(computersDir, "1")
+
+    // Create initial test files
+    await fs.writeFile(path.join(sourceDir, "program.lua"), "print('Original')")
+    await fs.writeFile(path.join(sourceDir, "startup.lua"), "print('Original')")
+
+    const { config } = await loadConfig(configPath)
+    if (!config) throw new Error("Failed to load config")
+
+    // Create a custom output capture to track sync events
+    const outputCapture = captureUIOutput()
+    const syncManager = new SyncManager(
+      config,
+      new UI({ renderDynamicElements: false })
+    )
+
+    const { controller, start } = syncManager.initWatchMode()
+
+    try {
+      // Wait for initial sync to complete
+      const initialSyncResult =
+        await waitForEventWithTrigger<SyncOperationResult>(
+          controller,
+          SyncEvent.INITIAL_SYNC_COMPLETE,
+          start
+        )
+
+      expect(initialSyncResult.status).toBe(SyncStatus.SUCCESS)
+
+      // Clear output to start fresh
+      outputCapture.clear()
+
+      // Create a promise that will resolve after we've seen two SYNC_COMPLETE events
+      let syncCount = 0
+      const twoSyncsCompleted = new Promise<void>((resolve) => {
+        controller.on(SyncEvent.SYNC_COMPLETE, () => {
+          syncCount++
+          if (syncCount >= 2) {
+            resolve()
+          }
+        })
+      })
+
+      // Use a deliberate sequence to test race condition handling:
+      // 1. Modify program.lua to trigger first sync
+      await fs.writeFile(
+        path.join(sourceDir, "program.lua"),
+        "print('First change')"
+      )
+
+      // 2. Wait the duration of the debounce delay to ensure that the next write file is not batched with the first
+      await setTimeout(controller.getInternalState().debounceDelay + 1)
+
+      // 3. Modify startup.lua while first sync is in progress
+      await fs.writeFile(
+        path.join(sourceDir, "startup.lua"),
+        "print('Changed during sync')"
+      )
+
+      // Wait for both syncs to complete (with timeout)
+      await Promise.race([
+        twoSyncsCompleted,
+        setTimeout(5000).then(() => {
+          throw new Error("Timeout waiting for two sync operations to complete")
+        }),
+      ])
+
+      // Verify both files were properly synced to disk with correct content
+      const program1Content = await fs.readFile(
+        path.join(computersDir, "1", "program.lua"),
+        "utf8"
+      )
+      expect(program1Content).toBe("print('First change')")
+
+      const startup1Content = await fs.readFile(
+        path.join(computersDir, "1", "startup.lua"),
+        "utf8"
+      )
+      expect(startup1Content).toBe("print('Changed during sync')")
+
+      // Check the output to ensure both files were actually processed
+      const normalizedOutput = normalizeOutput(outputCapture.getOutput())
+      expect(normalizedOutput).toContain("program.lua")
+      expect(normalizedOutput).toContain("startup.lua")
+    } finally {
+      await syncManager.stop()
+    }
+  })
+
+  test("handles fatal error during sync plan creation", async () => {
+    const configObject = withDefaultConfig({
+      sourceRoot: sourceDir,
+      minecraftSavePath: savePath,
+      rules: [
+        {
+          source: "*.lua",
+          target: "/",
+          computers: ["1"],
+        },
+      ],
+    })
+
+    // Create target computers
+    await createTestComputer(computersDir, "1")
+
+    const ui = new UI({ renderDynamicElements: false })
+    const syncManager = new SyncManager(configObject, ui)
+
+    // Mock createSyncPlan to throw a fatal error
+    const spy = spyOn(syncManager, "createSyncPlan").mockImplementation(() => {
+      throw new AppError("Test fatal error", ErrorSeverity.FATAL, "test")
+    })
+
+    const { controller, start } = syncManager.initManualMode()
+
+    const appError = await waitForEventWithTrigger<AppError>(
+      controller,
+      SyncEvent.SYNC_ERROR,
+      start
+    )
+
+    expect(spy).toHaveBeenCalledTimes(1)
+
+    // Verify error handling
+    expect(appError.severity).toBe(ErrorSeverity.FATAL)
+    expect(appError.message).toContain("Test fatal error")
+
+    // Give some time for cleanup
+    await setTimeout(100)
+
+    // Verify sync manager is stopped
+    expect(syncManager.isRunning()).toBe(false)
+    expect(syncManager.getState()).toBe(SyncManagerState.STOPPED)
+
+    // Restore mock
+    spy.mockRestore()
+  })
+
+  test("handles file copy errors in manual mode and recovers for next sync", async () => {
+    const configObject = withDefaultConfig({
+      sourceRoot: sourceDir,
+      minecraftSavePath: savePath,
+      rules: [
+        {
+          source: "*.lua",
+          target: "/",
+          computers: ["1"],
+        },
+      ],
+    })
+
+    // Create target computers
+    await createTestComputer(computersDir, "1")
+
+    const ui = new UI({ renderDynamicElements: false })
+    const syncManager = new SyncManager(configObject, ui)
+
+    // Mock copyFilesToComputer to throw an error on first call only
+    const originalCopyFile = fs.copyFile
+    let callCount = 0
+    const copyFileSpy = spyOn(fs, "copyFile").mockImplementation(
+      (src: PathLike, dest: PathLike) => {
+        callCount++
+        if (callCount === 1) {
+          throw new Error("File system error during copy")
+        }
+        return originalCopyFile(src, dest)
+      }
+    )
+
+    const { controller, start } = syncManager.initManualMode()
+
+    // Wait for first error
+    const error = await waitForEventWithTrigger<AppError>(
+      controller,
+      SyncEvent.SYNC_ERROR,
+      start
+    )
+
+    expect(error.message).toContain("File system error during copy")
+    expect(copyFileSpy).toHaveBeenCalledTimes(2) // 2 files x 1 attempt
+    expect(syncManager.isRunning()).toBe(true)
+
+    // Try a second sync which should now succeed
+    const result = await waitForEventWithTrigger<SyncOperationResult>(
+      controller,
+      SyncEvent.SYNC_COMPLETE,
+      () => controller.performSyncCycle()
+    )
+
+    expect(copyFileSpy).toHaveBeenCalledTimes(4) // 2 files x 2 attempts
+    expect(result.status).toBe(SyncStatus.SUCCESS)
+
+    // Manager should still be running
+    expect(syncManager.isRunning()).toBe(true)
+
+    // Cleanup
+    await syncManager.stop()
+    copyFileSpy.mockRestore()
+  })
+
+  test("handle file sync errors in watch mode but continue watching", async () => {
+    const configObject = withDefaultConfig({
+      sourceRoot: sourceDir,
+      minecraftSavePath: savePath,
+      rules: [
+        {
+          source: "*.lua",
+          target: "/",
+          computers: ["1"],
+        },
+      ],
+    })
+
+    await createTestComputer(computersDir, "1")
+
+    const ui = new UI({ renderDynamicElements: false })
+    const syncManager = new SyncManager(configObject, ui)
+
+    // Mock copyFilesToComputer to throw an error on specific calls
+    const originalCopyFile = fs.copyFile
+    let callCount = 0
+    const copyFileSpy = spyOn(fs, "copyFile").mockImplementation(
+      (src: PathLike, dest: PathLike) => {
+        callCount++
+        // First sync (2 files = 2 calls) is success
+        if (callCount <= 2) {
+          return originalCopyFile(src, dest)
+        }
+        // Second sync (1 file = call 3) fails
+        if (callCount === 3) {
+          throw new Error("File system error during copy")
+        }
+        // Third sync (1 file = call 4) succeeds agains
+        return originalCopyFile(src, dest)
+      }
+    )
+
+    const { controller, start } = syncManager.initWatchMode()
+
+    // Wait for initial sync to complete
+    const syncResult1 = await waitForEventWithTrigger<SyncOperationResult>(
+      controller,
+      SyncEvent.INITIAL_SYNC_COMPLETE,
+      start
+    )
+
+    // Verify initial sync was successful
+    expect(syncResult1.status).toBe(SyncStatus.SUCCESS)
+    expect(syncResult1.computerResults.length).toBe(1)
+    expect(syncResult1.computerResults[0].successCount).toBeGreaterThan(0)
+    expect(syncResult1.computerResults[0].failureCount).toBe(0)
+    expect(callCount).toBe(2)
+
+    // Verify the sync manager is still running
+    expect(syncManager.isRunning()).toBe(true)
+
+    const syncResult2 = await waitForEventWithTrigger<SyncOperationResult>(
+      controller,
+      SyncEvent.SYNC_COMPLETE,
+      async () => {
+        await fs.writeFile(
+          path.join(sourceDir, "program.lua"),
+          "print('Program updated')"
+        )
+      },
+      undefined,
+      true // ignore the expected SyncError
+    )
+
+    expect(syncResult2.status).toBe(SyncStatus.ERROR)
+    expect(callCount).toBe(3)
+
+    // Despite errors, the manager should still be running
+    expect(syncManager.isRunning()).toBe(true)
+
+    // Now trigger a third sync that should succeed again
+    const syncResult3 = await waitForEventWithTrigger<SyncOperationResult>(
+      controller,
+      SyncEvent.SYNC_COMPLETE,
+      async () => {
+        await fs.writeFile(
+          path.join(sourceDir, "startup.lua"),
+          "print('Startup updated')"
+        )
+      }
+    )
+
+    expect(callCount).toBe(4)
+
+    // Verify the third sync was successful
+    expect(syncResult3.status).toBe(SyncStatus.SUCCESS)
+    expect(syncResult3.computerResults.length).toBe(1)
+    expect(syncResult3.computerResults[0].successCount).toBeGreaterThan(0)
+    expect(syncResult3.computerResults[0].failureCount).toBe(0)
+
+    await syncManager.stop()
+    expect(syncManager.getState()).toBe(SyncManagerState.STOPPED)
+
+    copyFileSpy.mockRestore()
+  })
 })
 
 describe("Integration: UI", () => {
@@ -1013,16 +1352,20 @@ describe("Integration: UI", () => {
     })
     if (!config) throw new Error("Failed to load config")
 
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(
+      config,
+      new UI({ renderDynamicElements: false })
+    )
 
     try {
       // Start manual mode and wait for sync
-      const manualController = await syncManager.startManualMode()
+      const { controller, start } = syncManager.initManualMode()
 
       // Wait for the sync to complete
       const syncResult = await waitForEventWithTrigger<SyncOperationResult>(
-        manualController,
-        SyncEvent.SYNC_COMPLETE
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        start
       )
 
       // Check results
@@ -1071,16 +1414,20 @@ describe("Integration: UI", () => {
     })
     if (!config) throw new Error("Failed to load config")
 
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(
+      config,
+      new UI({ renderDynamicElements: false })
+    )
 
     try {
       // Start manual mode and wait for sync
-      const manualController = await syncManager.startManualMode()
+      const { controller, start } = syncManager.initManualMode()
 
       // Wait for the sync to complete
       await waitForEventWithTrigger<SyncOperationResult>(
-        manualController,
-        SyncEvent.SYNC_COMPLETE
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        start
       )
 
       // Get the captured output
@@ -1125,16 +1472,20 @@ describe("Integration: UI", () => {
     })
     if (!config) throw new Error("Failed to load config")
 
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(
+      config,
+      new UI({ renderDynamicElements: false })
+    )
 
     try {
       // Start manual mode and wait for sync
-      const manualController = await syncManager.startManualMode()
+      const { controller, start } = syncManager.initManualMode()
 
       // Wait for the sync to complete
       const syncResult = await waitForEventWithTrigger<SyncOperationResult>(
-        manualController,
-        SyncEvent.SYNC_COMPLETE
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        start
       )
 
       // Verify the actual sync result structure for missing computers
@@ -1206,16 +1557,20 @@ describe("Integration: UI", () => {
     const { config } = await loadConfig(configPath)
     if (!config) throw new Error("Failed to load config")
 
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(
+      config,
+      new UI({ renderDynamicElements: false })
+    )
 
     try {
       // Start manual mode and wait for sync
-      const manualController = await syncManager.startManualMode()
+      const { controller, start } = syncManager.initManualMode()
 
       // Wait for the sync to complete
       await waitForEventWithTrigger<SyncOperationResult>(
-        manualController,
-        SyncEvent.SYNC_COMPLETE
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        start
       )
 
       // Get the captured output
@@ -1261,28 +1616,33 @@ describe("Integration: UI", () => {
     const { config } = await loadConfig(configPath)
     if (!config) throw new Error("Failed to load config")
 
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(
+      config,
+      new UI({ renderDynamicElements: false })
+    )
 
     try {
       // Start manual mode
-      const manualController = await syncManager.startManualMode()
+      const { controller, start } = syncManager.initManualMode()
 
       // First sync
       await waitForEventWithTrigger<SyncOperationResult>(
-        manualController,
-        SyncEvent.SYNC_COMPLETE
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        start
       )
 
       // Clear current output to analyze the next round
       outputCapture.clear()
 
-      // Trigger another sync by simulating a key press
-      manualController.performSyncCycle()
-
       // Wait for the second sync to complete
       await waitForEventWithTrigger<SyncOperationResult>(
-        manualController,
-        SyncEvent.SYNC_COMPLETE
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        async () => {
+          // Trigger another sync by simulating a key press
+          await controller.performSyncCycle()
+        }
       )
 
       // Get the captured output
@@ -1328,15 +1688,19 @@ describe("Integration: UI", () => {
     const { config } = await loadConfig(configPath)
     if (!config) throw new Error("Failed to load config")
 
-    const syncManager = new SyncManager(config)
+    const syncManager = new SyncManager(
+      config,
+      new UI({ renderDynamicElements: false })
+    )
 
     try {
-      const watchController = await syncManager.startWatchMode()
+      const { controller, start } = syncManager.initWatchMode()
 
       // Wait for initial sync to complete
       await waitForEventWithTrigger<SyncOperationResult>(
-        watchController,
-        SyncEvent.INITIAL_SYNC_COMPLETE
+        controller,
+        SyncEvent.INITIAL_SYNC_COMPLETE,
+        start
       )
 
       // Clear existing output to only capture new messages
@@ -1360,7 +1724,7 @@ describe("Integration: UI", () => {
 
       const triggeredSyncResult =
         await waitForEventWithTrigger<SyncOperationResult>(
-          watchController,
+          controller,
           SyncEvent.SYNC_COMPLETE,
           async () => {
             // Modify source file to trigger watch

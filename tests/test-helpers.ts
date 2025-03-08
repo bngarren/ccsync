@@ -10,10 +10,11 @@ import {
 } from "../src/utils"
 import * as p from "@clack/prompts"
 import { expect, mock } from "bun:test"
-import { DEFAULT_CONFIG, type SyncRule } from "../src/config"
+import { DEFAULT_CONFIG, type Config, type SyncRule } from "../src/config"
 import * as yaml from "yaml"
 import { getErrorMessage, type IAppError } from "../src/errors"
 import stripAnsi from "strip-ansi"
+import { rmSync } from "node:fs"
 
 /**
  * Creates a new tmp directory in the operating system's default directory for temporary files.
@@ -119,6 +120,15 @@ export const writeConfig = async (
   await writeFile(configPath, yaml.stringify(config))
 }
 
+/**
+ * Bypasses the normal `loadConfig` and instead returns a direct yaml.parse of the passed config string. Helpful for testing. Will throw on error.
+ * @param configString
+ * @returns Config
+ */
+export const unsafeParseConfig = (configString: string) => {
+  return yaml.parse(configString) as Config
+}
+
 // Cleanup helper
 export async function cleanupTempDir(tempDir: string) {
   try {
@@ -154,7 +164,8 @@ export function spyOnClackPrompts() {
   }
 
   // Mock the entire @clack/prompts module for spinner
-  mock.module("@clack/prompts", () => ({
+  // eslint-disable-next-line no-void
+  void mock.module("@clack/prompts", () => ({
     ...p, // Keep all other original exports
     spinner: () => ({
       start: (msg: string) => {
@@ -246,7 +257,7 @@ export function createResolvedFiles(
  * Registers an on "exit" listener that will cleanup all tmp dirs if there is an unexpected termination during operation
  */
 export class TempCleaner {
-  private static instance: TempCleaner
+  private static instance: TempCleaner | null = null
   private tempDirs: Set<string> = new Set()
   private handlerRegistered = false
 
@@ -289,7 +300,7 @@ export class TempCleaner {
 
   private cleanup() {
     for (const dir of this.tempDirs) {
-      require("fs").rmSync(dir, { recursive: true })
+      rmSync(dir, { recursive: true })
     }
     this.tempDirs.clear()
   }
@@ -307,12 +318,15 @@ export class TempCleaner {
  */
 export function waitForEventWithTrigger<T>(
   emitter: {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     on: (event: any, callback: any) => void
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     off: (event: any, callback: any) => void
   },
   awaitedEvent: SyncEvent,
-  triggerFn?: () => Promise<void>, // Function that triggers the event
-  timeoutMs = 5000
+  triggerFn?: () => void | Promise<void>, // Function that triggers the event
+  timeoutMs = 5000,
+  ignoreError = false
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     // Set timeout to avoid test hanging
@@ -333,6 +347,8 @@ export function waitForEventWithTrigger<T>(
 
     // Error handler
     const handleError = (error: IAppError) => {
+      if (ignoreError) return
+
       cleanup()
       reject(new Error(`Operation failed: ${error.message}`))
     }
@@ -350,12 +366,16 @@ export function waitForEventWithTrigger<T>(
 
     // THEN execute the trigger function
     if (triggerFn) {
-      triggerFn().catch((error) => {
-        cleanup()
-        reject(
-          new Error(`Failed to execute trigger: ${getErrorMessage(error)}`)
-        )
-      })
+      const result = triggerFn()
+
+      if (result && result instanceof Promise) {
+        result.catch((error: unknown) => {
+          cleanup()
+          reject(
+            new Error(`Failed to execute trigger: ${getErrorMessage(error)}`)
+          )
+        })
+      }
     }
   })
 }
@@ -365,9 +385,10 @@ export function waitForEventWithTrigger<T>(
  */
 export function captureUIOutput() {
   const output: string[] = []
+  // eslint-disable-next-line @typescript-eslint/unbound-method
   const originalStdoutWrite = process.stdout.write
 
-  const mockStdoutWrite = mock((...args: any[]) => {
+  const mockStdoutWrite = mock((...args: unknown[]) => {
     // Capture the output
     output.push(args.join(" "))
     return true

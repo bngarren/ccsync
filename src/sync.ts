@@ -41,7 +41,7 @@ import {
 import { getLogger } from "./log"
 import type pino from "pino"
 
-enum SyncManagerState {
+export enum SyncManagerState {
   IDLE,
   STARTING,
   RUNNING,
@@ -96,7 +96,6 @@ export class SyncManager {
     return this._logger
   }
 
-  private ui: UI | null = null
   private activeModeController:
     | ManualModeController
     | WatchModeController
@@ -111,9 +110,21 @@ export class SyncManager {
     this.log.trace(
       `State transition: ${SyncManagerState[oldState]} → ${SyncManagerState[newState]}`
     )
+
+    if (newState === SyncManagerState.ERROR) {
+      // Perform emergency cleanup/logging
+      this.stop().catch((err: unknown) => {
+        this.log.error(
+          `Failed to gracefully stop after ERROR state: ${getErrorMessage(err)}`
+        )
+      })
+    }
   }
 
-  constructor(private config: Config) {}
+  constructor(
+    private config: Config,
+    private ui: UI
+  ) {}
 
   // Public state query methods
   public isRunning(): boolean {
@@ -187,7 +198,7 @@ export class SyncManager {
             )
           })
 
-          if (saveDirValidation.missingFiles?.length > 0) {
+          if (saveDirValidation.missingFiles.length > 0) {
             plan.issues.push(
               createSyncPlanIssue(
                 `Missing files in save directory: ${saveDirValidation.missingFiles.join(", ")}`,
@@ -425,11 +436,18 @@ export class SyncManager {
 
   public async performSync(syncPlan: SyncPlan): Promise<SyncOperationResult> {
     if (this.state !== SyncManagerState.RUNNING) {
-      throw new Error("Cannot perform sync when not in RUNNING state")
+      throw AppError.error(
+        "Cannot perform sync when not in RUNNING state",
+        "SyncManager.performSync"
+      )
     }
 
     const computerResults: ComputerSyncResult[] = []
     const allComputerIds = new Set<string>()
+    // A set of available computer IDs for faster lookup
+    const availableComputerIds = new Set(
+      syncPlan.availableComputers.map((c) => c.id)
+    )
     let warnings = 0
     const errors: string[] = []
 
@@ -443,9 +461,7 @@ export class SyncManager {
           allComputerIds.add(computerId)
 
           // Check if this is a missing computer
-          const isExisting = syncPlan.availableComputers.some(
-            (c) => c.id === computerId
-          )
+          const isExisting = availableComputerIds.has(computerId)
 
           computerResults.push({
             computerId,
@@ -459,7 +475,14 @@ export class SyncManager {
         // Get the computer result
         const computerResult = computerResults.find(
           (cr) => cr.computerId === computerId
-        )!
+        )
+
+        if (!computerResult) {
+          throw AppError.error(
+            `Computer result not found for computerId: ${computerId}`,
+            "performSync"
+          )
+        }
 
         // Prepare target path based on target type
         const targetPath = resolveTargetPath(fileRule)
@@ -529,14 +552,12 @@ export class SyncManager {
         }
 
         // Report each error to the UI
-        if (this.ui) {
-          syncResult.errors.forEach((error) => {
-            this.ui?.addMessage(
-              UIMessageType.ERROR,
-              `Error copying to computer ${computer.id}: ${error}`
-            )
-          })
-        }
+        syncResult.errors.forEach((error) => {
+          this.ui.addMessage(
+            UIMessageType.ERROR,
+            `Error copying to computer ${computer.id}: ${error}`
+          )
+        })
       }
 
       // Handle skipped files as warnings
@@ -548,7 +569,7 @@ export class SyncManager {
         // Update computer failure count
         computerResult.failureCount += syncResult.skippedFiles.length
 
-        this.ui?.addMessage(UIMessageType.WARNING, skipMessage)
+        this.ui.addMessage(UIMessageType.WARNING, skipMessage)
       }
 
       // Update computer success/failure counts
@@ -624,14 +645,12 @@ export class SyncManager {
     )
 
     // Update UI with final results
-    if (this.ui) {
-      this.ui.updateOperationStats({
-        totalFiles: totalAttemptedFiles,
-        totalComputers: allComputerIds.size,
-      })
-      this.ui.updateComputerResults(computerResults)
-      this.ui.completeOperation(result)
-    }
+    this.ui.updateOperationStats({
+      totalFiles: totalAttemptedFiles,
+      totalComputers: allComputerIds.size,
+    })
+    this.ui.updateComputerResults(computerResults)
+    this.ui.completeOperation(result)
 
     // Cache invalidation for watch mode
     if (this.activeModeController instanceof WatchModeController) {
@@ -641,7 +660,10 @@ export class SyncManager {
     return result
   }
 
-  async startManualMode(): Promise<ManualModeController> {
+  initManualMode(): {
+    controller: ManualModeController
+    start: () => void
+  } {
     if (this.state !== SyncManagerState.IDLE) {
       // throw error directly, this is a programming error
       throw AppError.fatal(
@@ -651,11 +673,7 @@ export class SyncManager {
     }
 
     try {
-      this.setState(SyncManagerState.STARTING)
-
-      // Initialize UI for manual mode
-      this.ui = new UI(SyncMode.MANUAL)
-
+      this.ui.setMode(SyncMode.MANUAL)
       const manualController = new ManualModeController(this, this.ui)
       this.activeModeController = manualController
 
@@ -663,59 +681,68 @@ export class SyncManager {
       manualController.on(SyncEvent.STARTED, () => {
         this.setState(SyncManagerState.RUNNING)
         this.log.trace("manualController SyncEvent.STARTED")
-        this.ui?.start()
+        this.ui.start()
       })
 
       // The controller has already stopped
-      manualController.on(SyncEvent.STOPPED, async () => {
+      manualController.on(SyncEvent.STOPPED, () => {
         this.setState(SyncManagerState.STOPPED)
         this.log.trace("manualController SyncEvent.STOPPED")
-        this.ui?.stop()
+        this.ui.stop()
       })
 
       // High level controller functions should emit a SYNC_ERROR when they catch thrown errors from subordinate functions
-      manualController.on(SyncEvent.SYNC_ERROR, async (error) => {
-        // TODO Not sure if we should send to UI here. I think we just log...It should have been sent to the UI from the controller. Same for watchController
-        // if (this.ui) {
-        //   this.ui.addMessage(UIMessageType.ERROR, error.message)
-        // }
+      manualController.on(SyncEvent.SYNC_ERROR, (error) => {
         // Handle based on severity
         if (error.severity === ErrorSeverity.FATAL) {
-          this.log.fatal(error, "startManualMode")
+          this.log.fatal(error, "MANUAL mode")
           this.setState(SyncManagerState.ERROR)
-          await this.stop()
         } else {
-          this.log.error(error, "startManualMode")
+          this.log.error(error, "MANUAL mode")
+          // continue operations
         }
       })
 
-      manualController.start().catch(async (error) => {
-        // Controller start failed - this is a fatal error
-        this.setState(SyncManagerState.ERROR)
+      const manualControllerStart = () => {
+        this.setState(SyncManagerState.STARTING)
 
-        await this.stop()
+        manualController.run().catch((error: unknown) => {
+          // Fatal exception from run
+          this.setState(SyncManagerState.ERROR)
 
-        throw AppError.fatal(
-          `Failed to start manual mode: ${getErrorMessage(error)}`,
-          "SyncManager.startManualMode",
-          error
-        )
-      })
-      return manualController
+          this.stop().catch((err: unknown) => {
+            throw AppError.from(err, {
+              defaultMessage: "Unexpected error stopping",
+              severity: ErrorSeverity.ERROR,
+              source: "SyncManager",
+            })
+          })
+
+          throw AppError.from(error, {
+            defaultMessage: "Fatal exception during manualController run",
+            severity: ErrorSeverity.FATAL,
+            source: "SyncManager",
+          })
+        })
+      }
+
+      return {
+        controller: manualController,
+        start: manualControllerStart.bind(this),
+      }
     } catch (error) {
       this.setState(SyncManagerState.ERROR)
-      // If error is already AppError, rethrow it
-      if (error instanceof AppError) {
-        throw error
-      }
-      throw AppError.fatal(
-        `Manual mode initialization failed: ${getErrorMessage(error)}`,
-        "SyncManager.startManualMode",
-        error
-      )
+      throw AppError.from(error, {
+        severity: ErrorSeverity.FATAL,
+        source: "SyncManager",
+      })
     }
   }
-  async startWatchMode(): Promise<WatchModeController> {
+
+  initWatchMode(): {
+    controller: WatchModeController
+    start: () => void
+  } {
     if (this.state !== SyncManagerState.IDLE) {
       // throw error directly, this is a programming error
       throw AppError.fatal(
@@ -725,10 +752,7 @@ export class SyncManager {
     }
 
     try {
-      this.setState(SyncManagerState.STARTING)
-
-      // Initialize UI for watch mode
-      this.ui = new UI(SyncMode.WATCH)
+      this.ui.setMode(SyncMode.WATCH)
 
       const watchController = new WatchModeController(
         this,
@@ -741,53 +765,59 @@ export class SyncManager {
       watchController.on(SyncEvent.STARTED, () => {
         this.setState(SyncManagerState.RUNNING)
         this.log.trace("watchController SyncEvent.STARTED")
-        this.ui?.start()
+        this.ui.start()
       })
 
-      watchController.on(SyncEvent.STOPPED, async () => {
+      watchController.on(SyncEvent.STOPPED, () => {
         this.setState(SyncManagerState.STOPPED)
         this.log.trace("watchController SyncEvent.STOPPED")
-        this.ui?.stop()
+        this.ui.stop()
       })
 
-      watchController.on(SyncEvent.SYNC_ERROR, async (error) => {
+      watchController.on(SyncEvent.SYNC_ERROR, (error) => {
         // Handle based on severity
         if (error.severity === ErrorSeverity.FATAL) {
-          this.log.fatal(error, "startWatchMode")
+          this.log.fatal(error, "WATCH mode")
           this.setState(SyncManagerState.ERROR)
-          await this.stop()
         } else {
-          this.log.error(error, "startWatchMode")
+          this.log.error(error, "WATCH mode")
+          // continue operations
         }
       })
 
-      // Start the watch controller (do NOT await it!)
-      watchController.start().catch(async (error) => {
-        // Controller start failed - this is a fatal error
-        this.setState(SyncManagerState.ERROR)
+      const watchControllerStart = () => {
+        this.setState(SyncManagerState.STARTING)
 
-        await this.stop()
+        watchController.run().catch((error: unknown) => {
+          // Fatal exception from run
+          this.setState(SyncManagerState.ERROR)
 
-        // Convert to AppError and rethrow
-        throw AppError.fatal(
-          `Failed to start watch mode: ${getErrorMessage(error)}`,
-          "SyncManager.startWatchMode",
-          error
-        )
-      })
+          this.stop().catch((err: unknown) => {
+            throw AppError.from(err, {
+              defaultMessage: "Unexpected error stopping",
+              severity: ErrorSeverity.ERROR,
+              source: "SyncManager",
+            })
+          })
 
-      return watchController
+          throw AppError.from(error, {
+            defaultMessage: "Fatal exception during watchController run",
+            severity: ErrorSeverity.FATAL,
+            source: "SyncManager",
+          })
+        })
+      }
+
+      return {
+        controller: watchController,
+        start: watchControllerStart.bind(this),
+      }
     } catch (error) {
       this.setState(SyncManagerState.ERROR)
-      // If error is already AppError, rethrow it
-      if (error instanceof AppError) {
-        throw error
-      }
-      throw AppError.fatal(
-        `Watch mode initialization failed: ${getErrorMessage(error)}`,
-        "SyncManager.startWatchMode",
-        error
-      )
+      throw AppError.from(error, {
+        severity: ErrorSeverity.FATAL,
+        source: "SyncManager",
+      })
     }
   }
 
@@ -804,10 +834,7 @@ export class SyncManager {
     this.setState(SyncManagerState.STOPPING)
 
     try {
-      if (this.ui) {
-        this.ui.stop()
-        this.ui = null
-      }
+      this.ui.stop()
 
       if (this.activeModeController) {
         await this.activeModeController.stop()
@@ -816,14 +843,10 @@ export class SyncManager {
       this.setState(SyncManagerState.STOPPED)
     } catch (error) {
       this.setState(SyncManagerState.ERROR)
-      if (error instanceof AppError) {
-        throw error
-      }
-      throw AppError.error(
-        `Failed to stop sync manager: ${getErrorMessage(error)}`,
-        "SyncManager.stop",
-        error
-      )
+      throw AppError.from(error, {
+        severity: ErrorSeverity.FATAL,
+        source: "SyncManager.stop",
+      })
     }
   }
 }
@@ -845,29 +868,38 @@ abstract class BaseController<T extends BaseControllerEvents> {
   constructor(
     protected syncManager: SyncManager,
     protected ui: UI | null = null
-  ) {}
+  ) {
+    this.cleanup = this.cleanup.bind(this)
+    Object.defineProperty(this, "cleanup", {
+      writable: false, // Prevents reassigning in subclass
+      configurable: false, // Prevents deletion or redefinition
+    })
+  }
 
-  emit<K extends keyof T>(event: K, data?: T[K] extends void ? void : T[K]) {
+  emit<K extends keyof T>(
+    event: K,
+    data?: T[K] extends undefined ? never : T[K]
+  ) {
     return this.events.emit(event, data)
   }
 
   on<K extends keyof T>(
     event: K,
-    listener: T[K] extends void ? () => void : (data: T[K]) => void
+    listener: T[K] extends undefined ? () => void : (data: T[K]) => void
   ) {
     this.events.on(event, listener)
   }
 
   once<K extends keyof T>(
     event: K,
-    listener: T[K] extends void ? () => void : (data: T[K]) => void
+    listener: T[K] extends undefined ? () => void : (data: T[K]) => void
   ) {
     this.events.once(event, listener)
   }
 
   off<K extends keyof T>(
     event: K,
-    listener: T[K] extends void ? () => void : (data: T[K]) => void
+    listener: T[K] extends undefined ? () => void : (data: T[K]) => void
   ) {
     this.events.off(event, listener)
   }
@@ -897,19 +929,22 @@ abstract class BaseController<T extends BaseControllerEvents> {
     }
   }
 
+  abstract run(): Promise<void>
+  abstract stop(): Promise<void>
+
   /**
-   * Base cleanup functionality for controllers
+   * This cleanup function should be called by child classes, and NOT overriden.
    */
-  protected async cleanupBase(): Promise<void> {
-    if (this.keyHandler) {
-      this.keyHandler.stop()
-      this.keyHandler = null
-      this.log.trace("keyHandler stopped.")
-    }
+  protected async cleanup() {
+    this.events.removeAllListeners()
+    this.log.trace("BaseController event emitter disposed")
+    await this.cleanupSpecific()
   }
 
-  abstract start(): Promise<void>
-  abstract stop(): Promise<void>
+  /**
+   * Should not be called by the child class directly. Instead, call the parent class's {@link cleanup} which will ensure common cleanup is performed in addition to controller-specific cleanup
+   */
+  protected abstract cleanupSpecific(): Promise<void>
 }
 
 class ManualModeController extends BaseController<ManualSyncEvents> {
@@ -917,7 +952,7 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
     super(syncManager, ui)
   }
 
-  async start(): Promise<void> {
+  async run(): Promise<void> {
     this.emit(SyncEvent.STARTED) // Signal ready to run
 
     try {
@@ -931,22 +966,20 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
         await this.waitForUserInput()
       }
     } catch (error) {
-      await this.cleanup()
+      await this.stop()
 
-      // Errors caught here should be fatal as they were not handled within performSyncCycle or waitForUserInput
-      if (error instanceof AppError) {
-        throw error
-      }
-      throw AppError.fatal(
-        `Manual mode operation failed: ${getErrorMessage(error)}`,
-        "ManualModeController.start",
-        error
-      )
+      const fatalAppError = AppError.from(error, {
+        severity: ErrorSeverity.FATAL,
+        source: "ManualModeController.start",
+      })
+      this.emit(SyncEvent.SYNC_ERROR)
+      throw fatalAppError
     }
   }
 
   async stop(): Promise<void> {
     try {
+      // Call the Base class cleanup which will include cleanupSpecific for this controller
       await this.cleanup()
       this.emit(SyncEvent.STOPPED)
     } catch (error) {
@@ -955,6 +988,16 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
         `Error during ManualController cleanup: ${getErrorMessage(error)}`
       )
     }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/require-await
+  protected async cleanupSpecific() {
+    if (this.keyHandler) {
+      this.keyHandler.stop()
+      this.keyHandler = null
+      this.log.trace("keyHandler stopped.")
+    }
+    this.log.trace("ManualController specific cleanup complete.")
   }
 
   public async performSyncCycle(): Promise<void> {
@@ -1003,22 +1046,22 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
       }
 
       const syncResult = await this.syncManager.performSync(syncPlan)
+
+      for (const error of syncResult.errors) {
+        this.emit(
+          SyncEvent.SYNC_ERROR,
+          AppError.error(error, "performSyncCycle")
+        )
+      }
+
       this.emit(SyncEvent.SYNC_COMPLETE, syncResult)
     } catch (error) {
-      // Convert to AppError if it isn't already
-      const appError =
-        error instanceof AppError
-          ? error
-          : AppError.fatal(
-              `Unexpected error during sync: ${getErrorMessage(error)}`,
-              "ManualModeController.performSyncCycle",
-              error
-            )
-
-      // Emit the error event
-      this.emit(SyncEvent.SYNC_ERROR, appError)
-
-      // Emitting a fatal error (above) will cause SyncManager to stop() this controller
+      const fatalAppError = AppError.from(error, {
+        severity: ErrorSeverity.FATAL,
+        source: "ManualModeController.performSyncCycle",
+      })
+      this.emit(SyncEvent.SYNC_ERROR, fatalAppError)
+      // Don't need to throw, as a fatal SYNC_ERROR will cause shutdown
     } finally {
       // Performance tracking
       const endTime = process.hrtime.bigint()
@@ -1045,7 +1088,7 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
     }
 
     this.keyHandler = new KeyHandler({
-      onSpace: async () => {
+      onSpace: () => {
         this.log.info(
           { action: "manual_sync", trigger: "keypress_space" },
           "User triggered manual sync"
@@ -1057,18 +1100,7 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
           { action: "exit", trigger: "keypress_esc" },
           "User triggered exit"
         )
-        try {
-          await this.syncManager.stop()
-        } catch (error) {
-          // Convert to AppError and emit
-          const appError = AppError.from(
-            error,
-            "Failed to stop sync manager",
-            ErrorSeverity.ERROR,
-            "ManualModeController.keyHandler"
-          )
-          this.emit(SyncEvent.SYNC_ERROR, appError)
-        }
+        await this.syncManager.stop()
       },
       onCtrlC: async () => {
         this.log.info(
@@ -1089,10 +1121,6 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
     this.keyHandler.start()
     this.log.debug("manualController keyHandler started")
   }
-
-  private async cleanup(): Promise<void> {
-    await this.cleanupBase()
-  }
 }
 
 class WatchModeController extends BaseController<WatchSyncEvents> {
@@ -1107,10 +1135,18 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
    * Files being watched or tracked for file changes
    */
   private watchedFiles: Set<string> = new Set()
+
   /**
-   * Temp set of files that have just changed that will be synced. Clear when synced.
+   * Files that have changed and are waiting to be synced in the next operation.
+   * Changes are accumulated here during debounce periods or while a sync is in progress.
    */
-  private changedFiles: Set<string> = new Set()
+  private pendingChanges: Set<string> = new Set()
+
+  /**
+   * Files that are currently being processed in an active sync operation.
+   * This is an atomic snapshot of pendingChanges at the moment a sync begins.
+   */
+  private activeChanges: Set<string> = new Set()
 
   private isInitialSync = true
 
@@ -1127,11 +1163,34 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     super(syncManager, ui)
   }
 
+  getInternalState() {
+    return {
+      isInitialSync: this.isInitialSync,
+      debounceDelay: this.debounceDelay,
+    }
+  }
+
+  /**
+   * Returns the set of files currently being watched by the watcher.
+   *
+   * @returns Array of absolute file paths being watched
+   */
   getWatchedFiles() {
     return [...this.watchedFiles]
   }
 
-  async start(): Promise<void> {
+  /**
+   * Returns the set of files that should be synced in the current operation.
+   * During the initial sync, returns undefined to sync all matching files.
+   * For subsequent syncs, returns the activeChanges set.
+   *
+   * @returns Set of file paths to sync, or undefined for initial sync
+   */
+  getChangedFiles(): Set<string> | undefined {
+    return this.isInitialSync ? undefined : this.activeChanges
+  }
+
+  async run(): Promise<void> {
     try {
       this.setupKeyHandler()
       await this.setupWatcher()
@@ -1149,26 +1208,25 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
 
       // Keep running until state changes
       while (this.syncManager.getState() === SyncManagerState.RUNNING) {
-        await new Promise((resolve) => setTimeoutPromise(100, resolve))
+        await new Promise((resolve) => {
+          // eslint-disable-next-line @typescript-eslint/no-floating-promises
+          setTimeoutPromise(100, resolve)
+        })
       }
     } catch (error) {
-      // Convert error to AppError if needed
-      if (error instanceof AppError) {
-        throw error
-      }
-      // Errors are fatal if caught here as they weren't handled by subordinates
-      throw AppError.fatal(
-        `Watch mode operation failed: ${getErrorMessage(error)}`,
-        "WatchModeController.start",
-        error
-      )
-    } finally {
       await this.stop()
+      const fatalAppError = AppError.from(error, {
+        severity: ErrorSeverity.FATAL,
+        source: "WatchModeController.start",
+      })
+      this.emit(SyncEvent.SYNC_ERROR)
+      throw fatalAppError
     }
   }
 
   async stop(): Promise<void> {
     try {
+      // Call the Base class cleanup which will include cleanupSpecific for this controller
       await this.cleanup()
       this.emit(SyncEvent.STOPPED)
     } catch (error) {
@@ -1179,8 +1237,36 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     }
   }
 
-  getChangedFiles(): Set<string> | undefined {
-    return this.isInitialSync ? undefined : this.changedFiles
+  protected async cleanupSpecific(): Promise<void> {
+    if (this.keyHandler) {
+      this.keyHandler.stop()
+      this.keyHandler = null
+      this.log.trace("keyHandler stopped.")
+    }
+
+    if (this.onChangeSyncDebounceTimer) {
+      clearTimeout(this.onChangeSyncDebounceTimer)
+      this.onChangeSyncDebounceTimer = null
+    }
+
+    if (this.watcher) {
+      try {
+        this.watcher.removeAllListeners("change")
+        this.watcher.removeAllListeners("unlink")
+        this.watcher.removeAllListeners("error")
+        this.watcher.removeAllListeners("ready")
+        this.watcher.removeAllListeners("all")
+        await this.watcher.close()
+      } catch (err) {
+        this.log.error(`Error closing watcher: ${err}`)
+      }
+      this.watcher = null
+    }
+    this.pendingChanges.clear()
+    this.activeChanges.clear()
+    this.watchedFiles.clear()
+
+    this.log.trace("WatchController specific cleanup complete.")
   }
 
   private async performSyncCycle(): Promise<void> {
@@ -1199,7 +1285,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
 
     try {
       const syncPlan = await this.syncManager.createSyncPlan({
-        changedFiles: this.isInitialSync ? undefined : this.changedFiles,
+        changedFiles: this.isInitialSync ? undefined : this.activeChanges,
       })
 
       this.emit(SyncEvent.SYNC_PLANNED, syncPlan)
@@ -1207,12 +1293,12 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       // If we're not in initial sync and have no files to sync, add a warning
       if (
         !this.isInitialSync &&
-        this.changedFiles.size > 0 &&
+        this.activeChanges.size > 0 &&
         syncPlan.resolvedFileRules.length === 0
       ) {
         this.log.warn(
           "No files matched for sync despite having changed files",
-          { changedFiles: [...this.changedFiles] }
+          { changedFiles: [...this.activeChanges] }
         )
       }
 
@@ -1222,14 +1308,11 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       // Check if the plan has critical issues
       if (!syncPlan.isValid) {
         // Create an AppError and emit it
-        const errorMessage = syncPlan.issues
-          .filter((issue) => issue.severity === SyncPlanIssueSeverity.ERROR)
-          .map((issue) => issue.message)
-          .join(", ")
+        const errorMessage = getSyncPlanErrorMessage(syncPlan)
 
         const syncPlanError = AppError.error(
           "Sync plan creation failed: " + errorMessage,
-          "ManualModeController.createSyncPlan"
+          "WatchModeController.createSyncPlan"
         )
         this.emit(SyncEvent.SYNC_ERROR, syncPlanError)
 
@@ -1246,6 +1329,13 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       // Perform sync
       const syncResult = await this.syncManager.performSync(syncPlan)
 
+      for (const error of syncResult.errors) {
+        this.emit(
+          SyncEvent.SYNC_ERROR,
+          AppError.error(error, "performSyncCycle")
+        )
+      }
+
       this.log.debug(`${this.isInitialSync ? "Initial " : ""}Sync Complete.`)
 
       // Emit appropriate event based on sync type
@@ -1255,25 +1345,17 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       } else {
         this.emit(SyncEvent.SYNC_COMPLETE, syncResult)
         // Clear changed files after successful non-initial sync
-        this.changedFiles.clear()
+        this.activeChanges.clear()
       }
       // Set back to ready state after operation completes
       this.ui?.setReady()
     } catch (error) {
-      // Convert to AppError if it isn't already
-      const appError =
-        error instanceof AppError
-          ? error
-          : AppError.fatal(
-              `Unexpected error during sync: ${getErrorMessage(error)}`,
-              "WatchModeController.performSyncCycle",
-              error
-            )
-
-      // Emit the error event
-      this.emit(SyncEvent.SYNC_ERROR, appError)
-
-      // Emitting a fatal error (above) will cause SyncManager to stop() this controller
+      const fatalAppError = AppError.from(error, {
+        severity: ErrorSeverity.FATAL,
+        source: "WatchModeController.performSyncCycle",
+      })
+      this.emit(SyncEvent.SYNC_ERROR, fatalAppError)
+      // Don't need to throw, as a fatal SYNC_ERROR will cause shutdown
     } finally {
       // Performance tracking
       const endTime = process.hrtime.bigint()
@@ -1302,18 +1384,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
           { action: "exit", trigger: "keypress_esc" },
           "User triggered exit"
         )
-        try {
-          await this.syncManager.stop()
-        } catch (error) {
-          // Convert to AppError and emit
-          const appError = AppError.from(
-            error,
-            "Failed to stop sync manager",
-            ErrorSeverity.ERROR,
-            "WatchModeController.keyHandler"
-          )
-          this.emit(SyncEvent.SYNC_ERROR, appError)
-        }
+        await this.syncManager.stop()
       },
       onCtrlC: async () => {
         this.log.info(
@@ -1392,7 +1463,9 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
 
     if (noLongerWatchedFiles.size > 0) {
       const relativePaths = [...noLongerWatchedFiles].map((f) => {
-        return `${getRelativePath(f, this.config.sourceRoot, { includeRootName: true })}`
+        return getRelativePath(f, this.config.sourceRoot, {
+          includeRootName: true,
+        })
       })
       this.ui?.addMessage(
         UIMessageType.WARNING,
@@ -1406,7 +1479,87 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     }
   }
 
-  private async handleWatcherOnChange(changedPath: string) {
+  /**
+   * Processes any pending file changes by moving them to activeChanges and
+   * triggering a sync operation. Handles race conditions by ensuring changes
+   * that occur during sync are captured for the next sync cycle.
+   *
+   * @returns Promise that resolves when the sync is complete
+   * @throws AppError if the sync operation fails
+   */
+  private async processPendingChanges(): Promise<void> {
+    // Safety check - only proceed if we have changes
+    if (this.pendingChanges.size === 0) {
+      return
+    }
+
+    try {
+      this.onChangeSyncInProgress = true
+
+      // Transfer pending to active - atomic operation
+      this.activeChanges = new Set(this.pendingChanges)
+      this.pendingChanges.clear()
+
+      this.log.debug(
+        {
+          fileCount: this.activeChanges.size,
+        },
+        "Processing changes"
+      )
+
+      // Execute sync with current set of changes
+      await this.performSyncCycle()
+    } catch (error) {
+      // Error handling
+      if (error instanceof AppError && error.severity === ErrorSeverity.FATAL) {
+        this.emit(
+          SyncEvent.SYNC_ERROR,
+          AppError.fatal(
+            `Failed to sync changes: ${getErrorMessage(error)}`,
+            "WatchModeController.processPendingChanges",
+            error
+          )
+        )
+      } else {
+        throw error
+      }
+    } finally {
+      this.onChangeSyncInProgress = false
+      this.activeChanges.clear()
+
+      // Process any changes that accumulated during sync
+      if (this.pendingChanges.size > 0) {
+        this.log.info(
+          { pendingChangeCount: this.pendingChanges.size },
+          "Additional changes detected during sync, processing"
+        )
+
+        // Schedule processing of new changes
+        this.onChangeSyncDebounceTimer = setTimeout(() => {
+          this.onChangeSyncDebounceTimer = null
+          this.processPendingChanges().catch((error: unknown) => {
+            this.emit(
+              SyncEvent.SYNC_ERROR,
+              AppError.error(
+                `Error processing pending changes: ${getErrorMessage(error)}`,
+                "WatchModeController.processPendingChanges",
+                error
+              )
+            )
+          })
+        }, this.debounceDelay)
+      }
+    }
+  }
+
+  /**
+   * Handles file change events from the watcher.
+   * Adds the changed file to pendingChanges and schedules processing.
+   * If a sync is already in progress, the change will be picked up afterward.
+   *
+   * @param changedPath The absolute path of the changed file
+   */
+  private handleWatcherOnChange(changedPath: string) {
     this.log.info({ changedPath }, `watchController watcher detected change`)
 
     if (this.syncManager.getState() !== SyncManagerState.RUNNING) {
@@ -1418,10 +1571,10 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
 
     // Add the changed file to our set of pending changes
     const normalizedPath = processPath(changedPath)
-    this.changedFiles.add(normalizedPath)
+    this.pendingChanges.add(normalizedPath)
 
     this.log.trace(
-      { changedFiles: [...this.changedFiles] },
+      { changedFiles: [...this.pendingChanges] },
       "Added to pending changes, waiting for more changes before syncing"
     )
 
@@ -1431,79 +1584,18 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       this.onChangeSyncDebounceTimer = null
     }
 
-    // If sync is in progress, just record the file change for next sync
-    if (this.onChangeSyncInProgress) {
-      this.log.debug("Sync already in progress, queueing change for next sync")
-      return
+    // Don't schedule if sync already in progress - it will be picked up afterwards
+    if (!this.onChangeSyncInProgress) {
+      this.onChangeSyncDebounceTimer = setTimeout(() => {
+        this.onChangeSyncDebounceTimer = null
+        this.processPendingChanges().catch((error: unknown) => {
+          this.log.error(error, "Unexpected error in processPendingChanges")
+        })
+      }, this.debounceDelay)
     }
-
-    // Set debounce timer to allow more file changes to be batched
-    this.onChangeSyncDebounceTimer = setTimeout(async () => {
-      // Take a snapshot of current changes to avoid race conditions
-      const filesToSync = new Set(this.changedFiles)
-
-      this.log.info(
-        { fileCount: filesToSync.size },
-        `watchController starting sync after debounce with ${filesToSync.size} changed files`
-      )
-
-      this.onChangeSyncDebounceTimer = null
-
-      // Only proceed if we have changes and no sync is in progress
-      if (this.changedFiles.size === 0 || this.onChangeSyncInProgress) {
-        this.log.warn(
-          "No changes to sync or sync already in progress, aborting debounced sync"
-        )
-        return
-      }
-
-      try {
-        this.onChangeSyncInProgress = true
-        this.log.debug("Beginning performSyncCycle for debounced changes")
-        await this.performSyncCycle()
-
-        // After successful sync, remove the files we just synced from the changed files set
-        for (const file of filesToSync) {
-          this.changedFiles.delete(file)
-        }
-      } catch (error) {
-        if (
-          error instanceof AppError &&
-          error.severity === ErrorSeverity.FATAL
-        ) {
-          this.emit(
-            SyncEvent.SYNC_ERROR,
-            AppError.fatal(
-              `Unexpected error during sync: ${getErrorMessage(error)}`,
-              "WatchModeController.performSyncCycle",
-              error
-            )
-          )
-        } else {
-          throw error
-        }
-      } finally {
-        this.onChangeSyncInProgress = false
-
-        // Check if more changes accumulated during sync
-        if (this.changedFiles.size > 0) {
-          this.log.info(
-            { pendingChanges: this.changedFiles.size },
-            "Additional changes detected during sync, scheduling another sync"
-          )
-
-          // Schedule another sync for any changes that accumulated during this sync
-          this.onChangeSyncDebounceTimer = setTimeout(() => {
-            this.onChangeSyncDebounceTimer = null
-            // This will trigger another sync cycle if still needed
-            this.watcher?.emit("change", [...this.changedFiles][0])
-          }, this.debounceDelay)
-        }
-      }
-    }, this.debounceDelay)
   }
 
-  private async handleWatchOnUnlink(unlinkedPath: string) {
+  private handleWatchOnUnlink(unlinkedPath: string) {
     if (this.syncManager.getState() !== SyncManagerState.RUNNING) {
       return
     }
@@ -1540,6 +1632,13 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     }
   }
 
+  /**
+   * Sets up the file watcher for the source files defined in the configuration.
+   * Resolves all glob patterns to actual file paths and starts watching those files.
+   *
+   * @returns Promise that resolves when the watcher is ready
+   * @throws AppError if watcher setup fails
+   */
   private async setupWatcher(): Promise<void> {
     try {
       // Get actual file paths to watch
@@ -1588,10 +1687,20 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
         this.emit(SyncEvent.SYNC_ERROR, watcherError)
       })
 
-      return await new Promise((resolve) => {
+      return await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(new Error("Watcher failed to become ready after timeout"))
+        }, 10000) // 10 second timeout
+
         this.watcher?.on("ready", () => {
+          clearTimeout(timeout)
           this.log.info("watcher is ready")
           resolve()
+        })
+
+        this.watcher?.on("error", (err) => {
+          clearTimeout(timeout)
+          reject(AppError.from(err))
         })
       })
     } catch (error) {
@@ -1601,25 +1710,5 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
         error
       )
     }
-  }
-
-  private async cleanup(): Promise<void> {
-    await this.cleanupBase()
-
-    if (this.onChangeSyncDebounceTimer) {
-      clearTimeout(this.onChangeSyncDebounceTimer)
-      this.onChangeSyncDebounceTimer = null
-    }
-
-    if (this.watcher) {
-      try {
-        await this.watcher.close()
-      } catch (err) {
-        this.log.error(`Error closing watcher: ${err}`)
-      }
-      this.watcher = null
-    }
-    this.changedFiles.clear()
-    this.watchedFiles.clear()
   }
 }

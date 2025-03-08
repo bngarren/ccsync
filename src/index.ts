@@ -14,10 +14,11 @@ import path from "path"
 import { SyncManager } from "./sync"
 import { theme } from "./theme"
 import { toTildePath } from "./utils"
-import { type SyncMode } from "./types"
+import { SyncMode } from "./types"
 import { AppError, ErrorSeverity, getErrorMessage } from "./errors"
 import { getLogFilePath, getLogger, initializeLogger } from "./log"
 import { version } from "./version"
+import { UI } from "./ui"
 
 const initConfig = async () => {
   // Find all config files
@@ -184,6 +185,7 @@ async function main() {
     const log = getLogger().child({ component: "Main" })
     log.info(
       {
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
         ccSyncVersion: version || process.env.npm_package_version || "unknown",
         platform: process.platform,
         nodeVersion: process.version,
@@ -246,11 +248,15 @@ async function main() {
 
     log.debug(`User selected sync mode: ${mode.toUpperCase()}`)
 
-    const syncManager = new SyncManager(config)
+    const ui = new UI()
+    const syncManager = new SyncManager(config, ui)
 
     // Handle process termination signals
-    const cleanup = async () => {
-      await syncManager.stop()
+    const cleanup = () => {
+      syncManager.stop().catch((err: unknown) => {
+        console.log(`Error could not stop syncManager on cleanup: ${err}`)
+      })
+      ui.stop()
       gracefulExit()
     }
 
@@ -258,10 +264,12 @@ async function main() {
     process.on("SIGTERM", cleanup) // Termination request
 
     try {
-      if (mode === "manual") {
-        await syncManager.startManualMode()
+      if (mode === SyncMode.MANUAL) {
+        const { start } = syncManager.initManualMode()
+        start()
       } else {
-        await syncManager.startWatchMode()
+        const { start } = syncManager.initWatchMode()
+        start()
       }
 
       // Keep the process alive until explicitly terminated
@@ -296,7 +304,7 @@ async function main() {
   }
 }
 
-main().catch((error) => {
+main().catch((error: unknown) => {
   // Last resort error handling - should rarely get here
   console.error(`Unhandled error in main process: ${getErrorMessage(error)}`)
   if (error instanceof Error && error.stack) {

@@ -1,4 +1,4 @@
-import pino from "pino"
+import pino, { type DestinationStream } from "pino"
 import fs from "node:fs"
 import path from "node:path"
 import os from "node:os"
@@ -72,6 +72,7 @@ export function initializeLogger(options: {
   const logFilePath = getLogFilePath(options.isTest)
 
   // Setup transport with pino-roll
+
   const transport = pino.transport({
     target: "pino-roll",
     options: {
@@ -88,12 +89,12 @@ export function initializeLogger(options: {
       },
       messageFormat: "{if component} [{component}]: {end}{msg}",
     },
-  })
+  }) as DestinationStream
 
   // Create the logger with serializers for better error reporting
   logger = pino(
     {
-      level: options.logLevel || DEFAULT_LOG_LEVEL,
+      level: options.logLevel,
       timestamp: pino.stdTimeFunctions.isoTime,
       serializers: {
         err: pino.stdSerializers.err, // Standard error serializer

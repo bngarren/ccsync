@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.0.0-beta.4](https://github.com/bngarren/ccsync/compare/v1.0.0-beta.3...v1.0.0-beta.4) (2025-03-09)
+
+
+### Features
+
+* **performance:** added node-cache and incorporated caching in processPath. Should lessen the amount of string operations, especially with lots of matched files ([#30](https://github.com/bngarren/ccsync/issues/30)) ([c6c3f49](https://github.com/bngarren/ccsync/commit/c6c3f49962635ef84892f919b0223d4f99eb7a02))
+
+
+### Bug Fixes
+
+* **log:** added detailed log output after uncaught fatal exception ([#34](https://github.com/bngarren/ccsync/issues/34)) ([511b939](https://github.com/bngarren/ccsync/commit/511b939d24d29542874ea1855591317184cbe9fa))
+* **paths:** more improvements to path handling and consistency, added various edge cases to tests ([#29](https://github.com/bngarren/ccsync/issues/29)) ([e50e9ef](https://github.com/bngarren/ccsync/commit/e50e9ef2b52b623fb1413fcbd42e9c39b0c17e8c))
+* **sync:** fixed errors not being emitted correctly when errors accumulated in performSync ([ec95303](https://github.com/bngarren/ccsync/commit/ec953038044db732ba28327bc2a55544be6bcbf0))
+* **ui:** fixed bug causing current sync mode not to show in the header ([3c6bfe0](https://github.com/bngarren/ccsync/commit/3c6bfe0fbfcb88f91ae30586860dc6f6371a0b13))
+* **ui:** improved how config validation errors are formatted/presented. Improve UI ([#35](https://github.com/bngarren/ccsync/issues/35)) ([3c6bfe0](https://github.com/bngarren/ccsync/commit/3c6bfe0fbfcb88f91ae30586860dc6f6371a0b13))
+
+
+### Performance Improvements
+
+* **utils:** performance improvements in utils ([c6c3f49](https://github.com/bngarren/ccsync/commit/c6c3f49962635ef84892f919b0223d4f99eb7a02))
+
+
+### Miscellaneous Chores
+
+* release as 1.0.0-beta.4 ([7944f6d](https://github.com/bngarren/ccsync/commit/7944f6de149ecaad6af8204b2b5d190821098d0f))
+
 ## [1.0.0-beta.3](https://github.com/bngarren/ccsync/compare/v1.0.0-beta.2...v1.0.0-beta.3) (2025-03-06)
 
 

@@ -28,5 +28,26 @@ jobs:
       - name: Run Prettier Check
         run: bun run pretty:check
 
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        runtime: [bun]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install Dependencies
+        run: bun install
+
       - name: Run Tests
-        uses: ./.github/workflows/run-tests.yml
+        run: bun run test

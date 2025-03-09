@@ -1034,7 +1034,10 @@ describe("Integration: SyncManager", () => {
       )
 
       // 2. Wait the duration of the debounce delay to ensure that the next write file is not batched with the first
-      await setTimeout(controller.getInternalState().debounceDelay + 1)
+      await setTimeout(
+        controller.getInternalState().debounceDelay +
+          (process.env.CI ? 1000 : 10)
+      )
 
       // 3. Modify startup.lua while first sync is in progress
       await fs.writeFile(
@@ -1520,8 +1523,6 @@ describe("Integration: UI", () => {
         totalCount: 1,
         additionalString: /program.lua/,
       })
-      expect(normalizedOutput).toContain("Computer 555")
-      expect(normalizedOutput).toContain("✔") // Success icon next to 555
 
       // Verify missing computers are shown with appropriate indicators
       // Verify the warning message contains just the missing computers

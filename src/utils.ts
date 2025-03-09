@@ -2,7 +2,7 @@ import { homedir } from "os"
 import * as fs from "node:fs/promises"
 import path from "path"
 import type { Config } from "./config"
-import { glob } from "glob"
+import { type Path } from "glob"
 import type {
   Computer,
   ResolvedFileRule,
@@ -10,6 +10,7 @@ import type {
 } from "./types"
 import { getErrorMessage, isNodeError } from "./errors"
 import stripAnsi from "strip-ansi"
+import { cachedGlob, invalidateGlobCache, pathCache } from "./cache"
 
 // ---- Language ----
 export const pluralize = (text: string) => {
@@ -187,11 +188,25 @@ export const normalizePath = (
  * @returns A fully sanitized and normalized path
  */
 export function processPath(input: string, stripTrailing = false): string {
+  // Create a cache key that includes both the input and the stripTrailing flag
+  const cacheKey = `${input}::${stripTrailing ? 1 : 0}`
+
+  // Check if result is in cache
+  const cachedResult = pathCache.get<string>(cacheKey)
+  if (cachedResult !== undefined) {
+    return cachedResult
+  }
+
   // First sanitize any problematic characters
   const sanitized = sanitizePath(input)
 
   // Then perform standard path normalization
-  return normalizePath(sanitized, stripTrailing)
+  const result = normalizePath(sanitized, stripTrailing)
+
+  // Cache the result
+  pathCache.set(cacheKey, result)
+
+  return result
 }
 
 /**
@@ -593,15 +608,16 @@ export async function resolveSyncRules(
   // Process each sync rule
   for (const rule of config.rules) {
     try {
-      // Find all matching source files
-      const matchedPaths = (
-        await glob(processPath(rule.source, false), {
-          cwd: processedSourceRootPath,
-          absolute: true,
-        })
-      ).map((sf) => processPath(sf))
+      // Find all matching source files using cached glob
+      const matchedPaths = (await cachedGlob(processPath(rule.source, false), {
+        cwd: processedSourceRootPath,
+        withFileTypes: true,
+      })) as Path[]
 
-      const matchedSourceFiles = await filterFilesOnly(matchedPaths)
+      // Filter to only include files (not directories)
+      const matchedSourceFiles = matchedPaths
+        .filter((path) => path.isFile())
+        .map((path) => processPath(path.fullpath()))
 
       // Filter for 'selectedFiles', i.e. changed files from watch mode
       let filesToResolve
@@ -686,6 +702,7 @@ export async function resolveSyncRules(
       )
       resolvedResult.availableComputers.push(...matchingComputers)
     } catch (err) {
+      invalidateGlobCache(processPath(rule.source))
       // Handle the main errors glob can throw
       if (isNodeError(err)) {
         switch (err.code) {
@@ -788,6 +805,9 @@ export async function copyFilesToComputer(
   // Normalize the computer path
   const normalizedComputerPath = normalizePath(computerPath)
 
+  // Track directories we've already verified/created to avoid redundant checks
+  const verifiedDirs = new Set<string>()
+
   for (const rule of resolvedFileRules) {
     // Get the resolved target path relative to computer root
     const relativeTargetPath = resolveTargetPath(rule)
@@ -816,33 +836,49 @@ export async function copyFilesToComputer(
     }
 
     // First ensure source file exists and is a file
-    const sourceStats = await fs.stat(toSystemPath(rule.sourceAbsolutePath)) // use systemm-specific path here
-    if (!sourceStats.isFile()) {
+    let sourceStats
+    try {
+      sourceStats = await fs.stat(toSystemPath(rule.sourceAbsolutePath))
+      if (!sourceStats.isFile()) {
+        skippedFiles.push(rule.sourceAbsolutePath)
+        errors.push(
+          `Source is not a file: ${toSystemPath(rule.sourceAbsolutePath)}`
+        )
+        continue
+      }
+    } catch (err) {
       skippedFiles.push(rule.sourceAbsolutePath)
       errors.push(
-        `Source is not a file: ${toSystemPath(rule.sourceAbsolutePath)}`
+        `Source file not found: ${toSystemPath(rule.sourceAbsolutePath)}`
       )
       continue
     }
 
     // Check if target directory exists and is actually a directory
-    try {
-      const targetDirStats = await fs.stat(toSystemPath(targetDirPath))
-      if (!targetDirStats.isDirectory()) {
-        skippedFiles.push(rule.sourceAbsolutePath)
-        errors.push(
-          `Cannot create directory '${toSystemPath(path.basename(targetDirPath))}' because a file with that name already exists`
-        )
-        continue
-      }
-    } catch (err) {
-      // Directory doesn't exist, create it
+    // Only verify directories we haven't checked yet
+    if (!verifiedDirs.has(targetDirPath)) {
       try {
-        await fs.mkdir(toSystemPath(targetDirPath), { recursive: true })
-      } catch (mkdirErr) {
-        skippedFiles.push(rule.sourceAbsolutePath)
-        errors.push(`Failed to create directory: ${mkdirErr}`)
-        continue
+        const targetDirStats = await fs.stat(toSystemPath(targetDirPath))
+        if (!targetDirStats.isDirectory()) {
+          skippedFiles.push(rule.sourceAbsolutePath)
+          errors.push(
+            `Cannot create directory '${toSystemPath(path.basename(targetDirPath))}' because a file with that name already exists`
+          )
+          continue
+        }
+        // Mark directory as verified
+        verifiedDirs.add(targetDirPath)
+      } catch (err) {
+        // Directory doesn't exist, create it
+        try {
+          await fs.mkdir(toSystemPath(targetDirPath), { recursive: true })
+          // Mark directory as verified after creation
+          verifiedDirs.add(targetDirPath)
+        } catch (mkdirErr) {
+          skippedFiles.push(rule.sourceAbsolutePath)
+          errors.push(`Failed to create directory: ${mkdirErr}`)
+          continue
+        }
       }
     }
 
@@ -852,16 +888,7 @@ export async function copyFilesToComputer(
         toSystemPath(rule.sourceAbsolutePath),
         toSystemPath(targetFilePath)
       )
-
-      // Verify the copy
-      const targetStats = await fs.stat(toSystemPath(targetFilePath))
-      if (!targetStats.isFile()) {
-        throw new Error(
-          `Failed to create target file: ${toSystemPath(targetFilePath)}`
-        )
-      } else {
-        copiedFiles.push(rule.sourceAbsolutePath)
-      }
+      copiedFiles.push(rule.sourceAbsolutePath)
     } catch (err) {
       skippedFiles.push(rule.sourceAbsolutePath)
 

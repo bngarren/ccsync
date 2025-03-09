@@ -40,6 +40,9 @@ import {
 } from "./syncplan"
 import { getLogger } from "./log"
 import type pino from "pino"
+import NodeCache from "node-cache"
+import crypto from "crypto"
+import { clearGlobCache } from "./cache"
 
 export enum SyncManagerState {
   IDLE,
@@ -100,7 +103,8 @@ export class SyncManager {
     | ManualModeController
     | WatchModeController
     | null = null
-  private lastSyncPlan: Readonly<SyncPlan> | null = null
+
+  private syncPlanCache: NodeCache
 
   // STATE
   private state: SyncManagerState = SyncManagerState.IDLE
@@ -124,7 +128,14 @@ export class SyncManager {
   constructor(
     private config: Config,
     private ui: UI
-  ) {}
+  ) {
+    // Initialize the sync plan cache with settings from config
+    this.syncPlanCache = new NodeCache({
+      stdTTL: Math.floor(this.config.advanced.cacheTTL / 1000), // Convert to seconds
+      checkperiod: 120, // Check for expired keys every 2 minutes
+      useClones: false, // Don't clone values - we want to share references
+    })
+  }
 
   // Public state query methods
   public isRunning(): boolean {
@@ -135,20 +146,34 @@ export class SyncManager {
     return this.state
   }
 
-  // Cache management
-  private isCacheValid(changedFiles?: Set<string>): boolean {
-    if (!this.lastSyncPlan?.timestamp) return false
+  /*
+    Cache management
+   The benefit of caching is to optimize for repeated manual syncs or file changes, where most of the system state (computers, directory structure, config) remains the same across operations
+  */
 
-    // If there are changed files, invalidate the cache
-    if (changedFiles && changedFiles.size > 0) return false
+  /**
+   * Creates a cache key based on the input files
+   * For full plans (no changed files), uses a standard key
+   * For partial plans, creates a hash of the file paths
+   */
+  private createCacheKey(changedFiles?: Set<string>): string {
+    // For full plan with no changed files, use a consistent key
+    if (!changedFiles || changedFiles.size === 0) {
+      return "syncPlan:full"
+    }
 
-    const timeSinceLastPlan = Date.now() - this.lastSyncPlan.timestamp
-    return timeSinceLastPlan < this.config.advanced.cacheTTL
+    // For partial plans, create a hash of the sorted file paths
+    const sortedPaths = [...changedFiles].sort().join("|")
+    const hash = crypto.createHash("md5").update(sortedPaths).digest("hex")
+    return `syncPlan:partial:${hash}`
   }
 
-  public invalidateCache(): void {
-    this.log.trace("Sync plan cache invalidated")
-    this.lastSyncPlan = null
+  public invalidateCache(reason?: string): void {
+    this.log.trace(`Sync plan cache invalidated${reason ? `: ${reason}` : ""}`)
+    this.syncPlanCache.flushAll()
+
+    clearGlobCache()
+    this.log.trace(`Glob cache cleared`)
   }
 
   /**
@@ -161,13 +186,19 @@ export class SyncManager {
   }): Promise<SyncPlan> {
     const { forceRefresh = false, changedFiles } = options || {}
 
-    // Check cache first
-    if (!forceRefresh && this.isCacheValid(changedFiles) && this.lastSyncPlan) {
-      this.log.trace("createSyncPlan > Cache hit")
-      return this.lastSyncPlan
-    } else {
-      this.log.trace("createSyncPlan > Cache miss")
+    // Determine the cache key based on changed files
+    const cacheKey = this.createCacheKey(changedFiles)
+
+    // Check cache first (unless forced refresh)
+    if (!forceRefresh) {
+      const cachedPlan = this.syncPlanCache.get<SyncPlan>(cacheKey)
+      if (cachedPlan) {
+        this.log.trace({ cacheKey }, "createSyncPlan > Cache hit")
+        return cachedPlan
+      }
     }
+
+    this.log.trace({ cacheKey }, "createSyncPlan > Cache miss")
 
     // Performance tracking
     const createSyncPlanStartTime = process.hrtime.bigint()
@@ -213,6 +244,7 @@ export class SyncManager {
           }
 
           plan.isValid = false
+          this.invalidateCache("Minecraft save directory is invalid")
           return plan
         }
       } catch (err) {
@@ -225,6 +257,7 @@ export class SyncManager {
           )
         )
         plan.isValid = false
+        this.invalidateCache("Could not validate Minecraft save directory")
         return plan
       }
 
@@ -254,6 +287,9 @@ export class SyncManager {
               }
             )
           )
+          this.invalidateCache(
+            "No computers found in the Minecraft save directory"
+          )
         }
       } catch (err) {
         plan.issues.push(
@@ -265,6 +301,9 @@ export class SyncManager {
           )
         )
         plan.isValid = false
+        this.invalidateCache(
+          "Failed to find computers in Minecraft save directory"
+        )
         return plan
       }
 
@@ -314,6 +353,7 @@ export class SyncManager {
               )
             )
           })
+          this.invalidateCache("There were errors with resolved file rules")
         }
 
         // Add missing computers as warnings
@@ -341,6 +381,7 @@ export class SyncManager {
           )
         )
         plan.isValid = false
+        this.invalidateCache("Failed to resolve sync rules")
         return plan
       }
 
@@ -351,9 +392,11 @@ export class SyncManager {
 
       // Cache successful plan
       if (plan.isValid) {
-        this.lastSyncPlan = { ...plan, timestamp: Date.now() }
-      } else {
-        this.lastSyncPlan = null
+        // Update the timestamp before caching
+        plan.timestamp = Date.now()
+
+        // Cache the plan with the computed key
+        this.syncPlanCache.set(cacheKey, plan)
       }
 
       // Performance tracking
@@ -382,7 +425,7 @@ export class SyncManager {
         )
       )
       plan.isValid = false
-      this.lastSyncPlan = null
+      this.invalidateCache("Unexpected error creating sync plan")
       return plan
     }
   }
@@ -478,6 +521,9 @@ export class SyncManager {
         )
 
         if (!computerResult) {
+          this.invalidateCache(
+            "Missing a computer result for a synced computer"
+          )
           throw AppError.error(
             `Computer result not found for computerId: ${computerId}`,
             "performSync"
@@ -558,6 +604,10 @@ export class SyncManager {
             `Error copying to computer ${computer.id}: ${error}`
           )
         })
+
+        this.invalidateCache(
+          `${pluralize("Error")(syncResult.errors.length)} in the sync result`
+        )
       }
 
       // Handle skipped files as warnings
@@ -651,11 +701,6 @@ export class SyncManager {
     })
     this.ui.updateComputerResults(computerResults)
     this.ui.completeOperation(result)
-
-    // Cache invalidation for watch mode
-    if (this.activeModeController instanceof WatchModeController) {
-      this.invalidateCache()
-    }
 
     return result
   }
@@ -1609,6 +1654,12 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     const normalizedPath = processPath(unlinkedPath)
     if (this.watchedFiles.has(normalizedPath)) {
       this.watchedFiles.delete(normalizedPath)
+
+      // When files are removed/renamed, invalidate the sync plan cache
+      // since directory structures might have changed
+      this.syncManager.invalidateCache(
+        "A watched file has been renamed/moved/deleted"
+      )
 
       // Notify user through UI
       if (this.ui) {

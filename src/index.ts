@@ -85,7 +85,9 @@ function getErrorCategoryTitle(category: ConfigErrorCategory) {
 }
 
 const presentConfigErrors = (errors: ConfigError[]) => {
-  let errorLog = "Configuration errors found:\n"
+  let errorLog = `Configuration errors found (${errors.length}):\n`
+
+  let counter = 1
 
   // Group errors by category
   const errorsByCategory: Record<ConfigErrorCategory, ConfigError[]> =
@@ -109,11 +111,15 @@ const presentConfigErrors = (errors: ConfigError[]) => {
     const title = getErrorCategoryTitle(category as ConfigErrorCategory)
     const categoryErrorsText = categoryErrors
       .map((error) => {
-        const details = [theme.error(`    • ${error.message}`)]
+        let errorMessage = theme.error(`    ${counter++}. ${error.message}`)
 
         if (error.suggestion) {
-          details.push(`      ${theme.dim(error.suggestion)}`)
+          errorMessage =
+            errorMessage +
+            theme.dim(` ${figures.arrowRight} ${error.suggestion}`)
         }
+
+        const details = [errorMessage]
 
         if (error.verboseDetail) {
           details.push(

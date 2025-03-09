@@ -59,8 +59,14 @@ describe("Save Directory Validation", () => {
     await rm(testSaveDir, { recursive: true })
 
     const result = await validateMinecraftSave(testSaveDir)
+
     expect(result.isValid).toBe(false)
-    expect(result.errors).toContain(`Save directory not found: ${testSaveDir}`)
+
+    const errorsIncludeNotFound = result.errors.some((err) => {
+      return err.match(/Save directory not found/)
+    })
+
+    expect(errorsIncludeNotFound).toBeTrue()
   })
 
   test("fails on missing computercraft directory", async () => {

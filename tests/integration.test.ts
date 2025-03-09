@@ -771,7 +771,10 @@ describe("Integration: SyncManager", () => {
 
     if (!config) throw new Error("Failed to load config")
 
-    const syncManager = new SyncManager(config, new UI())
+    const syncManager = new SyncManager(
+      config,
+      new UI({ renderDynamicElements: false })
+    )
 
     try {
       // Start manual mode and wait for first sync
@@ -871,7 +874,10 @@ describe("Integration: SyncManager", () => {
     // Setup UI output capture to verify sync operations
     const outputCapture = captureUIOutput()
 
-    const syncManager = new SyncManager(config, new UI())
+    const syncManager = new SyncManager(
+      config,
+      new UI({ renderDynamicElements: false })
+    )
 
     const { controller, start } = syncManager.initWatchMode()
 
@@ -951,11 +957,11 @@ describe("Integration: SyncManager", () => {
       // Check UI output to verify only one sync operation was performed
       const normalizedOutput = normalizeOutput(outputCapture.getOutput())
 
-      // Count the number of sync completions - should only be one for the batch
+      // Count the number of sync completions - should be two for the initial + 1 batch
       const syncCompleteMatches = normalizedOutput.match(
         /Attempted to sync \d+ total/g
       )
-      expect(syncCompleteMatches?.length).toBe(1)
+      expect(syncCompleteMatches?.length).toBe(2)
 
       // Should indicate 3 files synced in a single operation
       expect(normalizedOutput).toContain("Attempted to sync 3 total files")

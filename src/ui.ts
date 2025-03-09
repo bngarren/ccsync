@@ -169,10 +169,14 @@ export class UI {
 
     console.clear()
 
+    const syncModeText = theme.bold(
+      this.state.mode != null ? ` ${this.state.mode.toUpperCase()} mode` : ""
+    )
+
     // Show the persistent header
     process.stdout.write(
       theme.primary(
-        `\nCC: Sync - ${theme.bold(this.state.mode?.toUpperCase())} mode started at ${this.state.lastUpdated.toLocaleString()}`
+        `\nCC: Sync -${syncModeText} started at ${this.state.lastUpdated.toLocaleString()}`
       ) +
         "\n" +
         theme.primary(symbols.lineDouble.repeat(process.stdout.columns || 80)) +
@@ -181,7 +185,7 @@ export class UI {
 
     // Display history (if any) in plain text
     for (const pastOutput of this.state.syncHistory) {
-      console.log(this.stripColors(pastOutput))
+      process.stdout.write(this.stripColors(pastOutput))
     }
   }
 
@@ -199,6 +203,7 @@ export class UI {
 
   setMode(mode: SyncMode) {
     this.updateState({ mode })
+    this.log.trace({ mode }, "UI SyncMode set")
   }
 
   start(): void {
@@ -248,11 +253,10 @@ export class UI {
   }
 
   private updateState(update: Partial<UIState>): void {
-    if (!this.isActive) return
-
     // Apply updates immediately to the state
     this.state = { ...this.state, ...update }
 
+    if (!this.isActive) return
     // Queue a render with debouncing preserved
     this.queueDynamicRender()
   }

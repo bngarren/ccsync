@@ -42,6 +42,7 @@ import { getLogger } from "./log"
 import type pino from "pino"
 import NodeCache from "node-cache"
 import crypto from "crypto"
+import { clearGlobCache } from "./cache"
 
 export enum SyncManagerState {
   IDLE,
@@ -170,6 +171,9 @@ export class SyncManager {
   public invalidateCache(reason?: string): void {
     this.log.trace(`Sync plan cache invalidated${reason ? `: ${reason}` : ""}`)
     this.syncPlanCache.flushAll()
+
+    clearGlobCache()
+    this.log.trace(`Glob cache cleared`)
   }
 
   /**

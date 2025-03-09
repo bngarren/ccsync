@@ -2,7 +2,7 @@ import { homedir } from "os"
 import * as fs from "node:fs/promises"
 import path from "path"
 import type { Config } from "./config"
-import { glob } from "glob"
+import { type Path } from "glob"
 import type {
   Computer,
   ResolvedFileRule,
@@ -10,7 +10,7 @@ import type {
 } from "./types"
 import { getErrorMessage, isNodeError } from "./errors"
 import stripAnsi from "strip-ansi"
-import { pathCache } from "./cache"
+import { cachedGlob, invalidateGlobCache, pathCache } from "./cache"
 
 // ---- Language ----
 export const pluralize = (text: string) => {
@@ -608,11 +608,11 @@ export async function resolveSyncRules(
   // Process each sync rule
   for (const rule of config.rules) {
     try {
-      // Find all matching source files
-      const matchedPaths = await glob(processPath(rule.source, false), {
+      // Find all matching source files using cached glob
+      const matchedPaths = (await cachedGlob(processPath(rule.source, false), {
         cwd: processedSourceRootPath,
-        withFileTypes: true, // Returns a Path object so that we can call isFile()
-      })
+        withFileTypes: true,
+      })) as Path[]
 
       // Filter to only include files (not directories)
       const matchedSourceFiles = matchedPaths
@@ -702,6 +702,7 @@ export async function resolveSyncRules(
       )
       resolvedResult.availableComputers.push(...matchingComputers)
     } catch (err) {
+      invalidateGlobCache(processPath(rule.source))
       // Handle the main errors glob can throw
       if (isNodeError(err)) {
         switch (err.code) {

@@ -19,6 +19,7 @@ import { AppError, ErrorSeverity, getErrorMessage } from "./errors"
 import { getLogFilePath, getLogger, initializeLogger } from "./log"
 import { version } from "./version"
 import { UI } from "./ui"
+import * as os from "node:os"
 
 const initConfig = async () => {
   // Find all config files
@@ -142,6 +143,37 @@ async function handleFatalError(
   const log = getLogger()
   log.fatal(`FATAL ERROR: ${message}`)
 
+  // Collect system and environment details
+  const systemInfo = {
+    timestamp: new Date().toISOString(),
+    os: {
+      type: os.type(),
+      release: os.release(),
+      platform: os.platform(),
+      arch: os.arch(),
+      uptime: `${os.uptime()}s`,
+    },
+    cpu: {
+      model: os.cpus()[0]?.model ?? "Unknown",
+      cores: os.cpus().length,
+      load: os.loadavg(),
+    },
+    memory: {
+      total: `${(os.totalmem() / 1024 / 1024).toFixed(2)} MB`,
+      free: `${(os.freemem() / 1024 / 1024).toFixed(2)} MB`,
+    },
+    process: {
+      pid: process.pid,
+      nodeVersion: process.version,
+      execPath: process.execPath,
+      argv: process.argv,
+      cwd: process.cwd(),
+      uid: process.getuid?.() ?? "N/A",
+      gid: process.getgid?.() ?? "N/A",
+    },
+    resourceUsage: process.resourceUsage(),
+  }
+
   // Try to clean up if we have a sync manager
   if (syncManager) {
     try {
@@ -153,6 +185,12 @@ async function handleFatalError(
 
   // Exit with error code
   p.outro("Application terminated due to a fatal error.")
+
+  console.log(
+    "🫡 Perhaps an issue should be created? See https://github.com/bngarren/ccsync/issues",
+    systemInfo
+  )
+
   process.exit(1)
 }
 

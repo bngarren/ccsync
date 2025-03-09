@@ -203,6 +203,11 @@ async function main() {
       p.log.message(color.dim(`Logging to file at: ${getLogFilePath()}`))
     }
 
+    if (process.argv.includes("--smoke-test")) {
+      console.debug("Smoke test mode - exiting immediately")
+      process.exit(0)
+    }
+
     const savePath = path.parse(config.minecraftSavePath)
 
     const gracefulExit = () => {

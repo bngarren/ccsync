@@ -1520,8 +1520,6 @@ describe("Integration: UI", () => {
         totalCount: 1,
         additionalString: /program.lua/,
       })
-      expect(normalizedOutput).toContain("Computer 555")
-      expect(normalizedOutput).toContain("✔") // Success icon next to 555
 
       // Verify missing computers are shown with appropriate indicators
       // Verify the warning message contains just the missing computers

@@ -7,7 +7,7 @@ on:
       - master
 
 jobs:
-  lint-test:
+  lint-check-format:
     runs-on: ubuntu-latest
 
     steps:
@@ -29,4 +29,4 @@ jobs:
         run: bun run pretty:check
 
       - name: Run Tests
-        run: bun run test
+        uses: ./.github/workflows/run-tests.yml

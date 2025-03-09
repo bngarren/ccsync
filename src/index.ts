@@ -20,6 +20,8 @@ import { getLogFilePath, getLogger, initializeLogger } from "./log"
 import { version } from "./version"
 import { UI } from "./ui"
 import * as os from "node:os"
+import figures from "figures"
+import chalk from "chalk"
 
 const initConfig = async () => {
   // Find all config files
@@ -83,7 +85,7 @@ function getErrorCategoryTitle(category: ConfigErrorCategory) {
 }
 
 const presentConfigErrors = (errors: ConfigError[]) => {
-  p.log.error("Configuration errors found:")
+  let errorLog = "Configuration errors found:\n"
 
   // Group errors by category
   const errorsByCategory: Record<ConfigErrorCategory, ConfigError[]> =
@@ -100,30 +102,41 @@ const presentConfigErrors = (errors: ConfigError[]) => {
     errorsByCategory[error.category].push(error)
   })
 
-  // Display errors with category headers
+  // Construct error messages with category headers
   Object.entries(errorsByCategory).forEach(([category, categoryErrors]) => {
     if (categoryErrors.length === 0) return
 
     const title = getErrorCategoryTitle(category as ConfigErrorCategory)
-    p.log.error(theme.bold(`${title}:`))
+    const categoryErrorsText = categoryErrors
+      .map((error) => {
+        const details = [theme.error(`    • ${error.message}`)]
 
-    categoryErrors.forEach((error) => {
-      p.log.error(
-        `  • ${error.message}${error.suggestion ? "\n    " + theme.dim(error.suggestion) : ""}`
-      )
+        if (error.suggestion) {
+          details.push(`      ${theme.dim(error.suggestion)}`)
+        }
 
-      if (error.verboseDetail) {
-        p.log.info(`    ${theme.dim(error.verboseDetail)}`)
-      }
-    })
+        if (error.verboseDetail) {
+          details.push(
+            `      ${theme.dim(`${chalk.italic("[verbose]")} ${error.verboseDetail}`)}`
+          )
+        }
+
+        return details.join("\n")
+      })
+      .join("\n")
+
+    errorLog += `\n${theme.bold(` ${figures.triangleRightSmall} ${title}:`)}\n${categoryErrorsText}`
   })
 
-  // helpful general guidance at the end
+  // Log all errors in one call
+  p.log.error(errorLog)
+
+  // Helpful general guidance at the end
   p.log.info(
-    theme.bold("\nGeneral guidance:") +
+    theme.bold("General guidance:") + // No newline before this
       "\n  • Edit your .ccsync.yaml file to fix the issues above" +
-      "\n  • Run with verbose=true for more detailed error information" +
-      "\n  • Refer to documentation at https://github.com/bngarren/ccsync#readme"
+      // "\n  • Run with verbose=true for more detailed error information" +
+      `\n  • Refer to documentation at ${theme.accent("https://github.com/bngarren/ccsync#readme")}`
   )
   // p.log.info("  • Use 'ccsync --init' to create a fresh config if needed")
 }
@@ -257,9 +270,9 @@ async function main() {
     // ---- Confirm MC save location ----
 
     const res = await p.confirm({
-      message: `Sync with ${theme.bold(
+      message: `Begin a sync with Minecraft world: ${theme.bold(
         theme.warn(savePath.name)
-      )}?  ${theme.dim(toTildePath(config.minecraftSavePath))}'`,
+      )}?  ${theme.dim(toTildePath(config.minecraftSavePath))}`,
       initialValue: true,
     })
 

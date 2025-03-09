@@ -6,7 +6,7 @@
 # Otherwise, backslashes need to be properly escaped: "C:\Users\name\path"
 
 # Config version (do not modify)
-version: "2.0"
+version: "2.1"
 
 # Where your source files are located (relative to this config file)
 sourceRoot: "./examples/test1"

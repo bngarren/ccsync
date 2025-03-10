@@ -19,7 +19,13 @@ const LOG_ROTATION_FREQ = "daily"
 const LOG_MAX_SIZE = "10m"
 const LOG_RETENTION_COUNT = 2 // days
 
-function isSymlinkSupported(tempDir = os.tmpdir()) {
+/**
+ * Checks if the current environment supports filesystem symbolic links.
+ *
+ * @param - The directory to use for the test file and symlink.
+ * @returns - Resolves to `true` if symlinks are supported, otherwise `false`.
+ */
+export function isSymlinkSupported(tempDir: string = os.tmpdir()) {
   const testFile = path.join(tempDir, "test-file")
   const testSymlink = path.join(tempDir, "test-symlink")
 
@@ -30,14 +36,25 @@ function isSymlinkSupported(tempDir = os.tmpdir()) {
     // Try creating a symlink
     fs.symlinkSync(testFile, testSymlink)
 
-    fs.unlinkSync(testSymlink)
+    // Ensure the symlink is accessible
+    fs.accessSync(testSymlink)
 
     return true
-  } catch (error) {
-    console.log(error)
+  } catch {
     return false
   } finally {
-    fs.unlinkSync(testFile)
+    // Ensure cleanup, checking existence before deletion
+    if (fs.existsSync(testSymlink)) {
+      try {
+        fs.unlinkSync(testSymlink)
+      } catch {}
+    }
+
+    if (fs.existsSync(testFile)) {
+      try {
+        fs.unlinkSync(testFile)
+      } catch {}
+    }
   }
 }
 
@@ -210,6 +227,16 @@ export function initializeLogger(options: {
       },
       "pino logger intialized."
     )
+
+    // symlinks permissions warning, if needed
+    if (!symlinkIsSupported) {
+      let msg = `Symbolic links (which pino-roll uses to create a 'current.log') are not available in this environment.`
+      if (process.platform === "win32") {
+        msg = `${msg} On Windows, this is likely due to a lack of admin privledges.`
+      }
+      logger.warn(msg)
+    }
+
     return logger
   } catch (err) {
     console.log(

@@ -19,6 +19,27 @@ const LOG_ROTATION_FREQ = "daily"
 const LOG_MAX_SIZE = "10m"
 const LOG_RETENTION_COUNT = 2 // days
 
+function isSymlinkSupported(tempDir = os.tmpdir()) {
+  const testFile = path.join(tempDir, "test-file")
+  const testSymlink = path.join(tempDir, "test-symlink")
+
+  try {
+    // Create a test file
+    fs.writeFileSync(testFile, "test")
+
+    // Try creating a symlink
+    fs.symlinkSync(testFile, testSymlink)
+
+    // Cleanup
+    fs.unlinkSync(testSymlink)
+    fs.unlinkSync(testFile)
+
+    return true
+  } catch (error) {
+    return false
+  }
+}
+
 // Helper to get OS-specific user log directory
 export function getLogDirectory(): string {
   const platform = process.platform
@@ -84,7 +105,7 @@ export function initializeLogger(options: {
         mkdir: true, // Create the directory if it doesn't exist
         size: LOG_MAX_SIZE, // Also rotate if a log file reaches 10 MB
         extension: ".log", // Add .log extension to the files
-        symlink: !options.isTest, // Create a symlink to the current log file
+        symlink: !options.isTest && isSymlinkSupported(logDir), // Create a symlink to the current log file
         dateFormat: "yyyy-MM-dd", // Format for date in filename
         limit: {
           count: LOG_RETENTION_COUNT, // Keep 2 days of logs

@@ -32,6 +32,7 @@ function isSymlinkSupported(tempDir = os.tmpdir()) {
 
     return true
   } catch (error) {
+    console.log(error)
     return false
   } finally {
     // Cleanup

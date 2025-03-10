@@ -30,13 +30,13 @@ function isSymlinkSupported(tempDir = os.tmpdir()) {
     // Try creating a symlink
     fs.symlinkSync(testFile, testSymlink)
 
-    // Cleanup
-    fs.unlinkSync(testSymlink)
-    fs.unlinkSync(testFile)
-
     return true
   } catch (error) {
     return false
+  } finally {
+    // Cleanup
+    fs.unlinkSync(testSymlink)
+    fs.unlinkSync(testFile)
   }
 }
 
@@ -96,6 +96,8 @@ export function initializeLogger(options: {
 
     // Setup transport with pino-roll
 
+    const symlinkIsSupported = isSymlinkSupported(logDir)
+
     const transport = pino.transport({
       target: "pino-roll",
       options: {
@@ -105,7 +107,7 @@ export function initializeLogger(options: {
         mkdir: true, // Create the directory if it doesn't exist
         size: LOG_MAX_SIZE, // Also rotate if a log file reaches 10 MB
         extension: ".log", // Add .log extension to the files
-        symlink: !options.isTest && isSymlinkSupported(logDir), // Create a symlink to the current log file
+        symlink: !options.isTest && symlinkIsSupported, // Create a symlink to the current log file
         dateFormat: "yyyy-MM-dd", // Format for date in filename
         limit: {
           count: LOG_RETENTION_COUNT, // Keep 2 days of logs
@@ -185,6 +187,9 @@ export function initializeLogger(options: {
             sizeLimit: LOG_MAX_SIZE,
             retentionCount: LOG_RETENTION_COUNT,
           },
+          symlink:
+            (!options.isTest && symlinkIsSupported) ||
+            "symlink is not supported in this environment!",
         },
         stats: {
           existingLogCount: existingLogs.length,

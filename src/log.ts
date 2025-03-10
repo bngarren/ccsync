@@ -30,13 +30,13 @@ function isSymlinkSupported(tempDir = os.tmpdir()) {
     // Try creating a symlink
     fs.symlinkSync(testFile, testSymlink)
 
+    fs.unlinkSync(testSymlink)
+
     return true
   } catch (error) {
     console.log(error)
     return false
   } finally {
-    // Cleanup
-    fs.unlinkSync(testSymlink)
     fs.unlinkSync(testFile)
   }
 }

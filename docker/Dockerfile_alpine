@@ -1,0 +1,18 @@
+# Use lightweight Alpine Linux with Node.js 22
+FROM node:22-alpine
+
+# Set the working directory inside the container
+WORKDIR /app
+
+# Copy the tarball from the host into the container
+# The tarball will be specified in docker-compose
+ARG TARBALL
+COPY ${TARBALL} /app/package.tar.gz
+
+# Initialize a Node.js project and install the tarball
+RUN npm init -y && \
+    npm install /app/package.tar.gz --production && \
+    rm /app/package.tar.gz
+
+# Set default command (can be overridden)
+CMD [ "sh" ]

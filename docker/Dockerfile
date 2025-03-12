@@ -1,4 +1,3 @@
-# Use the same Ubuntu version as GitHub Actions `ubuntu-latest`
 FROM ubuntu:latest
 
 # Set the working directory

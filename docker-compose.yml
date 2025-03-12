@@ -1,0 +1,9 @@
+services:
+  alpine_with_tarball:
+    build:
+      context: .
+      dockerfile: ./docker/Dockerfile_alpine
+      args:
+        - TARBALL=${TARBALL} # Pass tarball name dynamically
+    container_name: node_alpine_container
+    tty: true

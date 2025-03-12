@@ -10,6 +10,7 @@ try {
         transports: ["pino-roll"],
       }),
     ],
+    minify: true,
   })
   if (result.success) {
     console.log("Build success.", result.outputs[0].path)

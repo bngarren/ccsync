@@ -93,12 +93,15 @@ If any of these describe you, CC: Sync may help!
 
 ### Package runners
 Try it out without permanent installation!
+
+<sub>Bun</sub>
 ```bash
-bunx @bngarren/ccsync # Requires Bun
+bunx @bngarren/ccsync
 ```
-or
+
+<sub>Npm</sub>
 ```bash
-npx @bngarren/ccsync # Requires npm
+npx @bngarren/ccsync
 ```
 
 ### Global Install (recommended)
@@ -189,7 +192,7 @@ cd my-cc-project
 
 If no configuration file exists, CC: Sync will automatically generate one.
 
-If installed globally:
+If installed globally, run with:
 ```bash
 ccsync
 ```
@@ -199,6 +202,11 @@ bunx @bngarren/ccsync
 ```
 ```bash
 npx @bngarren/ccsync
+```
+
+#### To generate the config file only:
+```bash
+ccsync init
 ```
 
 ### 3. Edit the generated `.ccsync.yaml` configuration file:

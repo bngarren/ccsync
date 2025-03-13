@@ -22,8 +22,49 @@ import { UI } from "./ui"
 import * as os from "node:os"
 import figures from "figures"
 import chalk from "chalk"
+import yargs from "yargs"
+import { hideBin } from "yargs/helpers"
 
-const initConfig = async () => {
+const README_ADDRESS = "https://github.com/bngarren/ccsync#readme"
+
+type Command = "init"
+
+interface CliOptions {
+  verbose: boolean
+  smokeTest: boolean
+  _?: Command[]
+}
+
+const parseArgs = (): CliOptions => {
+  return yargs(hideBin(process.argv))
+    .scriptName("ccsync")
+    .usage("Usage: $0 [COMMAND] [OPTIONS]")
+    .command("$0", "run the program")
+    .command(["init"], "create a config file")
+    .option("verbose", {
+      alias: "v",
+      type: "boolean",
+      description: "run with verbose output (for debugging)",
+      default: false,
+    })
+    .option("smokeTest", {
+      hidden: true,
+      type: "boolean",
+      default: false,
+      alias: "smoke-test",
+    })
+    .help()
+    .alias("help", "h")
+    .version(version)
+    .alias("version", "V")
+    .strict()
+    .showHelpOnFail(false, "Run ccsync --help for available options")
+    .epilogue(`for more information, visit ${README_ADDRESS}`)
+    .wrap(null)
+    .parse() as CliOptions
+}
+
+const initConfig = async (cliOptions: CliOptions) => {
   // Find all config files
   const configs = await findConfig()
 
@@ -84,7 +125,7 @@ function getErrorCategoryTitle(category: ConfigErrorCategory) {
   }
 }
 
-const presentConfigErrors = (errors: ConfigError[]) => {
+const presentConfigErrors = (errors: ConfigError[], verbose: boolean) => {
   let errorLog = `Configuration errors found (${errors.length}):\n`
 
   let counter = 1
@@ -121,7 +162,7 @@ const presentConfigErrors = (errors: ConfigError[]) => {
 
         const details = [errorMessage]
 
-        if (error.verboseDetail) {
+        if (verbose && error.verboseDetail) {
           details.push(
             `      ${theme.dim(`${chalk.italic("[verbose]")} ${error.verboseDetail}`)}`
           )
@@ -142,7 +183,7 @@ const presentConfigErrors = (errors: ConfigError[]) => {
     theme.bold("General guidance:") + // No newline before this
       "\n  • Edit your .ccsync.yaml file to fix the issues above" +
       // "\n  • Run with verbose=true for more detailed error information" +
-      `\n  • Refer to documentation at ${theme.accent("https://github.com/bngarren/ccsync#readme")}`
+      `\n  • Refer to documentation at ${theme.accent(README_ADDRESS)}`
   )
   // p.log.info("  • Use 'ccsync --init' to create a fresh config if needed")
 }
@@ -214,16 +255,49 @@ async function handleFatalError(
 }
 
 async function main() {
+  const cliOptions = parseArgs()
+
+  console.debug(cliOptions._?.includes("init"))
+
+  // Handle init command
+  if (cliOptions._?.includes("init")) {
+    console.clear()
+    p.intro(`${color.cyanBright(`CC: Sync`)} v${version}`)
+
+    // Check if config already exists
+    const configs = await findConfig()
+    if (configs.length > 0) {
+      // Config already exists
+      const overwrite = await p.confirm({
+        message: theme.warn(
+          `Configuration file already exists at ${configs[0].path}. Overwrite?`
+        ),
+        initialValue: false,
+        inactive: "Cancel",
+      })
+
+      if (p.isCancel(overwrite) || !overwrite) {
+        p.outro("Config creation cancelled.")
+        process.exit(0)
+      }
+    }
+
+    await createDefaultConfig(process.cwd())
+    p.log.success(`Created default config at ${process.cwd()}/.ccsync.yaml`)
+    p.log.info("Please edit the configuration file and run the program again.")
+    process.exit(0)
+  }
+
   console.clear()
 
   p.intro(`${color.cyanBright(`CC: Sync`)} v${version}`)
 
   try {
     // Get the config file
-    const { config, errors } = await initConfig()
+    const { config, errors } = await initConfig(cliOptions)
 
     if (errors.length > 0) {
-      presentConfigErrors(errors)
+      presentConfigErrors(errors, cliOptions.verbose)
       p.outro("Please fix these issues and try again.")
       process.exit(0)
     }
@@ -260,7 +334,7 @@ async function main() {
       p.log.message(color.dim(`Logging to file at: ${getLogFilePath()}`))
     }
 
-    if (process.argv.includes("--smoke-test")) {
+    if (cliOptions.smokeTest) {
       console.debug("Smoke test mode - exiting immediately")
       process.exit(0)
     }

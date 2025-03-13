@@ -1,9 +1,16 @@
+# To ensure the latest package tarball is used, run 'bun pm pack' first.
+# Copy this tgz file name to the TARBALL arg
+# Run 'dc up -d --build' to build the image and start the container
+# Enter the shell with 'dc exec node_alpine sh'
+# Stop the container with 'dc down'
+
+version: "3.8"
 services:
-  alpine_with_tarball:
+  node_alpine:
     build:
       context: .
       dockerfile: ./docker/Dockerfile_alpine
       args:
-        - TARBALL=${TARBALL} # Pass tarball name dynamically
+        - TARBALL=bngarren-ccsync-1.0.0-beta.4.tgz
     container_name: node_alpine_container
     tty: true

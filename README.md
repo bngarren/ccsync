@@ -64,6 +64,9 @@ It's a ***simple*** as:
 2. Choose your computer(s) (where you want them copied)
 3. Run CC: Sync to keep them synced!
 
+<br>
+<img src="assets/CCSyncWatchMode-1.0.0-beta.4.png" />
+
 ## Why?
 - Are you tired of manually copying files to each Minecraft computer after every change?
 - Do you want to avoid developing your code inside of a Minecraft save?
@@ -328,13 +331,15 @@ These shouldn't need to be modified—mostly for debugging and performance.
 Usage: ccsync [COMMAND] [OPTIONS]
 
 Commands:
-  ccsync       run the program  [default]
-  ccsync init  create a config file
+  ccsync          run the program  [default]
+  ccsync init     create a config file
 
 Options:
-  -v, --verbose  run with verbose output (for debugging)  [boolean] [default: false]
-  -h, --help     Show help  [boolean]
-  -V, --version  Show version number  [boolean]
+  -v, --verbose    run with verbose output (for debugging)  [boolean] [default: false]
+  -f, --logToFile  log to file (overrides config)  [boolean]
+  -l, --logLevel   log level (overrides config)  [string] [choices: "silent", "trace", "debug", "info", "warn", "error", "fatal"]
+  -h, --help       Show help  [boolean]
+  -V, --version    Show version number  [boolean]
 ```
 
 

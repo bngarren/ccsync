@@ -317,7 +317,7 @@ These shouldn't need to be modified—mostly for debugging and performance.
 | `cacheTTL`      | Default: 5000. Cache duration in milliseconds. This reduces how many times the source/target parameters must be validated on quick, repetitive re-syncs. |
 | `usePolling`  | Default: false. If true, will use a polling-based strategy during watch mode rather than native operating system events (default). Consider using polling if watch mode is missing file changes. Polling _may_ result in higher CPU usage (but likely only significant with a large number of watched files)
 
-> Note: Log files are written to a log directory depending on the operating system:s<br>
+> Note: Log files are written to a log directory depending on the operating system:<br>
 > - Windows: `%USER%\AppData\Local\ccsync\logs`
 > - macOS: `~/Library/Logs/ccsync`
 > - Linux/Unix: `~/.local/share/ccsync/logs`

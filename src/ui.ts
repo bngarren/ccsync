@@ -1,8 +1,6 @@
 import { setInterval, clearInterval, setTimeout } from "node:timers"
 
 import logUpdate from "log-update"
-import figures from "figures"
-import chalk from "chalk"
 import {
   SyncMode,
   SyncStatus,
@@ -13,37 +11,8 @@ import boxen from "boxen"
 import { pluralize } from "./utils"
 import stripAnsi from "strip-ansi"
 import { getLogger } from "./log"
-import type { Logger } from "pino"
-
-const theme = {
-  primary: chalk.hex("#61AFEF"), // Bright blue
-  secondary: chalk.hex("#98C379"), // Green
-  highlight: chalk.hex("#C678DD"), // Purple
-  warning: chalk.hex("#E5C07B"), // Yellow
-  error: chalk.hex("#E06C75"), // Red
-  dim: chalk.hex("#5C6370"), // Gray
-  info: chalk.hex("#56B6C2"), // Cyan
-  success: chalk.hex("#98C379"), // Green
-  border: chalk.hex("#61AFEF"), // Blue borders
-  normal: chalk.hex("#ABB2BF"), // Light gray for regular text
-  subtle: chalk.hex("#4B5363"), // Darker gray for backgrounds
-  bold: chalk.bold,
-  heading: (str: string) => chalk.hex("#61AFEF").bold(str),
-  keyHint: (str: string) => chalk.bgHex("#5C6370").hex("#FFFFFF")(` ${str} `),
-}
-
-// Symbols
-const symbols = {
-  check: figures.tick,
-  cross: figures.cross,
-  warning: figures.warning,
-  info: figures.info,
-  bullet: figures.bullet,
-  pointer: figures.pointer,
-  line: figures.line,
-  lineDouble: figures.lineDouble,
-  ellipsis: figures.ellipsis,
-}
+import { type Logger } from "pino"
+import { symbols, theme } from "./theme"
 
 export enum UIStatus {
   /**
@@ -174,19 +143,8 @@ export class UI {
 
     console.clear()
 
-    const syncModeText = theme.bold(
-      this.state.mode != null ? ` ${this.state.mode.toUpperCase()} mode` : ""
-    )
-
-    // Show the persistent header
-    process.stdout.write(
-      theme.primary(
-        `\nCC: Sync -${syncModeText} started at ${this.state.lastUpdated.toLocaleString()}`
-      ) +
-        "\n" +
-        theme.primary(symbols.lineDouble.repeat(process.stdout.columns || 80)) +
-        "\n\n"
-    )
+    // Render the persistent header at the top
+    this.renderHeader()
 
     // Display history (if any) in plain text
     for (const pastOutput of this.state.syncHistory) {
@@ -196,14 +154,7 @@ export class UI {
 
   // Utility to strip ANSI color codes
   private stripColors(text: string): string {
-    return theme.dim(
-      // text.replace(
-      //   // eslint-disable-next-line no-control-regex
-      //   /[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g,
-      //   ""
-      // )
-      stripAnsi(text)
-    )
+    return theme.dim(stripAnsi(text))
   }
 
   setMode(mode: SyncMode) {
@@ -350,7 +301,7 @@ export class UI {
     }
 
     // Generate the current log content
-    const header = this.renderHeaderLine()
+    const header = this.renderSyncSummaryLine()
     const computerResults = this.renderComputerResults()
     const messages = this.renderMessages("\n")
     const separator = theme.dim("─".repeat(process.stdout.columns || 80))
@@ -436,7 +387,23 @@ export class UI {
     return `${Math.floor(elapsed / 3600)}h ${Math.floor((elapsed % 3600) / 60)}m ago`
   }
 
-  private renderHeaderLine(): string {
+  private renderHeader() {
+    const ccsyncText = theme.bold("CC: Sync")
+
+    const syncModeText =
+      this.state.mode != null ? ` ${this.state.mode.toUpperCase()} mode` : ""
+
+    process.stdout.write(
+      theme.primary(
+        `\n${ccsyncText} -${syncModeText} started at ${this.state.lastUpdated.toLocaleString()}`
+      ) +
+        "\n" +
+        theme.primary(symbols.lineDouble.repeat(process.stdout.columns || 80)) +
+        "\n\n"
+    )
+  }
+
+  private renderSyncSummaryLine(): string {
     const date = this.state.lastUpdated.toLocaleString()
 
     const { totalFiles, totalComputers } = this.state.operationsStats

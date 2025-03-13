@@ -9,20 +9,24 @@ import {
   loadConfig,
   type ConfigError,
 } from "./config"
-import color from "picocolors"
 import path from "path"
 import { SyncManager } from "./sync"
 import { theme } from "./theme"
-import { toTildePath } from "./utils"
+import { clearScreen, toTildePath } from "./utils"
 import { SyncMode } from "./types"
 import { AppError, ErrorSeverity, getErrorMessage } from "./errors"
-import { getLogFilePath, getLogger, initializeLogger } from "./log"
+import { getLogDirectory, getLogger, initializeLogger } from "./log"
 import { version } from "./version"
 import { UI } from "./ui"
 import * as os from "node:os"
 import figures from "figures"
 import chalk from "chalk"
-import { handleCommands, parseArgs, type ParsedArgs } from "./args"
+import {
+  getPrettyParsedArgs,
+  handleCommands,
+  parseArgs,
+  type ParsedArgs,
+} from "./args"
 import { README_ADDRESS } from "./constants"
 
 const initConfig = async (parsedArgs: ParsedArgs) => {
@@ -145,11 +149,11 @@ const presentConfigErrors = (errors: ConfigError[], verbose: boolean) => {
   p.log.error(errorLog)
 
   // Helpful general guidance at the end
-  p.log.info(
+  p.log.message(
     theme.bold("General guidance:") + // No newline before this
       "\n  • Edit your .ccsync.yaml file to fix the issues above" +
       "\n  • Consider running with config option logToFile=true and review logs for more information" +
-      `\n  • Refer to documentation at ${theme.accent(README_ADDRESS)}`
+      `\n  • Refer to documentation at ${theme.highlight.underline(README_ADDRESS)}`
   )
 }
 
@@ -222,10 +226,12 @@ async function handleFatalError(
 async function main() {
   const parsedArgs = parseArgs()
 
-  await handleCommands(parsedArgs)
+  clearScreen()
+  process.stdout.write("\n\n")
 
-  console.clear()
-  p.intro(`${color.cyanBright(`CC: Sync`)} v${version}`)
+  p.intro(theme.primary.bold(`CC: Sync`))
+
+  await handleCommands(parsedArgs)
 
   try {
     // Get the config file
@@ -265,8 +271,17 @@ async function main() {
     )
     log.trace({ config }, "Current configuration")
 
-    if (config.advanced.logToFile) {
-      p.log.message(color.dim(`Logging to file at: ${getLogFilePath()}`))
+    // ---- Banner messages ----
+    if (parsedArgs.verbose) {
+      let details = ""
+      details += `version: v${version}\n`
+      details += `args: ${getPrettyParsedArgs(parsedArgs)}\n`
+      if (config.advanced.logToFile) {
+        details += `Logging to file at: ${getLogDirectory()}`
+      }
+      p.note(details, theme.dim("info"))
+    } else {
+      p.log.message(theme.dim(`Logging to file at: ${getLogDirectory()}`))
     }
 
     if (parsedArgs.smokeTest) {
@@ -277,7 +292,7 @@ async function main() {
     const savePath = path.parse(config.minecraftSavePath)
 
     const gracefulExit = () => {
-      p.outro(theme.info("Goodbye."))
+      p.outro(theme.primary("Goodbye."))
       log.info("Gracefully exited.")
       process.exit(0)
     }
@@ -286,21 +301,22 @@ async function main() {
 
     const res = await p.confirm({
       message: `Begin a sync with Minecraft world: ${theme.bold(
-        theme.warn(savePath.name)
+        theme.warning(savePath.name)
       )}?  ${theme.dim(toTildePath(config.minecraftSavePath))}`,
       initialValue: true,
     })
 
     if (p.isCancel(res) || !res) {
-      p.log.info(
-        "If this save instance is incorrect, change the 'minecraftSavePath' in the .ccsync.yaml to point to the one you want."
+      p.note(
+        `If this save instance is incorrect, change the 'minecraftSavePath' in the .ccsync.yaml to point to the one you want.`,
+        "Hint"
       )
       gracefulExit()
     }
 
     log.debug(`User confirmed minecraftSavePath at ${config.minecraftSavePath}`)
 
-    // Choose mode
+    // ---- CHOOSE SYNC MODE ----
     const mode: SyncMode = (await p.select({
       message: "Select sync mode:",
       options: [

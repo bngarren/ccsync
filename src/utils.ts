@@ -35,6 +35,16 @@ export const getFormattedDate = (): string => {
   return `${time} on ${date}`
 }
 
+// ---- Screen ----
+/**
+ * Clears the screen and moves the cursor to the top-left. Uses ANSI escape codes.
+ *
+ * Unlike `console.log`, this keeps the scroll history intact.
+ */
+export function clearScreen() {
+  process.stdout.write("\x1B[2J\x1B[0f")
+}
+
 // ---- Paths ----
 export function resolvePath(filePath: string): string {
   // Handle home directory expansion

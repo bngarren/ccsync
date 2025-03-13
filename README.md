@@ -355,20 +355,21 @@ Below are some common places to look based on your operating system. However, if
 # Troubleshooting
 
 ### Problem: No Computers Found
-
-If CC: Sync can't find your computers:
-
 - Verify the save path in .ccsync.yaml
 - Ensure computers exist in-game and are loaded
 - Try creating a file on the computer in-game
 - Check file permissions on the save directory
 
 ### Problem: Files Not Syncing
-
 - Verify file paths in sync rules
 - Check that source files exist
 - Ensure target computers are specified correctly. Remember that you must use the computer's **ID** not the _label_.
 - Run with `logToFile` true and check the log for errors
+
+### Problem: Watch mode is missing file changes
+- Ensure that the sync rule's `source` specifies an correct file name and/or correct glob pattern
+- Run with `logToFile` true and check the log for errors
+- Try running with `usePolling` true
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 

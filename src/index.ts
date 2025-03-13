@@ -9,11 +9,10 @@ import {
   loadConfig,
   type ConfigError,
 } from "./config"
-import color from "picocolors"
 import path from "path"
 import { SyncManager } from "./sync"
 import { theme } from "./theme"
-import { toTildePath } from "./utils"
+import { clearScreen, toTildePath } from "./utils"
 import { SyncMode } from "./types"
 import { AppError, ErrorSeverity, getErrorMessage } from "./errors"
 import { getLogDirectory, getLogger, initializeLogger } from "./log"
@@ -150,11 +149,11 @@ const presentConfigErrors = (errors: ConfigError[], verbose: boolean) => {
   p.log.error(errorLog)
 
   // Helpful general guidance at the end
-  p.log.info(
+  p.log.message(
     theme.bold("General guidance:") + // No newline before this
       "\n  • Edit your .ccsync.yaml file to fix the issues above" +
       "\n  • Consider running with config option logToFile=true and review logs for more information" +
-      `\n  • Refer to documentation at ${theme.accent(README_ADDRESS)}`
+      `\n  • Refer to documentation at ${theme.highlight.underline(README_ADDRESS)}`
   )
 }
 
@@ -227,10 +226,10 @@ async function handleFatalError(
 async function main() {
   const parsedArgs = parseArgs()
 
-  process.stdout.write("\x1B[2J\x1B[0f")
+  clearScreen()
   process.stdout.write("\n\n")
 
-  p.intro(color.cyanBright(`CC: Sync`))
+  p.intro(theme.primary.bold(`CC: Sync`))
 
   await handleCommands(parsedArgs)
 
@@ -293,7 +292,7 @@ async function main() {
     const savePath = path.parse(config.minecraftSavePath)
 
     const gracefulExit = () => {
-      p.outro(theme.info("Goodbye."))
+      p.outro(theme.primary("Goodbye."))
       log.info("Gracefully exited.")
       process.exit(0)
     }
@@ -302,7 +301,7 @@ async function main() {
 
     const res = await p.confirm({
       message: `Begin a sync with Minecraft world: ${theme.bold(
-        theme.warn(savePath.name)
+        theme.warning(savePath.name)
       )}?  ${theme.dim(toTildePath(config.minecraftSavePath))}`,
       initialValue: true,
     })

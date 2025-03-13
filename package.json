@@ -74,7 +74,6 @@
     "glob": "10.3.10",
     "log-update": "^6.1.0",
     "node-cache": "^5.1.2",
-    "picocolors": "^1.1.1",
     "pino": "^9.6.0",
     "pino-roll": "^3.0.0",
     "strip-ansi": "^7.1.0",

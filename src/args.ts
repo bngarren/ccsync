@@ -99,7 +99,7 @@ async function handleInitCommand(): Promise<void> {
   if (configs.length > 0) {
     // Config already exists
     const overwrite = await p.confirm({
-      message: theme.warn(
+      message: theme.warning(
         `Configuration file already exists at ${configs[0].path}. Overwrite?`
       ),
       initialValue: false,

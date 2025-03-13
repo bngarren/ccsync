@@ -16,13 +16,18 @@ import { theme } from "./theme"
 import { toTildePath } from "./utils"
 import { SyncMode } from "./types"
 import { AppError, ErrorSeverity, getErrorMessage } from "./errors"
-import { getLogFilePath, getLogger, initializeLogger } from "./log"
+import { getLogDirectory, getLogger, initializeLogger } from "./log"
 import { version } from "./version"
 import { UI } from "./ui"
 import * as os from "node:os"
 import figures from "figures"
 import chalk from "chalk"
-import { handleCommands, parseArgs, type ParsedArgs } from "./args"
+import {
+  getPrettyParsedArgs,
+  handleCommands,
+  parseArgs,
+  type ParsedArgs,
+} from "./args"
 import { README_ADDRESS } from "./constants"
 
 const initConfig = async (parsedArgs: ParsedArgs) => {
@@ -222,10 +227,12 @@ async function handleFatalError(
 async function main() {
   const parsedArgs = parseArgs()
 
-  await handleCommands(parsedArgs)
+  process.stdout.write("\x1B[2J\x1B[0f")
+  process.stdout.write("\n\n")
 
-  console.clear()
-  p.intro(`${color.cyanBright(`CC: Sync`)} v${version}`)
+  p.intro(color.cyanBright(`CC: Sync`))
+
+  await handleCommands(parsedArgs)
 
   try {
     // Get the config file
@@ -265,8 +272,17 @@ async function main() {
     )
     log.trace({ config }, "Current configuration")
 
-    if (config.advanced.logToFile) {
-      p.log.message(color.dim(`Logging to file at: ${getLogFilePath()}`))
+    // ---- Banner messages ----
+    if (parsedArgs.verbose) {
+      let details = ""
+      details += `version: v${version}\n`
+      details += `args: ${getPrettyParsedArgs(parsedArgs)}\n`
+      if (config.advanced.logToFile) {
+        details += `Logging to file at: ${getLogDirectory()}`
+      }
+      p.note(details, theme.dim("info"))
+    } else {
+      p.log.message(theme.dim(`Logging to file at: ${getLogDirectory()}`))
     }
 
     if (parsedArgs.smokeTest) {
@@ -292,15 +308,16 @@ async function main() {
     })
 
     if (p.isCancel(res) || !res) {
-      p.log.info(
-        "If this save instance is incorrect, change the 'minecraftSavePath' in the .ccsync.yaml to point to the one you want."
+      p.note(
+        `If this save instance is incorrect, change the 'minecraftSavePath' in the .ccsync.yaml to point to the one you want.`,
+        "Hint"
       )
       gracefulExit()
     }
 
     log.debug(`User confirmed minecraftSavePath at ${config.minecraftSavePath}`)
 
-    // Choose mode
+    // ---- CHOOSE SYNC MODE ----
     const mode: SyncMode = (await p.select({
       message: "Select sync mode:",
       options: [

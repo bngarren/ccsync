@@ -1,5 +1,4 @@
 import * as p from "@clack/prompts"
-import color from "picocolors"
 import { findConfig, createDefaultConfig } from "./config"
 import { theme } from "./theme"
 import yargs from "yargs"
@@ -33,7 +32,6 @@ export const parseArgs = (): ParsedArgs => {
       alias: "v",
       type: "boolean",
       description: "run with verbose output (for debugging)",
-      default: false,
     })
     .option("logToFile", {
       alias: "f",
@@ -50,7 +48,6 @@ export const parseArgs = (): ParsedArgs => {
     .option("smokeTest", {
       hidden: true,
       type: "boolean",
-      default: false,
       alias: "smoke-test",
     })
     .help()
@@ -62,6 +59,23 @@ export const parseArgs = (): ParsedArgs => {
     .epilogue(`for more information, visit ${README_ADDRESS}`)
     .wrap(null)
     .parse() as ParsedArgs
+}
+
+export function getPrettyParsedArgs(parsedArgs: ParsedArgs): string {
+  const keysToInclude: (keyof ParsedArgs)[] = [
+    "verbose",
+    "logToFile",
+    "logLevel",
+  ]
+
+  const formattedArgs = keysToInclude
+    .filter((key) => parsedArgs[key] != null)
+    .map((key) => `${key}=${parsedArgs[key]}`)
+    .join(" ")
+
+  const commands = parsedArgs._?.length ? parsedArgs._.join(" ") + " " : ""
+
+  return commands + formattedArgs
 }
 
 // ---- COMMANDS ----
@@ -78,7 +92,7 @@ export function handleCommands(parsedArgs: ParsedArgs): Promise<void> {
 }
 
 async function handleInitCommand(): Promise<void> {
-  p.intro(`${color.cyanBright(`CC: Sync`)} v${version}`)
+  // p.intro(`${color.cyanBright(`CC: Sync`)} v${version}`)
 
   // Check if config already exists
   const configs = await findConfig()

@@ -5,12 +5,15 @@ import { theme } from "./theme"
 import yargs from "yargs"
 import { hideBin } from "yargs/helpers"
 import { version } from "./version"
-import { README_ADDRESS } from "./constants"
+import { README_ADDRESS, LOG_LEVELS } from "./constants"
+import { type LogLevel } from "./log"
 
 export type Command = "init"
 
 export interface ParsedArgs {
   verbose: boolean
+  logToFile: boolean
+  logLevel: LogLevel
   smokeTest: boolean
   _?: Command[]
 }
@@ -31,6 +34,18 @@ export const parseArgs = (): ParsedArgs => {
       type: "boolean",
       description: "run with verbose output (for debugging)",
       default: false,
+    })
+    .option("logToFile", {
+      alias: "f",
+      type: "boolean",
+      description: "log to file (overrides config)",
+    })
+    .option("logLevel", {
+      alias: "l",
+      type: "string",
+      description: "log level (overrides config)",
+      choices: LOG_LEVELS,
+      requiresArg: true,
     })
     .option("smokeTest", {
       hidden: true,

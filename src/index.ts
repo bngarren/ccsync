@@ -25,7 +25,7 @@ import chalk from "chalk"
 import { handleCommands, parseArgs, type ParsedArgs } from "./args"
 import { README_ADDRESS } from "./constants"
 
-const initConfig = async (cliOptions: ParsedArgs) => {
+const initConfig = async (parsedArgs: ParsedArgs) => {
   // Find all config files
   const configs = await findConfig()
 
@@ -68,7 +68,12 @@ const initConfig = async (cliOptions: ParsedArgs) => {
     configPath = selection
   }
 
-  return await loadConfig(configPath)
+  return await loadConfig(configPath, {
+    overrides: {
+      logToFile: parsedArgs.logToFile,
+      logLevel: parsedArgs.logLevel,
+    },
+  })
 }
 
 function getErrorCategoryTitle(category: ConfigErrorCategory) {

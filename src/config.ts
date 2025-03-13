@@ -8,6 +8,8 @@ import * as fs from "node:fs/promises"
 
 import { merge } from "ts-deepmerge"
 import type { DeepPartial } from "./types"
+import { type LogLevel } from "./log"
+import { LOG_LEVELS } from "./constants"
 
 export const CONFIG_VERSION = "2.1"
 export const DEFAULT_CONFIG_FILENAME = ".ccsync.yaml"
@@ -178,17 +180,7 @@ const AdvancedOptionsSchema = z.object({
     })
     .default(false),
   // mirror pino's log levels
-  logLevel: z
-    .enum([
-      "silent",
-      "trace",
-      "debug",
-      "info",
-      "warn",
-      "error",
-      "fatal",
-    ] as const)
-    .default("debug"),
+  logLevel: z.enum(LOG_LEVELS).default("debug"),
   cacheTTL: z
     .number({
       invalid_type_error: "Cache TTL must be a number",
@@ -353,6 +345,13 @@ type LoadConfigOptions = {
    * Skipping this validation step can be helpful for tests.
    */
   skipPathValidation?: boolean
+  /**
+   * Override options that will take precedence over values in the config file
+   */
+  overrides?: {
+    logToFile?: boolean
+    logLevel?: LogLevel
+  }
 }
 
 export async function loadConfig(
@@ -438,12 +437,28 @@ export async function loadConfig(
       }
     }
 
-    // Only set the config if we have no errors
+    const processedConfig = {
+      ...validatedConfig,
+      sourceRoot: processPath(resolvedSourceRoot),
+      minecraftSavePath: processPath(resolvedSavePath),
+    }
+
+    // Only set the final config if we have no errors
     if (result.errors.length === 0) {
-      result.config = {
-        ...validatedConfig,
-        sourceRoot: processPath(resolvedSourceRoot),
-        minecraftSavePath: processPath(resolvedSavePath),
+      // Create the final config by applying any overrides, i.e. from command line args
+      if (options.overrides) {
+        const overridesObj = {
+          advanced: {
+            ...options.overrides,
+          } as Partial<Config>,
+        }
+        result.config = merge.withOptions(
+          { allowUndefinedOverrides: false },
+          processedConfig,
+          overridesObj
+        )
+      } else {
+        result.config = processedConfig
       }
     }
   } catch (error) {

@@ -64,6 +64,9 @@ It's a ***simple*** as:
 2. Choose your computer(s) (where you want them copied)
 3. Run CC: Sync to keep them synced!
 
+<br>
+<img src="assets/CCSyncWatchMode-1.0.0-beta.4.png" />
+
 ## Why?
 - Are you tired of manually copying files to each Minecraft computer after every change?
 - Do you want to avoid developing your code inside of a Minecraft save?
@@ -328,13 +331,15 @@ These shouldn't need to be modified—mostly for debugging and performance.
 Usage: ccsync [COMMAND] [OPTIONS]
 
 Commands:
-  ccsync       run the program  [default]
-  ccsync init  create a config file
+  ccsync          run the program  [default]
+  ccsync init     create a config file
 
 Options:
-  -v, --verbose  run with verbose output (for debugging)  [boolean] [default: false]
-  -h, --help     Show help  [boolean]
-  -V, --version  Show version number  [boolean]
+  -v, --verbose    run with verbose output (for debugging)  [boolean] [default: false]
+  -f, --logToFile  log to file (overrides config)  [boolean]
+  -l, --logLevel   log level (overrides config)  [string] [choices: "silent", "trace", "debug", "info", "warn", "error", "fatal"]
+  -h, --help       Show help  [boolean]
+  -V, --version    Show version number  [boolean]
 ```
 
 
@@ -350,28 +355,29 @@ Below are some common places to look based on your operating system. However, if
 # Troubleshooting
 
 ### Problem: No Computers Found
-
-If CC: Sync can't find your computers:
-
 - Verify the save path in .ccsync.yaml
 - Ensure computers exist in-game and are loaded
 - Try creating a file on the computer in-game
 - Check file permissions on the save directory
 
 ### Problem: Files Not Syncing
-
 - Verify file paths in sync rules
 - Check that source files exist
 - Ensure target computers are specified correctly. Remember that you must use the computer's **ID** not the _label_.
 - Run with `logToFile` true and check the log for errors
 
+### Problem: Watch mode is missing file changes
+- Ensure that the sync rule's `source` specifies an correct file name and/or correct glob pattern
+- Run with `logToFile` true and check the log for errors
+- Try running with `usePolling` true
+
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
 # Contributing
 
-If you have a suggestion that would make this better, please fork the repo and create a pull request. You can also simply open an issue with the tag "enhancement". Don't forget to give the project a ⭐️! Thanks again!
+If you have a suggestion that would make this better, please create a pull request. You can also simply open an issue with the tag "enhancement". Don't forget to give the project a ⭐️! Thanks again!
 
-1. Fork the Project
+1. Fork/clone the project
 2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
 3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
 4. Push to the Branch (`git push origin feature/AmazingFeature`)

@@ -54,6 +54,7 @@
   "devDependencies": {
     "@types/bun": "^1.2.2",
     "@types/node": "^22.13.4",
+    "@types/yargs": "^17.0.33",
     "bun-plugin-pino": "^1.4.0",
     "eslint": "^9.20.1",
     "eslint-config-prettier": "^10.0.1",
@@ -79,6 +80,7 @@
     "strip-ansi": "^7.1.0",
     "ts-deepmerge": "^7.0.2",
     "yaml": "^2.7.0",
+    "yargs": "^17.7.2",
     "zod": "^3.24.2"
   },
   "engines": {

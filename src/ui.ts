@@ -100,7 +100,8 @@ interface UIState {
   syncHistory: string[]
 }
 
-interface NewUIOptions {
+interface UIOptions {
+  verbose?: boolean
   renderDynamicElements?: boolean
 }
 
@@ -119,7 +120,10 @@ export class UI {
   private timer: ReturnType<typeof setInterval> | null = null
   private isActive = false
 
+  // options
+  private renderVerbose
   private shouldRenderDynamicElements
+
   private isRendering = false // lock to prevent concurrent renders
   private lastRenderTime = 0 // Timestamp of last render
   private renderTimer: ReturnType<typeof setTimeout> | null = null // Timer for debounced rendering
@@ -129,7 +133,7 @@ export class UI {
   private spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
   private spinnerIndex = 0
 
-  constructor(opts?: NewUIOptions) {
+  constructor(opts?: UIOptions) {
     this.state = {
       mode: null,
       status: UIStatus.IDLE,
@@ -144,6 +148,7 @@ export class UI {
       syncHistory: [],
     }
 
+    this.renderVerbose = opts?.verbose ?? false
     this.shouldRenderDynamicElements = opts?.renderDynamicElements ?? true
 
     this.setupTerminationHandlers()

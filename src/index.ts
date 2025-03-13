@@ -22,8 +22,10 @@ import { UI } from "./ui"
 import * as os from "node:os"
 import figures from "figures"
 import chalk from "chalk"
+import { handleCommands, parseArgs, type ParsedArgs } from "./args"
+import { README_ADDRESS } from "./constants"
 
-const initConfig = async () => {
+const initConfig = async (parsedArgs: ParsedArgs) => {
   // Find all config files
   const configs = await findConfig()
 
@@ -66,7 +68,12 @@ const initConfig = async () => {
     configPath = selection
   }
 
-  return await loadConfig(configPath)
+  return await loadConfig(configPath, {
+    overrides: {
+      logToFile: parsedArgs.logToFile,
+      logLevel: parsedArgs.logLevel,
+    },
+  })
 }
 
 function getErrorCategoryTitle(category: ConfigErrorCategory) {
@@ -84,7 +91,7 @@ function getErrorCategoryTitle(category: ConfigErrorCategory) {
   }
 }
 
-const presentConfigErrors = (errors: ConfigError[]) => {
+const presentConfigErrors = (errors: ConfigError[], verbose: boolean) => {
   let errorLog = `Configuration errors found (${errors.length}):\n`
 
   let counter = 1
@@ -121,7 +128,7 @@ const presentConfigErrors = (errors: ConfigError[]) => {
 
         const details = [errorMessage]
 
-        if (error.verboseDetail) {
+        if (verbose && error.verboseDetail) {
           details.push(
             `      ${theme.dim(`${chalk.italic("[verbose]")} ${error.verboseDetail}`)}`
           )
@@ -141,10 +148,9 @@ const presentConfigErrors = (errors: ConfigError[]) => {
   p.log.info(
     theme.bold("General guidance:") + // No newline before this
       "\n  • Edit your .ccsync.yaml file to fix the issues above" +
-      // "\n  • Run with verbose=true for more detailed error information" +
-      `\n  • Refer to documentation at ${theme.accent("https://github.com/bngarren/ccsync#readme")}`
+      "\n  • Consider running with config option logToFile=true and review logs for more information" +
+      `\n  • Refer to documentation at ${theme.accent(README_ADDRESS)}`
   )
-  // p.log.info("  • Use 'ccsync --init' to create a fresh config if needed")
 }
 
 /**
@@ -214,16 +220,19 @@ async function handleFatalError(
 }
 
 async function main() {
-  console.clear()
+  const parsedArgs = parseArgs()
 
+  await handleCommands(parsedArgs)
+
+  console.clear()
   p.intro(`${color.cyanBright(`CC: Sync`)} v${version}`)
 
   try {
     // Get the config file
-    const { config, errors } = await initConfig()
+    const { config, errors } = await initConfig(parsedArgs)
 
     if (errors.length > 0) {
-      presentConfigErrors(errors)
+      presentConfigErrors(errors, parsedArgs.verbose)
       p.outro("Please fix these issues and try again.")
       process.exit(0)
     }
@@ -260,7 +269,7 @@ async function main() {
       p.log.message(color.dim(`Logging to file at: ${getLogFilePath()}`))
     }
 
-    if (process.argv.includes("--smoke-test")) {
+    if (parsedArgs.smokeTest) {
       console.debug("Smoke test mode - exiting immediately")
       process.exit(0)
     }

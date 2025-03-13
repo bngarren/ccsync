@@ -44,6 +44,9 @@
       <ul>
         <li><a href="#configuration">Configuration</a></li>
       </ul>
+      <ul>
+        <li><a href="#command-line-args">Command line args</a></li>
+      </ul>
     </li>
     <li><a href="#troubleshooting">Troubleshooting</a></li>
     <li><a href="#contributing">Contributing</a></li>
@@ -88,13 +91,66 @@ If any of these describe you, CC: Sync may help!
 
 ## Installation
 
-<details open>
-<summary><b>📦 Package Managers</b></summary>
+### Package runners
+Try it out without permanent installation!
 
-### Local Install (Recommended)
+<sub>Bun</sub>
+```bash
+bunx @bngarren/ccsync
+```
+
+<sub>Npm</sub>
+```bash
+npx @bngarren/ccsync
+```
+
+### Global Install (recommended)
+Install globally to use `ccsync` from anywhere:
+
+<table>
+<tr>
+<td>bun</td>
+<td>
+
+```bash
+bun add -g @bngarren/ccsync
+```
+</td>
+</tr>
+<tr>
+<td>npm</td>
+<td>
+
+```bash
+npm install -g @bngarren/ccsync
+```
+</td>
+</tr>
+<tr>
+<td>pnpm</td>
+<td>
+
+```bashs
+pnpm add -g @bngarren/ccsync
+```
+</td>
+</tr>
+</table>
+
+<details closed>
+<summary>Local Install</summary>
 Install as a dev dependency in your project:
 
 <table>
+<tr>
+<td>bun</td>
+<td>
+
+```bash
+bun add -D @bngarren/ccsync
+```
+</td>
+</tr>
 <tr>
 <td>npm</td>
 <td>
@@ -113,51 +169,10 @@ pnpm add -D @bngarren/ccsync
 ```
 </td>
 </tr>
-<tr>
-<td>bun</td>
-<td>
 
-```bash
-bun add -D @bngarren/ccsync
-```
-</td>
-</tr>
 </table>
-
-### Global Install
-Install globally to use `ccsync` from anywhere:
-
-<table>
-<tr>
-<td>npm</td>
-<td>
-
-```bash
-npm install -g @bngarren/ccsync
-```
-</td>
-</tr>
-<tr>
-<td>pnpm</td>
-<td>
-
-```bash
-pnpm add -g @bngarren/ccsync
-```
-</td>
-</tr>
-<tr>
-<td>bun</td>
-<td>
-
-```bash
-bun add -g @bngarren/ccsync
-```
-</td>
-</tr>
-</table>
-
 </details>
+<br>
 
 > **Note**: Node.js 18 or higher is required
 
@@ -173,12 +188,25 @@ bun add -g @bngarren/ccsync
 cd my-cc-project
 ```
 
-### 2. Initialize CC: Sync:
+### 2. Run CC: Sync:
 
-Run CC: Sync once to automatically generate a config file
+If no configuration file exists, CC: Sync will automatically generate one.
 
-```sh
+If installed globally, run with:
+```bash
+ccsync
+```
+or
+```bash
+bunx @bngarren/ccsync
+```
+```bash
 npx @bngarren/ccsync
+```
+
+#### To generate the config file only:
+```bash
+ccsync init
 ```
 
 ### 3. Edit the generated `.ccsync.yaml` configuration file:
@@ -243,10 +271,7 @@ rules:
 </details>
 
 ### 4. Run CC: Sync:
-
-```sh
-npx @bngarren/ccsync
-```
+See Step 2
 
 ## Modes
 The program can operate in two modes, depending on the level of control you desire:
@@ -268,7 +293,7 @@ The config for CC: Sync is a `.ccsync.yaml` file in your project root. If no fil
 | Key               | Description                                                                                                     |
 |-------------------|-----------------------------------------------------------------------------------------------------------------|
 | `sourceRoot`      | Directory containing your source files (absolute path or relative to the location of the `.ccsync.yaml` file). |
-| `minecraftSavePath` | Path to your Minecraft save directory. See below: [Where is my Minecraft save?](#where-is-my-minecraft-save). This is the folder containing 'level.dat', 'session.lock', etc. |
+| `minecraftSavePath` | Absolute path to your Minecraft save directory. See below: [Where is my Minecraft save?](#where-is-my-minecraft-save). This is the folder containing 'level.dat', 'session.lock', etc. |
 | `computerGroups`  | Define groups of computers for easier targeting. A computer group can reference exact computer IDs or other groups. |
 | `rules`           | The _sync rules_ define which file(s) go to which computer(s). Each sync rule ***requires***:                          |
 |                   |  - `source`: File name or glob pattern (relative to `sourceRoot`).                                              |
@@ -291,11 +316,26 @@ These shouldn't need to be modified—mostly for debugging and performance.
 | `logLevel`      | Default: 'debug'. Options: 'silent', 'trace', 'debug', 'info', 'warn', 'error', 'fatal' |
 | `cacheTTL`      | Default: 5000. Cache duration in milliseconds. This reduces how many times the source/target parameters must be validated on quick, repetitive re-syncs. |
 | `usePolling`  | Default: false. If true, will use a polling-based strategy during watch mode rather than native operating system events (default). Consider using polling if watch mode is missing file changes. Polling _may_ result in higher CPU usage (but likely only significant with a large number of watched files)
-<br>
-> Note: Log files are written to a log directory depending on the operating system: <br>
+
+> Note: Log files are written to a log directory depending on the operating system:<br>
 > - Windows: `%USER%\AppData\Local\ccsync\logs`
 > - macOS: `~/Library/Logs/ccsync`
 > - Linux/Unix: `~/.local/share/ccsync/logs`
+
+## Command line args
+
+```
+Usage: ccsync [COMMAND] [OPTIONS]
+
+Commands:
+  ccsync       run the program  [default]
+  ccsync init  create a config file
+
+Options:
+  -v, --verbose  run with verbose output (for debugging)  [boolean] [default: false]
+  -h, --help     Show help  [boolean]
+  -V, --version  Show version number  [boolean]
+```
 
 
 ### Where is my Minecraft save?
@@ -323,7 +363,7 @@ If CC: Sync can't find your computers:
 - Verify file paths in sync rules
 - Check that source files exist
 - Ensure target computers are specified correctly. Remember that you must use the computer's **ID** not the _label_.
-- Run with verbose: true for detailed logs
+- Run with `logToFile` true and check the log for errors
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 

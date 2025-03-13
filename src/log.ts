@@ -3,21 +3,14 @@ import fs from "node:fs"
 import path from "node:path"
 import os from "node:os"
 import { getErrorMessage } from "./errors"
+import {
+  LOG_MAX_SIZE,
+  LOG_RETENTION_COUNT,
+  LOG_ROTATION_FREQ,
+  type LOG_LEVELS,
+} from "./constants"
 
-// Define available log levels
-export type LogLevel =
-  | "silent"
-  | "trace"
-  | "debug"
-  | "info"
-  | "warn"
-  | "error"
-  | "fatal"
-
-// Default log level
-const LOG_ROTATION_FREQ = "daily"
-const LOG_MAX_SIZE = "10m"
-const LOG_RETENTION_COUNT = 2 // days
+export type LogLevel = (typeof LOG_LEVELS)[number]
 
 /**
  * Checks if the current environment supports filesystem symbolic links.

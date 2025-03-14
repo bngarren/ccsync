@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0-beta.5](https://github.com/bngarren/ccsync/compare/v1.0.0-beta.4...v1.0.0-beta.5) (2025-03-14)
+
+
+### Features
+
+* **cli:** added some command line arg capabilities, including an 'init' command and a 'verbose' option and file logging overrides. CLI args will override any matching variables in the config file ([#45](https://github.com/bngarren/ccsync/issues/45)) ([e592b7d](https://github.com/bngarren/ccsync/commit/e592b7d731aae3fb712b8666463f245b2f10237b))
+* **ui:** various small improvements to ui ([#47](https://github.com/bngarren/ccsync/issues/47)) ([4ec0eeb](https://github.com/bngarren/ccsync/commit/4ec0eeb135824849fb6d376748d17f6374bd90af))
+
+
+### Bug Fixes
+
+* **build:** fixes some package.json issues. Adds minification to all build outputs to slightly reduce bundle size. ([#43](https://github.com/bngarren/ccsync/issues/43)) ([6d0c4ce](https://github.com/bngarren/ccsync/commit/6d0c4ce948951313cad54891ab9387530d70d9fc))
+* **sync:** added warning to UI when sync rules target the same path on the same computer, risking inadvertent overwrite. Added unit and integration tests for this logic. ([#51](https://github.com/bngarren/ccsync/issues/51)) ([bfbd058](https://github.com/bngarren/ccsync/commit/bfbd058f2a352495f848a145a7c0e66a698f3ac6))
+* **ui:** changed files in watch mode are now correctly shown in the UI. Added integration test. ([#48](https://github.com/bngarren/ccsync/issues/48)) ([92c87f9](https://github.com/bngarren/ccsync/commit/92c87f95dff46f7c24bb5b5e10be83e92b8b83c8))
+* **ui:** moved all theme related code to theme.ts. Fully converted to 'chalk', removed 'picocolors' dependency ([4ec0eeb](https://github.com/bngarren/ccsync/commit/4ec0eeb135824849fb6d376748d17f6374bd90af))
+
 ## [1.0.0-beta.4](https://github.com/bngarren/ccsync/compare/v1.0.0-beta.3...v1.0.0-beta.4) (2025-03-12)
 
 

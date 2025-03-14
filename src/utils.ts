@@ -802,6 +802,39 @@ export function resolveTargetPath(rule: ResolvedFileRule): string {
 }
 
 /**
+ * Helper function that checks if any file rules have same target paths on the same computer, i.e. will overwrite each other on sync
+ *
+ * @returns a Map of the duplicated target paths. Each key in the map is a string key of `computerID:targetPath` and its value is an array of file rules that target this computer/path combo
+ */
+export function checkDuplicateTargetPaths(
+  resolvedFileRules: ResolvedFileRule[]
+): Map<string, ResolvedFileRule[]> {
+  // Group file rules by their resolved target paths
+  const targetPathMap = new Map<string, ResolvedFileRule[]>()
+
+  for (const rule of resolvedFileRules) {
+    const targetPath = resolveTargetPath(rule)
+
+    // For each computer, we need to check for duplicates
+    for (const computerId of rule.computers) {
+      // Create a unique key combining computer ID and target path
+      const key = `${computerId}:${targetPath}`
+
+      if (!targetPathMap.has(key)) {
+        targetPathMap.set(key, [rule])
+      } else {
+        targetPathMap.get(key)?.push(rule)
+      }
+    }
+  }
+
+  // Filter to only include duplicate entries
+  return new Map(
+    [...targetPathMap.entries()].filter(([_, rules]) => rules.length > 1)
+  )
+}
+
+/**
  * Copies files to a specific computer
  */
 export async function copyFilesToComputer(

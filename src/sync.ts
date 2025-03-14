@@ -24,6 +24,7 @@ import {
   processPath,
   filterFilesOnly,
   getRelativePath,
+  checkDuplicateTargetPaths,
 } from "./utils"
 import { KeyHandler } from "./keys"
 import { setTimeout as setTimeoutPromise } from "node:timers/promises"
@@ -371,6 +372,38 @@ export class SyncManager {
             )
           )
         }
+
+        // Step 5: Check for duplicate target paths
+        const duplicateTargets = checkDuplicateTargetPaths(
+          plan.resolvedFileRules
+        )
+
+        if (duplicateTargets.size > 0) {
+          // Add warnings for duplicate targets
+          for (const [targetKey, rules] of duplicateTargets.entries()) {
+            const [computerId, targetPath] = targetKey.split(":", 2)
+            const sourceFiles = rules
+              .map((r) =>
+                getRelativePath(r.sourceAbsolutePath, this.config.sourceRoot, {
+                  includeRootName: true,
+                })
+              )
+              .join(", ")
+
+            plan.issues.push(
+              createSyncPlanIssue(
+                `Multiple source files (${sourceFiles}) target the same path "${targetPath}" on computer ${computerId}`,
+                SyncPlanIssueCategory.RULE,
+                SyncPlanIssueSeverity.WARNING,
+                {
+                  source: "checkDuplicateTargets",
+                  suggestion:
+                    "Review your sync rules to ensure files don't overwrite each other inadvertently",
+                }
+              )
+            )
+          }
+        }
       } catch (err) {
         plan.issues.push(
           createSyncPlanIssue(
@@ -430,6 +463,9 @@ export class SyncManager {
     }
   }
 
+  /**
+   * 'skippedFiles' come from the copyFilesToComputer operation and may be due to security violations or source files not found
+   */
   private async syncToComputer(
     computer: Computer,
     fileRules: ResolvedFileRule[]
@@ -462,7 +498,7 @@ export class SyncManager {
     )
 
     const copyResult = await copyFilesToComputer(filesToCopy, computer.path)
-    await setTimeoutPromise(100) // Small delay between computers
+    await setTimeoutPromise(25) // Small delay between computers
 
     this.log.info(
       {
@@ -491,7 +527,22 @@ export class SyncManager {
     const availableComputerIds = new Set(
       syncPlan.availableComputers.map((c) => c.id)
     )
+
+    // - - - - - Warnings - - - - -
+    // We accumulate warnings from both the syncPlan's issues that were identified during sync plan creation and from the running of this performSync operation
     let warnings = 0
+    const planWarnings = syncPlan.issues.filter(
+      (issue) => issue.severity === SyncPlanIssueSeverity.WARNING
+    ).length
+
+    if (planWarnings > 0) {
+      warnings += planWarnings
+      this.log.debug(
+        `Including ${planWarnings} warnings from sync plan in operation status`
+      )
+    }
+
+    /** Errors during performSync operation */
     const errors: string[] = []
 
     let totalAttemptedFiles = 0
@@ -547,9 +598,8 @@ export class SyncManager {
      * Execute the actual sync operation for each available computer:
      * 1. Copy the files to each computer according to resolved rules
      * 2. Track successful and failed file transfers
-     * 3. //TODO Handle duplicate rule scenarios (multiple rules targeting the same file)
-     * 4. Update UI with results for each computer
-     * 5. Aggregate results to determine overall sync status
+     * 3. Update UI with results for each computer
+     * 4. Aggregate results to determine overall sync status
      *
      * This is the core synchronization process where file transfers actually occur
      * and success/failure is determined for the operation.

@@ -1347,6 +1347,18 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
         )
       }
 
+      // Add File(s) changed message to UI
+      if (this.activeChanges.size > 0) {
+        const filesText = pluralize("File")(this.activeChanges.size)
+        const fileNames = [...this.activeChanges].map((p) =>
+          getRelativePath(p, this.config.sourceRoot, { includeRootName: true })
+        )
+        this.ui?.addMessage(
+          UIMessageType.INFO,
+          `${filesText} changed: ${fileNames.join(", ")}`
+        )
+      }
+
       // Add each error message to UI
       displaySyncPlanIssues(syncPlan, this.ui, this.log)
 

@@ -1404,6 +1404,84 @@ describe("Integration: UI", () => {
     }
   })
 
+  test("shows files changed message during watch mode", async () => {
+    // Create a basic config
+    const configObject = withDefaultConfig({
+      sourceRoot: sourceDir,
+      minecraftSavePath: savePath,
+      // should match ./program.lua and ./startup.lua
+      rules: [{ source: "*.lua", target: "/", computers: ["1"] }],
+    })
+
+    await createTestComputer(computersDir, "1")
+
+    const syncManager = new SyncManager(
+      configObject,
+      new UI({ renderDynamicElements: false })
+    )
+
+    try {
+      // Start watch mode and wait for sync
+      const { controller, start } = syncManager.initWatchMode()
+
+      // Wait for the sync to complete
+      const syncResult = await waitForEventWithTrigger<SyncOperationResult>(
+        controller,
+        SyncEvent.INITIAL_SYNC_COMPLETE,
+        start
+      )
+
+      // Check results
+      expect(syncResult.summary.fullySuccessfulComputers).toBe(1)
+      expect(syncResult.summary.failedComputers).toBe(0)
+
+      // Get the captured output
+      const normalizedOutput = normalizeOutput(outputCapture.getOutput())
+
+      expectComputerResult(normalizedOutput, 1, {
+        computerIcon: figures.tick,
+        successCount: 2,
+        totalCount: 2,
+      })
+
+      outputCapture.clear()
+
+      const triggeredSyncResult =
+        await waitForEventWithTrigger<SyncOperationResult>(
+          controller,
+          SyncEvent.SYNC_COMPLETE,
+          async () => {
+            await Promise.all([
+              fs.writeFile(
+                path.join(sourceDir, "/program.lua"),
+                "print('Program updated')"
+              ),
+              fs.writeFile(
+                path.join(sourceDir, "/startup.lua"),
+                "print('Startup updated')"
+              ),
+            ])
+
+            // Add a short delay to ensure file system events are detected
+            await setTimeout(100)
+          }
+        )
+
+      expect(triggeredSyncResult.summary.fullySuccessfulComputers).toBe(1)
+      expect(triggeredSyncResult.summary.failedComputers).toBe(0)
+
+      // Get the captured output
+      const normalizedOutput2 = normalizeOutput(outputCapture.getOutput())
+
+      // Ensure that "Files changed:" exists followed by filenames, in any order
+      expect(normalizedOutput2).toMatch(
+        /Files changed:([\s\S]*?- \/program\.lua)?([\s\S]*?- \/startup\.lua)?/
+      )
+    } finally {
+      await syncManager.stop()
+    }
+  })
+
   test("displays warning when no matching files found", async () => {
     // Create a config with a rule that won't match any files
     const configPath = path.join(tempDir, ".ccsync.yaml")

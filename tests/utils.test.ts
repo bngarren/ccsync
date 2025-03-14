@@ -11,6 +11,7 @@ import {
   resolveTargetPath,
   processPath,
   pathIsLikelyFile,
+  checkDuplicateTargetPaths,
 } from "../src/utils"
 import path from "path"
 import { mkdir, rm, writeFile } from "node:fs/promises"
@@ -711,6 +712,72 @@ describe("Path Handling", () => {
         }
       }
     })
+  })
+})
+
+describe("Sync Plan Creation", () => {
+  test("detects duplicate target paths on the same computer", () => {
+    // Set up test rules that target the same path on the same computer
+    const sourceRoot = "/source"
+
+    const rules: ResolvedFileRule[] = [
+      // Two files targeting the same path on computer 1
+      createResolvedFile({
+        sourceRoot,
+        sourcePath: "file1.lua",
+        targetPath: "/startup.lua", // Same target path
+        computers: "1",
+      }),
+      createResolvedFile({
+        sourceRoot,
+        sourcePath: "file2.lua",
+        targetPath: "/startup.lua", // Same target path
+        computers: "1",
+      }),
+
+      // A file targeting a different path on computer 1 (no conflict)
+      createResolvedFile({
+        sourceRoot,
+        sourcePath: "file3.lua",
+        targetPath: "/lib/utils.lua",
+        computers: "1",
+      }),
+
+      // Same target path but on different computers (no conflict)
+      createResolvedFile({
+        sourceRoot,
+        sourcePath: "file4.lua",
+        targetPath: "/program.lua",
+        computers: "1",
+      }),
+      createResolvedFile({
+        sourceRoot,
+        sourcePath: "file4.lua",
+        targetPath: "/program.lua",
+        computers: "2",
+      }),
+    ]
+
+    // Run the function being tested
+    const duplicates = checkDuplicateTargetPaths(rules)
+
+    // Expect only one duplicate (the first two files)
+    expect(duplicates.size).toBe(1)
+
+    // Verify the duplicate is for computer 1 at /startup.lua
+    const duplicateKey = "1:/startup.lua"
+    expect(duplicates.has(duplicateKey)).toBe(true)
+
+    // Verify there are exactly 2 files targeting that path
+    const conflictingRules = duplicates.get(duplicateKey)
+    expect(conflictingRules).toHaveLength(2)
+
+    // Check the file names match what we expect
+    const sourceFiles = conflictingRules?.map((r) =>
+      path.basename(r.sourceAbsolutePath)
+    )
+    expect(sourceFiles).toContain("file1.lua")
+    expect(sourceFiles).toContain("file2.lua")
   })
 })
 

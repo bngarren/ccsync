@@ -1831,4 +1831,57 @@ describe("Integration: UI", () => {
       await syncManager.stop()
     }
   })
+
+  test("displays warning when duplicate target paths are detected", async () => {
+    // Create a config with rules that will produce duplicate target paths
+    const configObject = withDefaultConfig({
+      sourceRoot: sourceDir,
+      minecraftSavePath: savePath,
+      rules: [
+        // Two different files targeting the same path on computer 1
+        { source: "program.lua", target: "/startup.lua", computers: ["1"] },
+        { source: "startup.lua", target: "/startup.lua", computers: ["1"] },
+        // A unique target path (no conflict)
+        { source: "lib/*.lua", target: "/lib/", computers: ["1"] },
+      ],
+    })
+
+    await createTestComputer(computersDir, "1")
+
+    const syncManager = new SyncManager(
+      configObject,
+      new UI({ renderDynamicElements: false })
+    )
+
+    try {
+      // Start manual mode and wait for sync
+      const { controller, start } = syncManager.initManualMode()
+
+      // Wait for the sync to complete
+      const result = await waitForEventWithTrigger<SyncOperationResult>(
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        start
+      )
+
+      expect(result.status).toBe(SyncStatus.WARNING)
+      expect(result.summary.fullySuccessfulComputers).toBe(1)
+      expect(result.errors).toHaveLength(0)
+
+      // Get the captured output
+      const normalizedOutput = normalizeOutput(outputCapture.getOutput())
+
+      // Verify the warning message for duplicate targets
+      expect(normalizedOutput).toMatch(
+        /Multiple source files.*target the same path/
+      )
+      expect(normalizedOutput).toMatch(/startup\.lua/) // The conflicting target path
+      expect(normalizedOutput).toMatch(/program\.lua.*startup\.lua/) // The source files
+
+      // Verify presence of suggestion
+      expect(normalizedOutput).toMatch(/Review your sync rules/)
+    } finally {
+      await syncManager.stop()
+    }
+  })
 })

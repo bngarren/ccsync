@@ -29,7 +29,7 @@ import {
 } from "./args"
 import { README_ADDRESS } from "./constants"
 
-const initConfig = async (parsedArgs: ParsedArgs) => {
+export const initConfig = async (parsedArgs: ParsedArgs) => {
   // Find all config files
   const configs = await findConfig()
 

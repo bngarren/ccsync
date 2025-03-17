@@ -12,7 +12,7 @@ import {
 import path from "path"
 import { SyncManager } from "./sync"
 import { theme } from "./theme"
-import { clearScreen, toTildePath } from "./utils"
+import { toTildePath } from "./utils"
 import { SyncMode } from "./types"
 import { AppError, ErrorSeverity, getErrorMessage } from "./errors"
 import { getLogDirectory, getLogger, initializeLogger } from "./log"
@@ -21,12 +21,7 @@ import { UI } from "./ui"
 import * as os from "node:os"
 import figures from "figures"
 import chalk from "chalk"
-import {
-  getPrettyParsedArgs,
-  handleCommands,
-  parseArgs,
-  type ParsedArgs,
-} from "./args"
+import { getPrettyParsedArgs, parseArgs, type ParsedArgs } from "./args"
 import { README_ADDRESS } from "./constants"
 
 export const initConfig = async (parsedArgs: ParsedArgs) => {
@@ -95,7 +90,10 @@ function getErrorCategoryTitle(category: ConfigErrorCategory) {
   }
 }
 
-const presentConfigErrors = (errors: ConfigError[], verbose: boolean) => {
+export const presentConfigErrors = (
+  errors: ConfigError[],
+  verbose: boolean
+) => {
   let errorLog = `Configuration errors found (${errors.length}):\n`
 
   let counter = 1
@@ -223,16 +221,7 @@ async function handleFatalError(
   process.exit(1)
 }
 
-async function main() {
-  const parsedArgs = parseArgs()
-
-  clearScreen()
-  process.stdout.write("\n\n")
-
-  p.intro(theme.primary.bold(`CC: Sync`))
-
-  await handleCommands(parsedArgs)
-
+async function runMainProgram(parsedArgs: ParsedArgs) {
   try {
     // Get the config file
     const { config, errors } = await initConfig(parsedArgs)
@@ -389,6 +378,33 @@ async function main() {
     // Catch-all for errors during startup
     await handleFatalError(error)
   }
+}
+
+// Main entry point
+async function main() {
+  p.intro(theme.primary.bold(`CC: Sync v${version}`))
+
+  // Parse arguments and check if a command was invoked
+  const { parsedArgs, isCommandInvoked } = await parseArgs()
+
+  // // Skip clearing screen for certain commands to make output easier to read
+  // if (
+  //   !parsedArgs._?.some((command) => {
+  //     return ["init", "command"].includes(command)
+  //   })
+  // ) {
+  //   clearScreen()
+  //   process.stdout.write("\n\n")
+  // }
+
+  // If a command was executed via yargs, we're done
+  // The command handler is responsible for any cleanup and process.exit
+  if (isCommandInvoked) {
+    return
+  }
+
+  // No commands were executed, run the main app
+  await runMainProgram(parsedArgs)
 }
 
 main().catch((error: unknown) => {

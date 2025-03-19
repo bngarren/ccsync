@@ -23,14 +23,23 @@ import figures from "figures"
 import chalk from "chalk"
 import { getPrettyParsedArgs, parseArgs, type ParsedArgs } from "./args"
 import { README_ADDRESS } from "./constants"
+import {
+  handleComputersFindCommand,
+  handleInitCommand,
+} from "./commandHandlers"
 
 export const initConfig = async (parsedArgs: ParsedArgs) => {
-  // Find all config files
-  const configs = await findConfig()
+  // Find the config file, otherwise offer to create a default
+  try {
+    const config = await findConfig()
 
-  let configPath: string
-
-  if (configs.length === 0) {
+    return await loadConfig(config.path, {
+      overrides: {
+        logToFile: parsedArgs.logToFile,
+        logLevel: parsedArgs.logLevel,
+      },
+    })
+  } catch (err) {
     const createDefault = await p.confirm({
       message: "No configuration file found. Create a default configuration?",
       initialValue: true,
@@ -45,34 +54,7 @@ export const initConfig = async (parsedArgs: ParsedArgs) => {
     p.log.success(`Created default config at ${process.cwd()}/.ccsync.yaml`)
     p.log.info("Please edit the configuration file and run the program again.")
     process.exit(0)
-  } else if (configs.length === 1) {
-    configPath = configs[0].path
-    // p.log.info(`Using config: ${color.gray(configs[0].relativePath)}`);
-  } else {
-    // Multiple configs found - let user choose
-    const selection = (await p.select({
-      message: "Multiple config files found. Select one to use:",
-      options: configs.map((config, index) => ({
-        value: config.path,
-        label: config.relativePath,
-        hint: index === 0 ? "closest to current directory" : undefined,
-      })),
-    })) as string
-
-    if (!selection) {
-      p.cancel("No config selected.")
-      process.exit(0)
-    }
-
-    configPath = selection
   }
-
-  return await loadConfig(configPath, {
-    overrides: {
-      logToFile: parsedArgs.logToFile,
-      logLevel: parsedArgs.logLevel,
-    },
-  })
 }
 
 function getErrorCategoryTitle(category: ConfigErrorCategory) {
@@ -92,7 +74,7 @@ function getErrorCategoryTitle(category: ConfigErrorCategory) {
 
 export const presentConfigErrors = (
   errors: ConfigError[],
-  verbose: boolean
+  verbose?: boolean
 ) => {
   let errorLog = `Configuration errors found (${errors.length}):\n`
 
@@ -221,45 +203,52 @@ async function handleFatalError(
   process.exit(1)
 }
 
+async function init(parsedArgs: ParsedArgs) {
+  // Get the config file
+  const { config, errors } = await initConfig(parsedArgs)
+
+  if (errors.length > 0) {
+    presentConfigErrors(errors, parsedArgs.verbose)
+    p.outro("Please fix these issues and try again.")
+    process.exit(0)
+  }
+
+  if (!config) {
+    p.log.error("No valid configuration found.")
+    process.exit(0)
+  }
+
+  // Initialize logger with config settings
+  initializeLogger({
+    logToFile: config.advanced.logToFile,
+    logLevel: config.advanced.logLevel,
+  })
+
+  const log = getLogger()
+  log.info(
+    {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+      ccSyncVersion: version || process.env.npm_package_version || "unknown",
+      platform: process.platform,
+      nodeVersion: process.version,
+      config: {
+        sourceRoot: config.sourceRoot,
+        minecraftSave: path.posix.basename(config.minecraftSavePath),
+        rulesCount: config.rules.length,
+      },
+    },
+    "CC: Sync initialized"
+  )
+  log.trace({ config }, "Current configuration")
+
+  return { config, log }
+}
+
 async function runMainProgram(parsedArgs: ParsedArgs) {
   try {
-    // Get the config file
-    const { config, errors } = await initConfig(parsedArgs)
+    const { config, log: _log } = await init(parsedArgs)
 
-    if (errors.length > 0) {
-      presentConfigErrors(errors, parsedArgs.verbose)
-      p.outro("Please fix these issues and try again.")
-      process.exit(0)
-    }
-
-    if (!config) {
-      p.log.error("No valid configuration found.")
-      process.exit(0)
-    }
-
-    // Initialize logger with config settings
-    initializeLogger({
-      logToFile: config.advanced.logToFile,
-      logLevel: config.advanced.logLevel,
-    })
-
-    const log = getLogger().child({ component: "Main" })
-    log.info(
-      {
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-        ccSyncVersion: version || process.env.npm_package_version || "unknown",
-        platform: process.platform,
-        nodeVersion: process.version,
-        config: {
-          sourceRoot: config.sourceRoot,
-          minecraftSave: path.posix.basename(config.minecraftSavePath),
-          rulesCount: config.rules.length,
-        },
-      },
-      "CC: Sync initialized"
-    )
-    log.trace({ config }, "Current configuration")
-
+    const log = _log.child({ component: "Main" })
     // ---- Banner messages ----
     if (parsedArgs.verbose) {
       let details = ""
@@ -384,22 +373,28 @@ async function runMainProgram(parsedArgs: ParsedArgs) {
 async function main() {
   p.intro(theme.primary.bold(`CC: Sync v${version}`))
 
-  // Parse arguments and check if a command was invoked
-  const { parsedArgs, isCommandInvoked } = await parseArgs()
+  // Parse CLI arguments
+  const parsedArgs = await parseArgs()
 
-  // // Skip clearing screen for certain commands to make output easier to read
-  // if (
-  //   !parsedArgs._?.some((command) => {
-  //     return ["init", "command"].includes(command)
-  //   })
-  // ) {
-  //   clearScreen()
-  //   process.stdout.write("\n\n")
-  // }
+  const { config, log } = await init(parsedArgs)
 
-  // If a command was executed via yargs, we're done
-  // The command handler is responsible for any cleanup and process.exit
-  if (isCommandInvoked) {
+  // Handle commands based on the parsed arguments
+  if (parsedArgs.command === "init") {
+    await handleInitCommand(parsedArgs, log)
+    return
+  } else if (parsedArgs.command === "computers") {
+    if (parsedArgs.computersCommand === "find") {
+      await handleComputersFindCommand(parsedArgs, config, log)
+      return
+    }
+
+    // Handle unknown computer command
+    if (parsedArgs.computersCommand) {
+      p.log.error(`Unknown computers command: ${parsedArgs.computersCommand}`)
+      return
+    }
+
+    p.log.info("Use a specific computers subcommand (find)")
     return
   }
 

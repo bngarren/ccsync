@@ -1,26 +1,21 @@
-import yargs, { type ArgumentsCamelCase } from "yargs"
+import yargs from "yargs"
 import { hideBin } from "yargs/helpers"
 import { version } from "./version"
 import { README_ADDRESS, LOG_LEVELS } from "./constants"
 import { type LogLevel } from "./log"
 
-import { initCommand } from "./commands/init.ts"
-import { clearScreen } from "./utils.ts"
-
 export type Command = "init" | "computers"
 
-export type ComputerCommand = "find" | "clear"
+export type ComputersCommand = "find" | "clear"
 
 export interface ParsedArgs {
-  verbose: boolean
-  logToFile: boolean
-  logLevel: LogLevel
-  smokeTest: boolean
+  verbose?: boolean
+  logToFile?: boolean
+  logLevel?: LogLevel
+  smokeTest?: boolean
+  command?: string
+  computersCommand?: ComputersCommand
   _?: Command[]
-  computers?: {
-    command?: ComputerCommand
-    ids?: string
-  }
 }
 
 // ---- PARSE ARGS (YARGS) ----
@@ -28,43 +23,38 @@ export interface ParsedArgs {
 /**
  * Parses the command line arguments and returns object with commands and options
  */
-export const parseArgs = async (): Promise<{
-  parsedArgs: ParsedArgs
-  isCommandInvoked: boolean
-}> => {
-  // Flag to track if a command handler was invoked
-  let commandWasInvoked = false
-
-  // Type-safe wrapper for tracking command invocation
-  const wrapCommand = <T>(
-    handler: (args: ArgumentsCamelCase<T>) => void | Promise<void>
-  ) => {
-    return (args: ArgumentsCamelCase<T>) => {
-      commandWasInvoked = true
-
-      // Skip clearing screen for certain commands to make output easier to read
-      if (
-        !args._.some((command) => {
-          return ["init", "command"].includes(String(command))
-        })
-      ) {
-        clearScreen()
-        process.stdout.write("\n\n")
-      }
-
-      return handler(args)
-    }
-  }
-
-  const parsed = (await yargs(hideBin(process.argv))
+export const parseArgs = async (): Promise<ParsedArgs> => {
+  const parser = yargs(hideBin(process.argv))
     .scriptName("ccsync")
     .usage("Usage: $0 [COMMAND] [OPTIONS]")
-    .command("$0", "run the program")
+    .command("$0", "- run the program")
     .command({
-      ...initCommand,
-      handler: wrapCommand(initCommand.handler),
+      command: "init",
+      describe: "- initialize a new config (or overwrite current)",
+      handler: () => {
+        // Just capture the command, don't run logic
+      },
     })
-    /* .command(computersCommands) */
+    .command({
+      command: "computers <find|clear>",
+      describe: "- computer related commands",
+      builder: (yargs) => {
+        return yargs
+          .command({
+            command: "find",
+            describe:
+              "- identify Minecraft computers in the current save directory",
+            handler: () => {
+              // Just capture the command, don't run logic
+            },
+          })
+          .demandCommand(1, "You must specifiy a 'computers' subcommand")
+        // Add other computer commands as needed
+      },
+      handler: () => {
+        // Just capture the command, don't run logic
+      },
+    })
     .option("verbose", {
       alias: "v",
       type: "boolean",
@@ -87,20 +77,39 @@ export const parseArgs = async (): Promise<{
       type: "boolean",
       alias: "smoke-test",
     })
-    .help()
-    .alias("help", "h")
     .version(version)
     .alias("version", "V")
     .strict(true)
     .showHelpOnFail(false, "Run ccsync --help for available options")
     .epilogue(`for more information, visit ${README_ADDRESS}`)
     .wrap(null)
-    .parse()) as ParsedArgs
+    .help()
+    .alias("help", "h")
 
-  return {
-    parsedArgs: parsed,
-    isCommandInvoked: commandWasInvoked,
+  const parsed = await parser.parse()
+
+  // Extract the primary command and computer subcommand
+  const parsedArgs: ParsedArgs = {
+    verbose: parsed.verbose,
+    logToFile: parsed.logToFile,
+    logLevel: parsed.logLevel as LogLevel,
+    smokeTest: parsed.smokeTest,
+    _: parsed._ as Command[],
   }
+
+  // Extract command and sub-command
+  if (parsed._.includes("init")) {
+    parsedArgs.command = "init"
+  } else if (parsed._.includes("computers")) {
+    parsedArgs.command = "computers"
+    // Get the computer subcommand (assuming it comes right after 'computers')
+    const computerCommandIndex = parsed._.indexOf("computers") + 1
+    if (parsed._[computerCommandIndex] === "find") {
+      parsedArgs.computersCommand = "find"
+    }
+  }
+
+  return parsedArgs
 }
 
 export function getPrettyParsedArgs(parsedArgs: ParsedArgs): string {

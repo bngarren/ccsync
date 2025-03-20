@@ -1,12 +1,14 @@
 import * as p from "@clack/prompts"
 import { createDefaultConfig, type Config, findConfig } from "./config"
-import { findMinecraftComputers } from "./utils"
+import { clearComputers, findMinecraftComputers } from "./utils"
 import { theme } from "./theme"
-import { type ParsedArgs } from "./args"
+import { type ProcessedArgs } from "./args"
 import type { Logger } from "pino"
+import { setTimeout } from "node:timers/promises"
+import path from "node:path"
 
 export async function handleInitCommand(
-  parsedArgs: ParsedArgs,
+  processedArgs: ProcessedArgs,
   _log: Logger
 ): Promise<void> {
   const log = _log.child({ component: "CLI" })
@@ -35,15 +37,52 @@ export async function handleInitCommand(
   }
 }
 
+/**
+ * Identifies computers in the configured `minecraftSavePath` and prints to the screen
+ */
 export async function handleComputersFindCommand(
-  parsedArgs: ParsedArgs,
+  processedArgs: ProcessedArgs,
   config: Config,
   _log: Logger
 ): Promise<void> {
   const log = _log.child({ component: "CLI" })
-
   log.info("running 'computers find' command")
 
   const computers = await findMinecraftComputers(config.minecraftSavePath)
-  p.log.message(computers.map((c) => c.id).join(", "))
+  const computerIds = computers.map((c) => c.id).join(", ")
+  const minecraftSaveText = "Minecraft save at:"
+  const { dir, name } = path.parse(config.minecraftSavePath)
+  const minecraftSaveDirText = theme.dim(`${dir}${path.sep}`)
+  const minecraftSaveNameText = theme.bold(name)
+  const foundText = "Found the following computers:"
+
+  const s = p.spinner()
+
+  s.start("Finding computers...")
+  // p.log.step("Finding computers...")
+  await setTimeout(800)
+  s.stop(`${minecraftSaveText} ${minecraftSaveDirText}${minecraftSaveNameText}`)
+  if (computerIds.length === 0) {
+    p.outro(theme.warning("Did not find any computers in this world!"))
+  } else {
+    p.outro(`${foundText} ${theme.success(computerIds)}`)
+  }
+}
+
+/**
+ * Clears the contents of 'all' computers or only computers specified by ID
+ */
+export async function handleComputersClear(
+  processedArgs: ProcessedArgs,
+  config: Config,
+  _log: Logger
+) {
+  const log = _log.child({ component: "CLI" })
+  log.info("running 'computers clear' command")
+
+  const ids = processedArgs.computersClearIds
+
+  const result = await clearComputers(config, ids)
+
+  log.info(`Successfully cleared: ${result.join(",")}`)
 }

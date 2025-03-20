@@ -8,7 +8,7 @@ import type {
   ResolvedFileRule,
   ValidationResult as ResolveSyncRulesResult,
 } from "./types"
-import { getErrorMessage, isNodeError } from "./errors"
+import { AppError, getErrorMessage, isNodeError } from "./errors"
 import stripAnsi from "strip-ansi"
 import { cachedGlob, invalidateGlobCache, pathCache } from "./cache"
 
@@ -964,5 +964,42 @@ export async function copyFilesToComputer(
     copiedFiles,
     skippedFiles,
     errors,
+  }
+}
+
+const clearComputer = async (path: string) => {
+  // ensure path is system-specific
+  const computerSystemPath = toSystemPath(path)
+
+  await fs.rm(computerSystemPath, {
+    maxRetries: 3,
+    retryDelay: 50,
+    recursive: true,
+  })
+}
+
+export async function clearComputers(config: Config, ids?: number[]) {
+  // find computers
+  let computers: Computer[] = []
+  try {
+    computers = await findMinecraftComputers(config.minecraftSavePath)
+  } catch (error: unknown) {
+    throw AppError.fatal(`Failed to clear`, "clearComputers", error)
+  }
+
+  let computersToWipe = [...computers]
+  if (ids) {
+    computersToWipe = computers.filter((c) => ids.includes(Number(c.id)))
+  }
+  try {
+    const ops = computersToWipe.map((c) => clearComputer(c.path))
+    await Promise.all(ops)
+    return computersToWipe.map((c) => Number(c.id))
+  } catch (error: unknown) {
+    throw AppError.error(
+      `Failed to clear ${pluralize("computer")(ids?.length || 1)}`,
+      "clearComputers",
+      error
+    )
   }
 }

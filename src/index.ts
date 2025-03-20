@@ -24,6 +24,7 @@ import chalk from "chalk"
 import { getPrettyParsedArgs, parseArgs, type ParsedArgs } from "./args"
 import { README_ADDRESS } from "./constants"
 import {
+  handleComputersClear,
   handleComputersFindCommand,
   handleInitCommand,
 } from "./commandHandlers"
@@ -376,30 +377,28 @@ async function main() {
   // Parse CLI arguments
   const parsedArgs = await parseArgs()
 
+  console.debug(parsedArgs)
   const { config, log } = await init(parsedArgs)
 
   // Handle commands based on the parsed arguments
   if (parsedArgs.command === "init") {
     await handleInitCommand(parsedArgs, log)
-    return
   } else if (parsedArgs.command === "computers") {
-    if (parsedArgs.computersCommand === "find") {
-      await handleComputersFindCommand(parsedArgs, config, log)
-      return
+    switch (parsedArgs.computersCommand) {
+      case "find":
+        await handleComputersFindCommand(parsedArgs, config, log)
+        break
+      case "clear":
+        await handleComputersClear(parsedArgs, config, log)
+        break
+      default:
+        p.log.error(`Unknown computers command: ${parsedArgs.computersCommand}`)
+        break
     }
-
-    // Handle unknown computer command
-    if (parsedArgs.computersCommand) {
-      p.log.error(`Unknown computers command: ${parsedArgs.computersCommand}`)
-      return
-    }
-
-    p.log.info("Use a specific computers subcommand (find)")
-    return
+  } else {
+    await runMainProgram(parsedArgs)
+    // No commands were executed, run the main app
   }
-
-  // No commands were executed, run the main app
-  await runMainProgram(parsedArgs)
 }
 
 main().catch((error: unknown) => {

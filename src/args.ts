@@ -8,14 +8,27 @@ export type Command = "init" | "computers"
 
 export type ComputersCommand = "find" | "clear"
 
-export interface ParsedArgs {
+// Interface for what yargs actually returns
+interface YargsArguments {
+  [x: string]: unknown
+  _: string[]
+  $0: string
+  verbose?: boolean
+  logToFile?: boolean
+  logLevel?: string
+  smokeTest?: boolean
+  ids?: (string | number)[] // Capture positional arguments for computers clear command
+}
+
+export interface ProcessedArgs {
   verbose?: boolean
   logToFile?: boolean
   logLevel?: LogLevel
   smokeTest?: boolean
-  command?: string
+  command?: Command
   computersCommand?: ComputersCommand
-  _?: Command[]
+  computersClearIds?: number[]
+  _?: string[]
 }
 
 // ---- PARSE ARGS (YARGS) ----
@@ -23,7 +36,7 @@ export interface ParsedArgs {
 /**
  * Parses the command line arguments and returns object with commands and options
  */
-export const parseArgs = async (): Promise<ParsedArgs> => {
+export const parseArgs = async (): Promise<ProcessedArgs> => {
   const parser = yargs(hideBin(process.argv))
     .scriptName("ccsync")
     .usage("Usage: $0 [COMMAND] [OPTIONS]")
@@ -36,7 +49,7 @@ export const parseArgs = async (): Promise<ParsedArgs> => {
       },
     })
     .command({
-      command: "computers <find|clear>",
+      command: "computers",
       describe: "- computer related commands",
       builder: (yargs) => {
         return yargs
@@ -48,8 +61,25 @@ export const parseArgs = async (): Promise<ParsedArgs> => {
               // Just capture the command, don't run logic
             },
           })
+          .command({
+            command: "clear [ids..]",
+            describe: "- clear the contents of Minecraft computers",
+            builder: (yargs) => {
+              return yargs
+                .positional("ids", {
+                  type: "string",
+                  desc: "Computer IDs to clear",
+                  array: true,
+                })
+                .example(
+                  "$0 computers clear 1 2 3",
+                  "Clear computers with IDs 1, 2, and 3"
+                )
+                .example("$0 computers clear", "Clear all computers")
+            },
+            handler: () => {},
+          })
           .demandCommand(1, "You must specifiy a 'computers' subcommand")
-        // Add other computer commands as needed
       },
       handler: () => {
         // Just capture the command, don't run logic
@@ -86,34 +116,64 @@ export const parseArgs = async (): Promise<ParsedArgs> => {
     .help()
     .alias("help", "h")
 
-  const parsed = await parser.parse()
+  const parsed = (await parser.parse()) as YargsArguments
 
-  // Extract the primary command and computer subcommand
-  const parsedArgs: ParsedArgs = {
+  console.debug({ parsed })
+
+  // Extract the primary command and subcommands
+  const parsedArgs: ProcessedArgs = {
     verbose: parsed.verbose,
     logToFile: parsed.logToFile,
     logLevel: parsed.logLevel as LogLevel,
     smokeTest: parsed.smokeTest,
-    _: parsed._ as Command[],
+    _: parsed._,
   }
+  // Extract command using the first command in the array
+  if (parsed._.length > 0) {
+    const primaryCommand = parsed._[0]
+    switch (primaryCommand) {
+      case "init":
+        parsedArgs.command = "init"
+        break
 
-  // Extract command and sub-command
-  if (parsed._.includes("init")) {
-    parsedArgs.command = "init"
-  } else if (parsed._.includes("computers")) {
-    parsedArgs.command = "computers"
-    // Get the computer subcommand (assuming it comes right after 'computers')
-    const computerCommandIndex = parsed._.indexOf("computers") + 1
-    if (parsed._[computerCommandIndex] === "find") {
-      parsedArgs.computersCommand = "find"
+      case "computers":
+        parsedArgs.command = "computers"
+
+        // Check for subcommand (should be the second item in the array)
+        if (parsed._.length > 1) {
+          const subCommand = parsed._[1]
+          switch (subCommand) {
+            case "find":
+              parsedArgs.computersCommand = "find"
+              break
+
+            case "clear": {
+              parsedArgs.computersCommand = "clear"
+              // Handle computer IDs to clear
+              // This will capture both space-separated and comma-separated IDs
+              // i.e., both "clear 1 2 3" and "clear 1,2,3" work
+              const idsToProcess = parsed.ids || []
+              if (idsToProcess.length > 0) {
+                parsedArgs.computersClearIds = idsToProcess
+                  .flatMap((arg) => String(arg).split(","))
+                  .map((s) => s.trim())
+                  .filter((s) => s.length > 0 && !isNaN(Number(s)))
+                  .map(Number)
+              } else {
+                parsedArgs.computersClearIds = []
+              }
+              break
+            }
+          }
+        }
+        break
     }
   }
-
   return parsedArgs
 }
 
-export function getPrettyParsedArgs(parsedArgs: ParsedArgs): string {
-  const keysToInclude: (keyof ParsedArgs)[] = [
+export function getPrettyParsedArgs(parsedArgs: ProcessedArgs): string {
+  const keysToInclude: (keyof ProcessedArgs)[] = [
     "verbose",
     "logToFile",
     "logLevel",

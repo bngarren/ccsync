@@ -317,6 +317,20 @@ export const withDefaultConfig = (config: DeepPartial<Config>): Config => {
 
 export const findConfig = async (
   startDir: string = process.cwd()
+): Promise<{ path: string; relativePath: string }> => {
+  const configPath = path.join(startDir, DEFAULT_CONFIG_FILENAME)
+  await fs.access(configPath)
+  return {
+    path: configPath,
+    relativePath: path.relative(startDir, configPath),
+  }
+}
+/**
+ * Finds a config file, searching upward until root
+ * @deprecated
+ * */
+export const findConfigUntilRoot = async (
+  startDir: string = process.cwd()
 ): Promise<Array<{ path: string; relativePath: string }>> => {
   const configs: Array<{ path: string; relativePath: string }> = []
   let currentDir = startDir

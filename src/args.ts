@@ -1,20 +1,34 @@
-import * as p from "@clack/prompts"
-import { findConfig, createDefaultConfig } from "./config"
-import { theme } from "./theme"
 import yargs from "yargs"
 import { hideBin } from "yargs/helpers"
 import { version } from "./version"
 import { README_ADDRESS, LOG_LEVELS } from "./constants"
 import { type LogLevel } from "./log"
 
-export type Command = "init"
+export type Command = "init" | "computers"
 
-export interface ParsedArgs {
-  verbose: boolean
-  logToFile: boolean
-  logLevel: LogLevel
-  smokeTest: boolean
-  _?: Command[]
+export type ComputersCommand = "find" | "clear"
+
+// Interface for what yargs actually returns
+interface YargsArguments {
+  [x: string]: unknown
+  _: string[]
+  $0: string
+  verbose?: boolean
+  logToFile?: boolean
+  logLevel?: string
+  smokeTest?: boolean
+  ids?: (string | number)[] // Capture positional arguments for computers clear command
+}
+
+export interface ProcessedArgs {
+  verbose?: boolean
+  logToFile?: boolean
+  logLevel?: LogLevel
+  smokeTest?: boolean
+  command?: Command
+  computersCommand?: ComputersCommand
+  computersClearIds?: number[]
+  _?: string[]
 }
 
 // ---- PARSE ARGS (YARGS) ----
@@ -22,12 +36,55 @@ export interface ParsedArgs {
 /**
  * Parses the command line arguments and returns object with commands and options
  */
-export const parseArgs = (): ParsedArgs => {
-  return yargs(hideBin(process.argv))
+export const parseArgs = async (): Promise<ProcessedArgs> => {
+  const parser = yargs(hideBin(process.argv))
     .scriptName("ccsync")
     .usage("Usage: $0 [COMMAND] [OPTIONS]")
-    .command("$0", "run the program")
-    .command(["init"], "create a config file")
+    .command("$0", "- run the program")
+    .command({
+      command: "init",
+      describe: "- initialize a new config (or overwrite current)",
+      handler: () => {
+        // Just capture the command, don't run logic
+      },
+    })
+    .command({
+      command: "computers [SUBCOMMAND]",
+      describe: "- computer related commands",
+      builder: (yargs) => {
+        return yargs
+          .command({
+            command: "find",
+            describe:
+              "- identify Minecraft computers in the current save directory",
+            handler: () => {
+              // Just capture the command, don't run logic
+            },
+          })
+          .command({
+            command: "clear [ids..]",
+            describe: "- clear the contents of Minecraft computers",
+            builder: (yargs) => {
+              return yargs
+                .positional("ids", {
+                  type: "string",
+                  desc: "Computer IDs to clear",
+                  array: true,
+                })
+                .example(
+                  "$0 computers clear 1 2 3",
+                  "Clear computers with IDs 1, 2, and 3"
+                )
+                .example("$0 computers clear", "Clear all computers")
+            },
+            handler: () => {},
+          })
+          .demandCommand(1, "You must specifiy a 'computers' subcommand")
+      },
+      handler: () => {
+        // Just capture the command, don't run logic
+      },
+    })
     .option("verbose", {
       alias: "v",
       type: "boolean",
@@ -50,19 +107,73 @@ export const parseArgs = (): ParsedArgs => {
       type: "boolean",
       alias: "smoke-test",
     })
-    .help()
-    .alias("help", "h")
     .version(version)
     .alias("version", "V")
-    .strict()
+    .strict(true)
     .showHelpOnFail(false, "Run ccsync --help for available options")
     .epilogue(`for more information, visit ${README_ADDRESS}`)
     .wrap(null)
-    .parse() as ParsedArgs
+    .help()
+    .alias("help", "h")
+
+  const parsed = (await parser.parse()) as YargsArguments
+
+  // console.debug({ parsed })
+
+  // Extract the primary command and subcommands
+  const parsedArgs: ProcessedArgs = {
+    verbose: parsed.verbose,
+    logToFile: parsed.logToFile,
+    logLevel: parsed.logLevel as LogLevel,
+    smokeTest: parsed.smokeTest,
+    _: parsed._,
+  }
+  // Extract command using the first command in the array
+  if (parsed._.length > 0) {
+    const primaryCommand = parsed._[0]
+    switch (primaryCommand) {
+      case "init":
+        parsedArgs.command = "init"
+        break
+
+      case "computers":
+        parsedArgs.command = "computers"
+
+        // Check for subcommand (should be the second item in the array)
+        if (parsed._.length > 1) {
+          const subCommand = parsed._[1]
+          switch (subCommand) {
+            case "find":
+              parsedArgs.computersCommand = "find"
+              break
+
+            case "clear": {
+              parsedArgs.computersCommand = "clear"
+              // Handle computer IDs to clear
+              // This will capture both space-separated and comma-separated IDs
+              // i.e., both "clear 1 2 3" and "clear 1,2,3" work
+              const idsToProcess = parsed.ids || []
+              if (idsToProcess.length > 0) {
+                parsedArgs.computersClearIds = idsToProcess
+                  .flatMap((arg) => String(arg).split(","))
+                  .map((s) => s.trim())
+                  .filter((s) => s.length > 0 && !isNaN(Number(s)))
+                  .map(Number)
+              } else {
+                parsedArgs.computersClearIds = []
+              }
+              break
+            }
+          }
+        }
+        break
+    }
+  }
+  return parsedArgs
 }
 
-export function getPrettyParsedArgs(parsedArgs: ParsedArgs): string {
-  const keysToInclude: (keyof ParsedArgs)[] = [
+export function getPrettyParsedArgs(parsedArgs: ProcessedArgs): string {
+  const keysToInclude: (keyof ProcessedArgs)[] = [
     "verbose",
     "logToFile",
     "logLevel",
@@ -70,50 +181,10 @@ export function getPrettyParsedArgs(parsedArgs: ParsedArgs): string {
 
   const formattedArgs = keysToInclude
     .filter((key) => parsedArgs[key] != null)
-    .map((key) => `${key}=${parsedArgs[key]}`)
+    .map((key) => `${key}=${JSON.stringify(parsedArgs[key])}`)
     .join(" ")
 
   const commands = parsedArgs._?.length ? parsedArgs._.join(" ") + " " : ""
 
   return commands + formattedArgs
-}
-
-// ---- COMMANDS ----
-
-/**
- * Runs handler for command present in the parsed args
- * @param parsedArgs
- */
-export function handleCommands(parsedArgs: ParsedArgs): Promise<void> {
-  if (parsedArgs._?.includes("init")) {
-    return handleInitCommand()
-  }
-  return Promise.resolve()
-}
-
-async function handleInitCommand(): Promise<void> {
-  // p.intro(`${color.cyanBright(`CC: Sync`)} v${version}`)
-
-  // Check if config already exists
-  const configs = await findConfig()
-  if (configs.length > 0) {
-    // Config already exists
-    const overwrite = await p.confirm({
-      message: theme.warning(
-        `Configuration file already exists at ${configs[0].path}. Overwrite?`
-      ),
-      initialValue: false,
-      inactive: "Cancel",
-    })
-
-    if (p.isCancel(overwrite) || !overwrite) {
-      p.outro("Config creation cancelled.")
-      process.exit(0)
-    }
-  }
-
-  await createDefaultConfig(process.cwd())
-  p.log.success(`Created default config at ${process.cwd()}/.ccsync.yaml`)
-  p.log.info("Please edit the configuration file and run the program again.")
-  process.exit(0)
 }

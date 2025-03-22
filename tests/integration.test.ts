@@ -31,6 +31,14 @@ import { setTimeout } from "node:timers/promises"
 import { UI } from "../src/ui"
 import { AppError, ErrorSeverity } from "../src/errors"
 import type { PathLike } from "node:fs"
+import * as config from "../src/config"
+import {
+  handleComputersClear,
+  handleComputersFindCommand,
+  handleInitCommand,
+} from "../src/commandHandlers"
+import { getLogger } from "../src/log"
+import * as p from "@clack/prompts"
 
 describe("Integration: SyncManager", () => {
   let tempDir: string
@@ -1883,5 +1891,181 @@ describe("Integration: UI", () => {
     } finally {
       await syncManager.stop()
     }
+  })
+})
+
+describe("CLI", () => {
+  let tempDir: string
+  let sourceDir: string
+  let savePath: string
+  let computersDir: string
+
+  let clackPromptsSpy: ReturnType<typeof spyOnClackPrompts>
+  let outputCapture: ReturnType<typeof captureUIOutput>
+  const cleanup = TempCleaner.getInstance()
+
+  beforeEach(async () => {
+    tempDir = createUniqueTempDir()
+    cleanup.add(tempDir)
+
+    sourceDir = path.join(tempDir, "src")
+    savePath = path.join(tempDir, "mc/saves/test_world")
+    computersDir = path.join(savePath, "computercraft/computer")
+
+    // Setup test environment
+    await fs.mkdir(sourceDir, { recursive: true })
+    await fs.mkdir(path.dirname(savePath), { recursive: true })
+    await createTestSave(savePath)
+    await createTestFiles(sourceDir)
+
+    // Setup @clack/prompts spy
+    clackPromptsSpy = spyOnClackPrompts()
+
+    // Setup output capture
+    outputCapture = captureUIOutput()
+  })
+
+  afterEach(async () => {
+    // Ensure synchronous cleanup
+    try {
+      await cleanup.cleanDir(tempDir)
+    } catch (err) {
+      console.warn(
+        `Warning: Failed to clean up test directory ${tempDir}:`,
+        err
+      )
+    }
+    outputCapture.restore()
+    outputCapture.clear()
+    mock.restore()
+    clackPromptsSpy.cleanup()
+  })
+
+  test("handles init command correctly when config doesn't exist", async () => {
+    // Mock findConfig to throw (config doesn't exist)
+    const findConfigSpy = spyOn(config, "findConfig").mockImplementation(() => {
+      throw new Error("Config not found")
+    })
+
+    const origCreateDefaultConfig = config.createDefaultConfig
+    // Mock createDefaultConfig
+    const createConfigSpy = spyOn(
+      config,
+      "createDefaultConfig"
+    ).mockImplementation(async () => {
+      return await origCreateDefaultConfig(sourceDir)
+    })
+    const currentWorkingDir = process.cwd()
+    process.chdir(sourceDir)
+    // Change working directory to sourceDir
+    // Call the handler
+    await handleInitCommand({}, getLogger())
+
+    // Verify the right methods were called
+    expect(createConfigSpy).toHaveBeenCalledTimes(1)
+
+    // Verify that default config was created in sourceDir
+
+    expect(fs.access(path.join(sourceDir, ".ccsync.yaml"))).resolves.toBeNil()
+    // Cleanup
+    findConfigSpy.mockRestore()
+    createConfigSpy.mockRestore()
+
+    process.chdir(currentWorkingDir)
+  })
+
+  test("handles computers find command correctly", async () => {
+    const configObject = withDefaultConfig({
+      sourceRoot: sourceDir,
+      minecraftSavePath: savePath,
+    })
+    await createTestComputer(computersDir, "1", { createStartup: false })
+    await createTestComputer(computersDir, "2", { createStartup: false })
+
+    const outroSpy = spyOn(p, "outro")
+
+    await handleComputersFindCommand({}, configObject, getLogger(), 0)
+
+    expect(outroSpy).toHaveBeenCalled()
+
+    const outroCall = outroSpy.mock.calls[0][0]
+    expect(outroCall).toContain("1")
+    expect(outroCall).toContain("2")
+
+    outroSpy.mockRestore()
+  })
+
+  test("handles computers clear command with confirmation", async () => {
+    const configObject = withDefaultConfig({
+      sourceRoot: sourceDir,
+      minecraftSavePath: savePath,
+    })
+    await createTestComputer(computersDir, "1", { createStartup: false })
+    await createTestComputer(computersDir, "2", { createStartup: false })
+
+    // Create files in the computers that will be cleared
+    await fs.writeFile(
+      path.join(computersDir, "1", "test.lua"),
+      "print('test')"
+    )
+    await fs.writeFile(
+      path.join(computersDir, "2", "test.lua"),
+      "print('test')"
+    )
+
+    const promptSpy = spyOn(p, "confirm").mockImplementation(() =>
+      Promise.resolve(true)
+    )
+
+    await handleComputersClear(
+      // Mock the user having called 'ccsync computers clear 1'
+      {
+        computersClearIds: [1],
+      },
+      configObject,
+      getLogger()
+    )
+
+    expect(promptSpy).toHaveBeenCalled()
+
+    // Verify that only computer 1 was cleared
+    expect(await fs.exists(path.join(computersDir, "1", "test.lua"))).toBe(
+      false
+    )
+    expect(await fs.exists(path.join(computersDir, "2", "test.lua"))).toBe(true)
+
+    promptSpy.mockRestore()
+  })
+
+  test("handles computers clear command with user cancellation", async () => {
+    const configObject = withDefaultConfig({
+      sourceRoot: sourceDir,
+      minecraftSavePath: savePath,
+    })
+    await createTestComputer(computersDir, "1", { createStartup: false })
+
+    // Create file in the computers that will NOT be cleared
+    await fs.writeFile(
+      path.join(computersDir, "1", "test.lua"),
+      "print('test')"
+    )
+
+    const promptSpy = spyOn(p, "confirm").mockImplementation(() =>
+      Promise.resolve(false)
+    )
+
+    await handleComputersClear(
+      // Mock the user having called 'ccsync computers clear 1'
+      {
+        computersClearIds: [1],
+      },
+      configObject,
+      getLogger()
+    )
+
+    expect(promptSpy).toHaveBeenCalled()
+
+    // Verify that computer 1 was NOT cleared
+    expect(await fs.exists(path.join(computersDir, "1", "test.lua"))).toBe(true)
   })
 })

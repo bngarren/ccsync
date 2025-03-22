@@ -8,7 +8,7 @@ import type {
   ResolvedFileRule,
   ValidationResult as ResolveSyncRulesResult,
 } from "./types"
-import { getErrorMessage, isNodeError } from "./errors"
+import { AppError, getErrorMessage, isNodeError } from "./errors"
 import stripAnsi from "strip-ansi"
 import { cachedGlob, invalidateGlobCache, pathCache } from "./cache"
 
@@ -964,5 +964,39 @@ export async function copyFilesToComputer(
     copiedFiles,
     skippedFiles,
     errors,
+  }
+}
+
+const clearComputer = async (computerDirPath: string) => {
+  // ensure path is system-specific
+  const computerSystemPath = toSystemPath(computerDirPath)
+
+  const entries = await fs.readdir(computerSystemPath, { withFileTypes: true })
+
+  await Promise.all(
+    entries.map(async (entry) => {
+      const fullPath = path.join(computerSystemPath, entry.name)
+
+      if (entry.isDirectory()) {
+        // Recursively remove contents, then remove the directory itself
+        await fs.rm(fullPath, { recursive: true, force: true })
+      } else {
+        await fs.unlink(fullPath)
+      }
+    })
+  )
+}
+
+export async function clearComputers(computers: Computer[]) {
+  try {
+    const ops = computers.map((c) => clearComputer(c.path))
+    await Promise.all(ops)
+    return computers.map((c) => Number(c.id))
+  } catch (error: unknown) {
+    throw AppError.error(
+      `Failed to clear ${pluralize("computer")(computers.length || 1)}`,
+      "clearComputers",
+      error
+    )
   }
 }

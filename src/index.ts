@@ -12,7 +12,7 @@ import {
 import path from "path"
 import { SyncManager } from "./sync"
 import { theme } from "./theme"
-import { clearScreen, toTildePath } from "./utils"
+import { toTildePath } from "./utils"
 import { SyncMode } from "./types"
 import { AppError, ErrorSeverity, getErrorMessage } from "./errors"
 import { getLogDirectory, getLogger, initializeLogger } from "./log"
@@ -21,21 +21,26 @@ import { UI } from "./ui"
 import * as os from "node:os"
 import figures from "figures"
 import chalk from "chalk"
-import {
-  getPrettyParsedArgs,
-  handleCommands,
-  parseArgs,
-  type ParsedArgs,
-} from "./args"
+import { getPrettyParsedArgs, parseArgs, type ProcessedArgs } from "./args"
 import { README_ADDRESS } from "./constants"
+import {
+  handleComputersClear,
+  handleComputersFindCommand,
+  handleInitCommand,
+} from "./commandHandlers"
 
-const initConfig = async (parsedArgs: ParsedArgs) => {
-  // Find all config files
-  const configs = await findConfig()
+export const initConfig = async (parsedArgs: ProcessedArgs) => {
+  // Find the config file, otherwise offer to create a default
+  try {
+    const config = await findConfig()
 
-  let configPath: string
-
-  if (configs.length === 0) {
+    return await loadConfig(config.path, {
+      overrides: {
+        logToFile: parsedArgs.logToFile,
+        logLevel: parsedArgs.logLevel,
+      },
+    })
+  } catch (err) {
     const createDefault = await p.confirm({
       message: "No configuration file found. Create a default configuration?",
       initialValue: true,
@@ -50,34 +55,7 @@ const initConfig = async (parsedArgs: ParsedArgs) => {
     p.log.success(`Created default config at ${process.cwd()}/.ccsync.yaml`)
     p.log.info("Please edit the configuration file and run the program again.")
     process.exit(0)
-  } else if (configs.length === 1) {
-    configPath = configs[0].path
-    // p.log.info(`Using config: ${color.gray(configs[0].relativePath)}`);
-  } else {
-    // Multiple configs found - let user choose
-    const selection = (await p.select({
-      message: "Multiple config files found. Select one to use:",
-      options: configs.map((config, index) => ({
-        value: config.path,
-        label: config.relativePath,
-        hint: index === 0 ? "closest to current directory" : undefined,
-      })),
-    })) as string
-
-    if (!selection) {
-      p.cancel("No config selected.")
-      process.exit(0)
-    }
-
-    configPath = selection
   }
-
-  return await loadConfig(configPath, {
-    overrides: {
-      logToFile: parsedArgs.logToFile,
-      logLevel: parsedArgs.logLevel,
-    },
-  })
 }
 
 function getErrorCategoryTitle(category: ConfigErrorCategory) {
@@ -95,7 +73,10 @@ function getErrorCategoryTitle(category: ConfigErrorCategory) {
   }
 }
 
-const presentConfigErrors = (errors: ConfigError[], verbose: boolean) => {
+export const presentConfigErrors = (
+  errors: ConfigError[],
+  verbose?: boolean
+) => {
   let errorLog = `Configuration errors found (${errors.length}):\n`
 
   let counter = 1
@@ -223,54 +204,52 @@ async function handleFatalError(
   process.exit(1)
 }
 
-async function main() {
-  const parsedArgs = parseArgs()
+async function init(parsedArgs: ProcessedArgs) {
+  // Get the config file
+  const { config, errors } = await initConfig(parsedArgs)
 
-  clearScreen()
-  process.stdout.write("\n\n")
+  if (errors.length > 0) {
+    presentConfigErrors(errors, parsedArgs.verbose)
+    p.outro("Please fix these issues and try again.")
+    process.exit(0)
+  }
 
-  p.intro(theme.primary.bold(`CC: Sync`))
+  if (!config) {
+    p.log.error("No valid configuration found.")
+    process.exit(0)
+  }
 
-  await handleCommands(parsedArgs)
+  // Initialize logger with config settings
+  initializeLogger({
+    logToFile: config.advanced.logToFile,
+    logLevel: config.advanced.logLevel,
+  })
 
-  try {
-    // Get the config file
-    const { config, errors } = await initConfig(parsedArgs)
-
-    if (errors.length > 0) {
-      presentConfigErrors(errors, parsedArgs.verbose)
-      p.outro("Please fix these issues and try again.")
-      process.exit(0)
-    }
-
-    if (!config) {
-      p.log.error("No valid configuration found.")
-      process.exit(0)
-    }
-
-    // Initialize logger with config settings
-    initializeLogger({
-      logToFile: config.advanced.logToFile,
-      logLevel: config.advanced.logLevel,
-    })
-
-    const log = getLogger().child({ component: "Main" })
-    log.info(
-      {
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
-        ccSyncVersion: version || process.env.npm_package_version || "unknown",
-        platform: process.platform,
-        nodeVersion: process.version,
-        config: {
-          sourceRoot: config.sourceRoot,
-          minecraftSave: path.posix.basename(config.minecraftSavePath),
-          rulesCount: config.rules.length,
-        },
+  const log = getLogger()
+  log.info(
+    {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+      ccSyncVersion: version || process.env.npm_package_version || "unknown",
+      platform: process.platform,
+      nodeVersion: process.version,
+      config: {
+        sourceRoot: config.sourceRoot,
+        minecraftSave: path.posix.basename(config.minecraftSavePath),
+        rulesCount: config.rules.length,
       },
-      "CC: Sync initialized"
-    )
-    log.trace({ config }, "Current configuration")
+    },
+    "CC: Sync initialized"
+  )
+  log.trace({ config }, "Current configuration")
 
+  return { config, log }
+}
+
+async function runMainProgram(parsedArgs: ProcessedArgs) {
+  try {
+    const { config, log: _log } = await init(parsedArgs)
+
+    const log = _log.child({ component: "Main" })
     // ---- Banner messages ----
     if (parsedArgs.verbose) {
       let details = ""
@@ -388,6 +367,36 @@ async function main() {
   } catch (error) {
     // Catch-all for errors during startup
     await handleFatalError(error)
+  }
+}
+
+// Main entry point
+async function main() {
+  p.intro(theme.primary.bold(`CC: Sync v${version}`))
+
+  // Parse CLI arguments
+  const parsedArgs = await parseArgs()
+
+  const { config, log } = await init(parsedArgs)
+
+  // Handle commands based on the parsed arguments
+  if (parsedArgs.command === "init") {
+    await handleInitCommand(parsedArgs, log)
+  } else if (parsedArgs.command === "computers") {
+    switch (parsedArgs.computersCommand) {
+      case "find":
+        await handleComputersFindCommand(parsedArgs, config, log)
+        break
+      case "clear":
+        await handleComputersClear(parsedArgs, config, log)
+        break
+      default:
+        p.log.error(`Unknown computers command: ${parsedArgs.computersCommand}`)
+        break
+    }
+  } else {
+    await runMainProgram(parsedArgs)
+    // No commands were executed, run the main app
   }
 }
 

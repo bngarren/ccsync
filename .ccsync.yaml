@@ -31,10 +31,10 @@ rules:
     target: "/test/a.lua" # Where to put it on the computer
     computers: ["1"] # Computer IDs to sync to
     # flatten: false
-
-  - source: "b.lua"
-    target: "/test/a.lua"
-    computers: ["1"]
+  #
+  # - source: "b.lua"
+  #   target: "/test/a.lua"
+  #   computers: ["1"]
 
   # - source: "c.lua" # File in your sourceRoot
   #   target: "/test" # Where to put it on the computer

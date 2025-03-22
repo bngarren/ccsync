@@ -34,6 +34,10 @@ jobs:
       - name: Build
         run: bun run build
 
+      - name: Validate PR commit with commitlint
+        if: github.event_name == 'pull_request'
+        run: bunx commitlint --from ${{ github.event.pull_request.base.sha }} --to ${{ github.event.pull_request.head.sha }} --verbose
+
   test:
     strategy:
       fail-fast: false

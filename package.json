@@ -42,7 +42,7 @@
     "check": "bun run lint && bun run pretty:check",
     "dev": "bun run ./src/index.ts",
     "test": "bun test",
-    "prepare": "husky",
+    "prepare": "husky || true",
     "prepack": "bun run build",
     "build": "bun run clean && bun ./build.ts",
     "build-ex:all": "bun run build-ex:linux && bun run build-ex:macos && bun run build-ex:windows",

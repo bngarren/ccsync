@@ -49,7 +49,7 @@ export const parseArgs = async (): Promise<ProcessedArgs> => {
       },
     })
     .command({
-      command: "computers",
+      command: "computers [SUBCOMMAND]",
       describe: "- computer related commands",
       builder: (yargs) => {
         return yargs

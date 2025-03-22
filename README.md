@@ -45,7 +45,7 @@
         <li><a href="#configuration">Configuration</a></li>
       </ul>
       <ul>
-        <li><a href="#command-line-args">Command line args</a></li>
+        <li><a href="#cli-usage">CLI Usage</a></li>
       </ul>
     </li>
     <li><a href="#troubleshooting">Troubleshooting</a></li>
@@ -325,21 +325,24 @@ These shouldn't need to be modified—mostly for debugging and performance.
 > - macOS: `~/Library/Logs/ccsync`
 > - Linux/Unix: `~/.local/share/ccsync/logs`
 
-## Command line args
+## CLI Usage
 
 ```
 Usage: ccsync [COMMAND] [OPTIONS]
 
 Commands:
-  ccsync          run the program  [default]
-  ccsync init     create a config file
+  ccsync                         - run the program  [default]
+  ccsync init                    - initialize a new config (or overwrite current)
+  ccsync computers <SUBCOMMAND>  - computer related commands   
+                    find           - identify Minecraft computers in the current save directory
+                    clear [ids..]  - clear the contents of Minecraft computers
 
 Options:
-  -v, --verbose    run with verbose output (for debugging)  [boolean] [default: false]
+  -v, --verbose    run with verbose output (for debugging)  [boolean]
   -f, --logToFile  log to file (overrides config)  [boolean]
   -l, --logLevel   log level (overrides config)  [string] [choices: "silent", "trace", "debug", "info", "warn", "error", "fatal"]
-  -h, --help       Show help  [boolean]
   -V, --version    Show version number  [boolean]
+  -h, --help       Show help  [boolean]
 ```
 
 

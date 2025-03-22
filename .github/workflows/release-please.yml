@@ -17,6 +17,8 @@ jobs:
   release-please:
     needs: ci
     runs-on: ubuntu-latest
+    env:
+      HUSKY: 0 # don't run husky hooks in CI
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

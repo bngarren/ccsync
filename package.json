@@ -42,7 +42,8 @@
     "check": "bun run lint && bun run pretty:check",
     "dev": "bun run ./src/index.ts",
     "test": "bun test",
-    "prepare": "npm run build",
+    "prepare": "husky || true",
+    "prepack": "bun run build",
     "build": "bun run clean && bun ./build.ts",
     "build-ex:all": "bun run build-ex:linux && bun run build-ex:macos && bun run build-ex:windows",
     "build-ex:linux": "bun build src/index.ts --outfile ./dist/ccsync-linux --target bun-linux-x64-baseline --minify --compile",
@@ -51,13 +52,21 @@
     "build-ex:macos": "bun run build-ex:macos-x64 && bun run build-ex:macos-arm64",
     "build-ex:windows": "bun build src/index.ts --outfile ./dist/ccsync-windows.exe --target bun-windows-x64-baseline --minify --compile"
   },
+  "lint-staged": {
+    "*.{js,ts}": "bun run lint",
+    "*": "bun run pretty"
+  },
   "devDependencies": {
+    "@commitlint/cli": "^19.8.0",
+    "@commitlint/config-conventional": "^19.8.0",
     "@types/bun": "^1.2.2",
     "@types/node": "^22.13.4",
     "@types/yargs": "^17.0.33",
     "bun-plugin-pino": "^1.4.0",
     "eslint": "^9.20.1",
     "eslint-config-prettier": "^10.0.1",
+    "husky": "^9.1.7",
+    "lint-staged": "^15.5.0",
     "neostandard": "^0.12.1",
     "prettier": "^3.5.1",
     "typescript-eslint": "^8.24.1"

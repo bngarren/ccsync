@@ -967,37 +967,34 @@ export async function copyFilesToComputer(
   }
 }
 
-const clearComputer = async (path: string) => {
+const clearComputer = async (computerDirPath: string) => {
   // ensure path is system-specific
-  const computerSystemPath = toSystemPath(path)
+  const computerSystemPath = toSystemPath(computerDirPath)
 
-  await fs.rm(computerSystemPath, {
-    maxRetries: 3,
-    retryDelay: 50,
-    recursive: true,
-  })
+  const entries = await fs.readdir(computerSystemPath, { withFileTypes: true })
+
+  await Promise.all(
+    entries.map(async (entry) => {
+      const fullPath = path.join(computerSystemPath, entry.name)
+
+      if (entry.isDirectory()) {
+        // Recursively remove contents, then remove the directory itself
+        await fs.rm(fullPath, { recursive: true, force: true })
+      } else {
+        await fs.unlink(fullPath)
+      }
+    })
+  )
 }
 
-export async function clearComputers(config: Config, ids?: number[]) {
-  // find computers
-  let computers: Computer[] = []
+export async function clearComputers(computers: Computer[]) {
   try {
-    computers = await findMinecraftComputers(config.minecraftSavePath)
-  } catch (error: unknown) {
-    throw AppError.fatal(`Failed to clear`, "clearComputers", error)
-  }
-
-  let computersToWipe = [...computers]
-  if (ids) {
-    computersToWipe = computers.filter((c) => ids.includes(Number(c.id)))
-  }
-  try {
-    const ops = computersToWipe.map((c) => clearComputer(c.path))
+    const ops = computers.map((c) => clearComputer(c.path))
     await Promise.all(ops)
-    return computersToWipe.map((c) => Number(c.id))
+    return computers.map((c) => Number(c.id))
   } catch (error: unknown) {
     throw AppError.error(
-      `Failed to clear ${pluralize("computer")(ids?.length || 1)}`,
+      `Failed to clear ${pluralize("computer")(computers.length || 1)}`,
       "clearComputers",
       error
     )

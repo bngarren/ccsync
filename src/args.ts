@@ -118,7 +118,7 @@ export const parseArgs = async (): Promise<ProcessedArgs> => {
 
   const parsed = (await parser.parse()) as YargsArguments
 
-  console.debug({ parsed })
+  // console.debug({ parsed })
 
   // Extract the primary command and subcommands
   const parsedArgs: ProcessedArgs = {

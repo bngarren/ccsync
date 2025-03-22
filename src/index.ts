@@ -21,7 +21,7 @@ import { UI } from "./ui"
 import * as os from "node:os"
 import figures from "figures"
 import chalk from "chalk"
-import { getPrettyParsedArgs, parseArgs, type ParsedArgs } from "./args"
+import { getPrettyParsedArgs, parseArgs, type ProcessedArgs } from "./args"
 import { README_ADDRESS } from "./constants"
 import {
   handleComputersClear,
@@ -29,7 +29,7 @@ import {
   handleInitCommand,
 } from "./commandHandlers"
 
-export const initConfig = async (parsedArgs: ParsedArgs) => {
+export const initConfig = async (parsedArgs: ProcessedArgs) => {
   // Find the config file, otherwise offer to create a default
   try {
     const config = await findConfig()
@@ -204,7 +204,7 @@ async function handleFatalError(
   process.exit(1)
 }
 
-async function init(parsedArgs: ParsedArgs) {
+async function init(parsedArgs: ProcessedArgs) {
   // Get the config file
   const { config, errors } = await initConfig(parsedArgs)
 
@@ -245,7 +245,7 @@ async function init(parsedArgs: ParsedArgs) {
   return { config, log }
 }
 
-async function runMainProgram(parsedArgs: ParsedArgs) {
+async function runMainProgram(parsedArgs: ProcessedArgs) {
   try {
     const { config, log: _log } = await init(parsedArgs)
 
@@ -377,7 +377,6 @@ async function main() {
   // Parse CLI arguments
   const parsedArgs = await parseArgs()
 
-  console.debug(parsedArgs)
   const { config, log } = await init(parsedArgs)
 
   // Handle commands based on the parsed arguments

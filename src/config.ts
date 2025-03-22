@@ -315,11 +315,17 @@ export const withDefaultConfig = (config: DeepPartial<Config>): Config => {
   }) as Config
 }
 
+/**
+ * Locates the config file on the filesystem.
+ *
+ * If it cannot be found, or otherwise accessed, will reject with an Error object. Thus, calling code
+ * should use try/catch to determine if config was found.
+ */
 export const findConfig = async (
   startDir: string = process.cwd()
 ): Promise<{ path: string; relativePath: string }> => {
   const configPath = path.join(startDir, DEFAULT_CONFIG_FILENAME)
-  await fs.access(configPath)
+  await fs.access(configPath) // If this resolves, file exists. Otherwise rejects with Error
   return {
     path: configPath,
     relativePath: path.relative(startDir, configPath),
@@ -499,13 +505,28 @@ export async function loadConfig(
 }
 
 export const createDefaultConfig = async (projectDir: string) => {
-  const configPath = path.join(projectDir, DEFAULT_CONFIG_FILENAME)
-  const configContent = `# CC:Sync Configuration File
-# This file configures how CC:Sync copies files to your ComputerCraft computers
+  // Detect platform for better defaults
+  const isWindows = process.platform === "win32"
+  const isMac = process.platform === "darwin"
 
-# IMPORTANT: Recommend using forward slashes (/) in paths, even on Windows.
-# Example: "C:/Users/name/path"
-# Otherwise, backslashes need to be properly escaped: "C:\\Users\\name\\path"
+  // Create platform-specific default paths
+  let defaultSavePath = DEFAULT_CONFIG.minecraftSavePath
+
+  if (isWindows) {
+    defaultSavePath = "~/AppData/Roaming/.minecraft/saves/world"
+  } else if (isMac) {
+    defaultSavePath = "~/Library/Application Support/minecraft/saves/world"
+  } else {
+    defaultSavePath = "~/.minecraft/saves/world"
+  }
+
+  const configPath = path.join(projectDir, DEFAULT_CONFIG_FILENAME)
+  const configContent = `# CC: Sync Configuration File
+# This file configures how CC: Sync copies files to your ComputerCraft computers
+
+# ===================================
+# GENERAL CONFIGURATION
+# ===================================
 
 # Config version (do not modify)
 version: "${CONFIG_VERSION}"
@@ -513,45 +534,62 @@ version: "${CONFIG_VERSION}"
 # Where your source files are located (relative to this config file)
 sourceRoot: "${DEFAULT_CONFIG.sourceRoot}"
 
+# ===================================
+# MINECRAFT WORLD LOCATION
+# ===================================
+
 # Absolute path to your Minecraft world save
 # Can use ~ for your home directory
-# Example Windows: "~/AppData/Roaming/.minecraft/saves/my_world"
-# Example Unix: "~/.minecraft/saves/my_world"
-minecraftSavePath: "${DEFAULT_CONFIG.minecraftSavePath}"
+minecraftSavePath: "${defaultSavePath}"
 
-# Define groups of computers for easier file targeting
+# ===================================
+# COMPUTER GROUPS
+# ===================================
+
+# Define groups of computers for easier targeting
 computerGroups: {}
-  # Example group:
-  # monitors:
-  #   name: "Monitor Network"
-  #   computers: ["1", "2", "3"]
+    # monitors:
+    #   name: "Monitors" 
+    #   computers: ["3", "4"]
 
-# Rules that specify which files should sync to which computers
-rules: []
-  # Examples:
-  # Sync to a specific computer:
-  # - source: "startup.lua"    # File in your sourceRoot
-  #   target: "startup.lua"    # Where to put it on the computer
-  #   computers: ["1"]         # Computer IDs to sync to
+# ===================================
+# SYNC RULES
+# ===================================
+
+# Rules specify which files should sync to which computers
+rules: 
+   - source: "test.lua"    # Single file in sourceRoot
+     target: "test.lua"    # Target path on the computer
+     computers: ["1"]      # Computer IDs to sync to
+  
+  # Using groups:
+  # - source: "lib/*.lua"      # Glob pattern for multiple files
+  #   target: "lib/"           # Target directory (with trailing slash)
+  #   computers: "monitors"    # Reference a group defined above
   #
-  # Sync to a group of computers:
-  # - source: "lib/*.lua"      # Glob patterns supported
-  #   target: "lib/"          # Folders will be created
-  #   computers: "monitors"    # Reference a computer group
+  # Preserve directory structure:
+  # - source: "**/*.lua"       # Recursive glob for all Lua files
+  #   target: "/apis/"         # Target directory
+  #   flatten: false           # Preserve source folder structure
+  #   computers: ["1", "2"]    # Multiple computers
 
-# Advanced configuration options
+# ===================================
+# ADVANCED OPTIONS
+# ===================================
+
 advanced:
-  # Enable logging to file
+  # Log to file (helpful for debugging)
   logToFile: false
   
   # Log level: silent, trace, debug, info, warn, error, fatal
   logLevel: "debug"
   
-  # How long to cache validation results (milliseconds)
-  # Lower = more accurate but more CPU intensive, Higher = faster but may miss changes
+  # Cache validation results (milliseconds)
+  # Lower = more accurate but slower, Higher = faster but may miss changes
   cacheTTL: 5000
-
-  # To use polling during match mode rather than native OS events (default). This may be necessary if watch mode is missing file changes. Polling may result in higher CPU usage (with a large number of watched files).
+  
+  # Use polling instead of file system events
+  # Enable if watch mode misses changes (higher CPU usage)
   usePolling: false
 `
 

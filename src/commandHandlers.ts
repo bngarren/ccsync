@@ -33,14 +33,16 @@ export async function handleInitCommand(
       const msg = `Config creation cancelled.`
       p.outro(msg)
       log.info(msg)
+      return
     }
   } catch (err) {
-    await createDefaultConfig(process.cwd())
-    const msg = `Created default config at ${process.cwd()}/.ccsync.yaml`
-    p.log.success(msg)
-    p.log.info("Edit the configuration file and run the program with `ccsync`.")
-    log.info(msg)
+    log.warn(`Overriting .ccsync.yaml with default config...`)
   }
+  await createDefaultConfig(process.cwd())
+  const msg = `Created default config at ${process.cwd()}/.ccsync.yaml`
+  p.log.success(`${theme.success("Success.")} ${msg}`)
+  p.outro("Edit the configuration file and run the program with `ccsync`.")
+  log.info(msg)
 }
 
 /**

@@ -49,7 +49,8 @@ export async function handleInitCommand(
 export async function handleComputersFindCommand(
   processedArgs: ProcessedArgs,
   config: Config,
-  _log: Logger
+  _log: Logger,
+  animationTimeout = 700
 ): Promise<void> {
   const log = _log.child({ component: "CLI" })
   log.info("running 'computers find' command")
@@ -65,7 +66,7 @@ export async function handleComputersFindCommand(
   const s = p.spinner()
 
   s.start("Finding computers...")
-  await setTimeout(700)
+  await setTimeout(animationTimeout)
   s.stop(`${minecraftSaveText} ${minecraftSaveDirText}${minecraftSaveNameText}`)
   if (computerIds.length === 0) {
     p.outro(

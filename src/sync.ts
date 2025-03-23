@@ -145,6 +145,14 @@ export class SyncManager {
     return this.state === SyncManagerState.RUNNING
   }
 
+  public isStarting(): boolean {
+    return this.state === SyncManagerState.STARTING
+  }
+
+  public isStopped(): boolean {
+    return this.state === SyncManagerState.STOPPED
+  }
+
   public getState(): SyncManagerState {
     return this.state
   }
@@ -927,7 +935,6 @@ export class SyncManager {
       this.state === SyncManagerState.STOPPING
     )
       return
-
     this.setState(SyncManagerState.STOPPING)
 
     try {
@@ -1289,18 +1296,24 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
   async run(): Promise<void> {
     try {
       this.setupKeyHandler()
-      await this.setupWatcher()
+      const { success, error } = await this.setupWatcher()
 
-      this.emit(SyncEvent.STARTED) // Signal ready to run
+      if (!success) {
+        console.warn("Can't start WATCH mode with 0 matched files")
+        await this.syncManager.stop()
+        this.emit(SyncEvent.SYNC_ERROR, error)
+      } else {
+        this.emit(SyncEvent.STARTED) // Signal ready to run
 
-      this.ui?.clear()
+        this.ui?.clear()
 
-      // Peform initial sync
-      await this.performSyncCycle()
+        // Peform initial sync
+        await this.performSyncCycle()
 
-      if (this.syncManager.getState() !== SyncManagerState.RUNNING) return
+        if (this.syncManager.getState() !== SyncManagerState.RUNNING) return
 
-      this.ui?.setReady()
+        this.ui?.setReady()
+      }
 
       // Keep running until state changes
       while (this.syncManager.getState() === SyncManagerState.RUNNING) {
@@ -1315,7 +1328,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
         severity: ErrorSeverity.FATAL,
         source: "WatchModeController.start",
       })
-      this.emit(SyncEvent.SYNC_ERROR)
+      this.emit(SyncEvent.SYNC_ERROR, fatalAppError)
       throw fatalAppError
     }
   }
@@ -1752,7 +1765,10 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
    * @returns Promise that resolves when the watcher is ready
    * @throws AppError if watcher setup fails
    */
-  private async setupWatcher(): Promise<void> {
+  private async setupWatcher(): Promise<{
+    success: boolean
+    error?: AppError
+  }> {
     try {
       // Get actual file paths to watch
       await this.resolveFilesForWatcher()
@@ -1803,12 +1819,23 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       return await new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error("Watcher failed to become ready after timeout"))
-        }, 10000) // 10 second timeout
+        }, 2000) // 2 second timeout
 
+        if (this.watchedFiles.size === 0) {
+          clearTimeout(timeout)
+          this.log.warn("watcher started with empty watched files")
+          resolve({
+            success: false,
+            error: AppError.error(
+              "Watch mode could not be started with 0 matched files.",
+              "setupWatcher"
+            ),
+          })
+        }
         this.watcher?.on("ready", () => {
           clearTimeout(timeout)
           this.log.info("watcher is ready")
-          resolve()
+          resolve({ success: true })
         })
 
         this.watcher?.on("error", (err) => {

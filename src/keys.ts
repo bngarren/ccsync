@@ -69,15 +69,13 @@ export class KeyHandler {
 
   stop() {
     if (!this.isActive) return
+    this.isActive = false
 
+    if (this.keepAliveInterval) {
+      clearInterval(this.keepAliveInterval)
+      this.keepAliveInterval = null
+    }
     try {
-      this.isActive = false
-
-      if (this.keepAliveInterval) {
-        clearInterval(this.keepAliveInterval)
-        this.keepAliveInterval = null
-      }
-
       if (this.currentHandler) {
         process.stdin.removeListener("data", this.currentHandler)
         this.currentHandler = null

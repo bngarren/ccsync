@@ -44,6 +44,7 @@ import type pino from "pino"
 import NodeCache from "node-cache"
 import crypto from "crypto"
 import { clearGlobCache } from "./cache"
+import { PROCESS_CHANGES_DELAY } from "./constants"
 
 export enum SyncManagerState {
   IDLE,
@@ -132,6 +133,7 @@ export class SyncManager {
   ) {
     // Initialize the sync plan cache with settings from config
     this.syncPlanCache = new NodeCache({
+      // PERF: Not sure what best TTL is here...
       stdTTL: Math.floor(this.config.advanced.cacheTTL / 1000), // Convert to seconds
       checkperiod: 120, // Check for expired keys every 2 minutes
       useClones: false, // Don't clone values - we want to share references
@@ -398,7 +400,7 @@ export class SyncManager {
                 {
                   source: "checkDuplicateTargets",
                   suggestion:
-                    "Review your sync rules to ensure files don't overwrite each other inadvertently",
+                    "Review your sync rules to avoid conflicts. Only the last synced file will be kept when multiple files target the same destination.",
                 }
               )
             )
@@ -1248,7 +1250,6 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
   // Debouncing/throttling
   private onChangeSyncInProgress = false
   private onChangeSyncDebounceTimer: ReturnType<typeof setTimeout> | null = null
-  private readonly debounceDelay = 200 // ms to wait for additional changes before syncing
 
   constructor(
     syncManager: SyncManager,
@@ -1261,7 +1262,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
   getInternalState() {
     return {
       isInitialSync: this.isInitialSync,
-      debounceDelay: this.debounceDelay,
+      debounceDelay: PROCESS_CHANGES_DELAY,
     }
   }
 
@@ -1600,20 +1601,19 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       return
     }
 
+    this.onChangeSyncInProgress = true
+    // Transfer pending to active - atomic operation
+    this.activeChanges = new Set(this.pendingChanges)
+    this.pendingChanges.clear()
+
+    this.log.debug(
+      {
+        fileCount: this.activeChanges.size,
+      },
+      "Processing changes"
+    )
+
     try {
-      this.onChangeSyncInProgress = true
-
-      // Transfer pending to active - atomic operation
-      this.activeChanges = new Set(this.pendingChanges)
-      this.pendingChanges.clear()
-
-      this.log.debug(
-        {
-          fileCount: this.activeChanges.size,
-        },
-        "Processing changes"
-      )
-
       // Execute sync with current set of changes
       await this.performSyncCycle()
     } catch (error) {
@@ -1654,7 +1654,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
               )
             )
           })
-        }, this.debounceDelay)
+        }, PROCESS_CHANGES_DELAY)
       }
     }
   }
@@ -1698,7 +1698,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
         this.processPendingChanges().catch((error: unknown) => {
           this.log.error(error, "Unexpected error in processPendingChanges")
         })
-      }, this.debounceDelay)
+      }, PROCESS_CHANGES_DELAY)
     }
   }
 

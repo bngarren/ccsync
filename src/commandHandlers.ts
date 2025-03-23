@@ -72,7 +72,7 @@ export async function handleComputersFindCommand(
   s.stop(`${minecraftSaveText} ${minecraftSaveDirText}${minecraftSaveNameText}`)
   if (computerIds.length === 0) {
     p.outro(
-      `${theme.warning("Warning:")} Did not find any computers in this world!`
+      `${theme.warning("Warning:")} No computers found in this world! Make sure CC: Tweaked mod is installed and you've created at least one computer in-game.`
     )
     log.warn("Did not find any computers in the world")
   } else {

@@ -877,7 +877,7 @@ export async function copyFilesToComputer(
     ) {
       skippedFiles.push(rule.sourceAbsolutePath)
       errors.push(
-        `Security violation: Target path '${toSystemPath(rule.target.path)}' attempts to write outside the computer directory`
+        `For security reasons, the target path '${toSystemPath(rule.target.path)}' cannot write files outside the computer directory. Please update your rule to target a valid location within the computer.`
       )
       continue
     }

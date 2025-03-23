@@ -299,11 +299,15 @@ async function runMainProgram(parsedArgs: ProcessedArgs) {
     const mode: SyncMode = (await p.select({
       message: "Select sync mode:",
       options: [
-        { value: "manual", label: "Manual mode", hint: "Sync on command" },
+        {
+          value: "manual",
+          label: "Manual mode",
+          hint: "Sync files each time you press SPACE",
+        },
         {
           value: "watch",
           label: "Watch mode",
-          hint: "Auto-sync on file changes",
+          hint: "Automatically sync when files are changed",
         },
       ],
     })) as SyncMode

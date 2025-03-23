@@ -9,7 +9,7 @@
 version: "2.1"
 
 # Where your source files are located (relative to this config file)
-sourceRoot: "./examples/test1"
+sourceRoot: "."
 
 # Path to your Minecraft world save
 # Use ~ for your home directory
@@ -27,8 +27,8 @@ computerGroups:
 rules:
   # Examples:
   # Sync to a specific computer:
-  - source: "a.lua" # File in your sourceRoot
-    target: "/test/a.lua" # Where to put it on the computer
+  - source: "*.lua" # File in your sourceRoot
+    target: "/test" # Where to put it on the computer
     computers: ["1"] # Computer IDs to sync to
     # flatten: false
   #

@@ -1,5 +1,6 @@
 import { glob, type Path } from "glob"
 import NodeCache from "node-cache"
+import { AppError } from "./errors"
 
 // ---- Path Cache ----
 // Create a cache for processed paths
@@ -39,7 +40,8 @@ export function getPathCacheStats() {
 }
 
 // ---- Glob Cache ----
-
+// TODO: compare to path-scurry (https://github.com/isaacs/path-scurry), in terms of not overloading their
+// JS heap allocation with large caches
 /**
  * Cache for glob pattern matching results
  * Maps glob patterns to their matched file paths
@@ -72,13 +74,21 @@ export async function cachedGlob(
     return cached
   }
 
-  // If not cached, perform the glob operation
-  const results = await glob(pattern, options)
+  try {
+    // If not cached, perform the glob operation
+    const results = await glob(pattern, options)
 
-  // Cache the results with the specified TTL
-  globPatternCache.set(cacheKey, results)
+    // Cache the results with the specified TTL
+    globPatternCache.set(cacheKey, results)
 
-  return results
+    return results
+  } catch (error: unknown) {
+    throw AppError.error(
+      `Error performing glob on: '${pattern}'`,
+      "cachedGlob",
+      error
+    )
+  }
 }
 
 /**

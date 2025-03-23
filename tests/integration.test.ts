@@ -1578,7 +1578,7 @@ describe("Integration: UI", () => {
       // Verify summary contains correct values
       expect(normalizedOutput).toMatch(/Attempted to sync 0 total files/)
 
-      expect(normalizedOutput).toMatch(/No files synced/)
+      expect(normalizedOutput).toMatch(/No files were synced/)
       expect(normalizedOutput).toMatch(/No matching files found for/)
     } finally {
       await syncManager.stop()

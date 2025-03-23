@@ -30,7 +30,12 @@ import { KeyHandler } from "./keys"
 import { setTimeout as setTimeoutPromise } from "node:timers/promises"
 import { setTimeout } from "node:timers"
 import { glob } from "glob"
-import { AppError, ErrorSeverity, getErrorMessage } from "./errors"
+import {
+  AppError,
+  ErrorSeverity,
+  getErrorMessage,
+  type IAppError,
+} from "./errors"
 import { UI, UIMessageType } from "./ui"
 import {
   createEmptySyncPlan,
@@ -108,6 +113,8 @@ export class SyncManager {
 
   private syncPlanCache: NodeCache
 
+  private error: IAppError | null = null
+
   // STATE
   private state: SyncManagerState = SyncManagerState.IDLE
   private setState(newState: SyncManagerState) {
@@ -125,6 +132,15 @@ export class SyncManager {
         )
       })
     }
+  }
+
+  private setErrorState(error?: unknown) {
+    if (error instanceof AppError) {
+      this.error = error
+    } else {
+      this.error = AppError.from(error, { severity: ErrorSeverity.FATAL })
+    }
+    this.setState(SyncManagerState.ERROR)
   }
 
   constructor(
@@ -151,6 +167,10 @@ export class SyncManager {
 
   public isStopped(): boolean {
     return this.state === SyncManagerState.STOPPED
+  }
+
+  public getError(): IAppError | null {
+    return this.error
   }
 
   public getState(): SyncManagerState {
@@ -801,7 +821,7 @@ export class SyncManager {
         // Handle based on severity
         if (error.severity === ErrorSeverity.FATAL) {
           this.log.fatal(error, "MANUAL mode")
-          this.setState(SyncManagerState.ERROR)
+          this.setErrorState(error)
         } else {
           this.log.error(error, "MANUAL mode")
           // continue operations
@@ -813,7 +833,7 @@ export class SyncManager {
 
         manualController.run().catch((error: unknown) => {
           // Fatal exception from run
-          this.setState(SyncManagerState.ERROR)
+          this.setErrorState(error)
 
           this.stop().catch((err: unknown) => {
             throw AppError.from(err, {
@@ -836,11 +856,12 @@ export class SyncManager {
         start: manualControllerStart.bind(this),
       }
     } catch (error) {
-      this.setState(SyncManagerState.ERROR)
-      throw AppError.from(error, {
+      const appError = AppError.from(error, {
         severity: ErrorSeverity.FATAL,
         source: "SyncManager",
       })
+      this.setErrorState(appError)
+      throw appError
     }
   }
 
@@ -883,7 +904,7 @@ export class SyncManager {
         // Handle based on severity
         if (error.severity === ErrorSeverity.FATAL) {
           this.log.fatal(error, "WATCH mode")
-          this.setState(SyncManagerState.ERROR)
+          this.setErrorState(error)
         } else {
           this.log.error(error, "WATCH mode")
           // continue operations
@@ -895,7 +916,7 @@ export class SyncManager {
 
         watchController.run().catch((error: unknown) => {
           // Fatal exception from run
-          this.setState(SyncManagerState.ERROR)
+          this.setErrorState(error)
 
           this.stop().catch((err: unknown) => {
             throw AppError.from(err, {
@@ -918,11 +939,12 @@ export class SyncManager {
         start: watchControllerStart.bind(this),
       }
     } catch (error) {
-      this.setState(SyncManagerState.ERROR)
-      throw AppError.from(error, {
+      const appError = AppError.from(error, {
         severity: ErrorSeverity.FATAL,
         source: "SyncManager",
       })
+      this.setErrorState(appError)
+      throw appError
     }
   }
 
@@ -946,11 +968,12 @@ export class SyncManager {
       }
       this.setState(SyncManagerState.STOPPED)
     } catch (error) {
-      this.setState(SyncManagerState.ERROR)
-      throw AppError.from(error, {
+      const appError = AppError.from(error, {
         severity: ErrorSeverity.FATAL,
         source: "SyncManager.stop",
       })
+      this.setErrorState(appError)
+      throw appError
     }
   }
 }
@@ -1299,8 +1322,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       const { success, error } = await this.setupWatcher()
 
       if (!success) {
-        console.warn("Can't start WATCH mode with 0 matched files")
-        await this.syncManager.stop()
+        // Failure to setup the watcher should always be a FATAL error
         this.emit(SyncEvent.SYNC_ERROR, error)
       } else {
         this.emit(SyncEvent.STARTED) // Signal ready to run
@@ -1826,9 +1848,12 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
           this.log.warn("watcher started with empty watched files")
           resolve({
             success: false,
-            error: AppError.error(
+            error: new AppError(
               "Watch mode could not be started with 0 matched files.",
-              "setupWatcher"
+              ErrorSeverity.FATAL,
+              "setupWatcher",
+              undefined,
+              "Watch mode cannot be started with 0 matched files."
             ),
           })
         }

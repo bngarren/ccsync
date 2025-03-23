@@ -348,6 +348,12 @@ async function runMainProgram(parsedArgs: ProcessedArgs) {
           // Keep going until we SyncManager has stopped (this allows it to close/exit gracefully)
           if (syncManager.isStopped()) {
             clearInterval(checkInterval)
+
+            const syncManagerError = syncManager.getError()
+            // If SyncManager has an error, try to report it to the user
+            if (syncManagerError?.userMessage) {
+              p.log.error(syncManagerError.userMessage)
+            }
             resolve()
           }
         }, 500)

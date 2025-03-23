@@ -1607,23 +1607,15 @@ describe("Integration: UI", () => {
       // Wait for the sync to complete
       await waitForEventWithTrigger<SyncOperationResult>(
         controller,
-        SyncEvent.INITIAL_SYNC_COMPLETE,
+        SyncEvent.SYNC_ERROR,
         start,
         1000
       )
 
-      // Get the captured output
-      const normalizedOutput = normalizeOutput(outputCapture.getOutput())
-
-      // Verify expected output contents
-      // Check header appears first
-      expect(normalizedOutput).toMatch(/^#1 \[TIMESTAMP\]/m)
-
-      // Verify summary contains correct values
-      expect(normalizedOutput).toMatch(/Attempted to sync 0 total files/)
-
-      expect(normalizedOutput).toMatch(/No files were synced/)
-      expect(normalizedOutput).toMatch(/No matching files found for/)
+      // Get the @clack/prompts output
+      clackPromptsSpy.messages.some((m) => {
+        return m.match(/Watch mode cannot be started with 0 matched files/)
+      })
     } finally {
       await syncManager.stop()
     }

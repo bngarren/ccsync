@@ -52,6 +52,7 @@ export interface IAppError {
    * Original error (for logging/debugging)
    */
   originalError?: unknown
+  userMessage?: string
 }
 
 /**
@@ -61,6 +62,7 @@ export class AppError extends Error implements IAppError {
   severity: ErrorSeverity
   source?: string
   originalError?: unknown
+  userMessage?: string
 
   /**
    * Create a new application error.
@@ -68,18 +70,21 @@ export class AppError extends Error implements IAppError {
    * @param severity Error severity level
    * @param source Component that generated the error
    * @param originalError Original error (for logging/debugging)
+   * @param userMessage User friendly error message that may be displayed by UI
    */
   constructor(
     message: string,
     severity: ErrorSeverity = ErrorSeverity.ERROR,
     source?: string,
-    originalError?: unknown
+    originalError?: unknown,
+    userMessage?: string
   ) {
     super(message)
     this.name = "AppError"
     this.severity = severity
     this.source = source
     this.originalError = originalError
+    this.userMessage = userMessage
 
     // This is needed for instanceof to work correctly with custom error classes
     Object.setPrototypeOf(this, AppError.prototype)
@@ -148,6 +153,7 @@ export class AppError extends Error implements IAppError {
    * @param options.defaultMessage Message to use if error is not an Error object
    * @param options.severity Default severity level
    * @param options.source Component that caught the error
+   * @param options.userMessage User friendly message that can be displayed to the UI
    */
   static from(
     error: unknown,
@@ -155,6 +161,7 @@ export class AppError extends Error implements IAppError {
       defaultMessage?: string
       severity?: ErrorSeverity
       source?: string
+      userMessage?: string
     }
   ): AppError {
     // If already an AppError, return it directly
@@ -167,10 +174,11 @@ export class AppError extends Error implements IAppError {
       defaultMessage = "An unknown error occurred",
       severity = ErrorSeverity.ERROR,
       source,
+      userMessage,
     } = options || {}
 
     // Create new AppError with appropriate message
     const message = error instanceof Error ? error.message : defaultMessage
-    return new AppError(message, severity, source, error)
+    return new AppError(message, severity, source, error, userMessage)
   }
 }

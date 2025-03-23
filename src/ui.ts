@@ -426,7 +426,9 @@ export class UI {
 
   private renderComputerResults(): string {
     if (this.state.computerResults.length === 0) {
-      return theme.dim("  No files synced.")
+      return theme.dim(
+        "  No files were synced. Check your sync rules to ensure they match existing files."
+      )
     }
 
     // Sort computers numerically if possible

@@ -1533,7 +1533,7 @@ describe("Integration: UI", () => {
     }
   })
 
-  test("displays warning when no matching files found", async () => {
+  test("displays warning when no matching files found in manual mode", async () => {
     // Create a config with a rule that won't match any files
     const configPath = path.join(tempDir, ".ccsync.yaml")
     const configObject = withDefaultConfig({
@@ -1580,6 +1580,42 @@ describe("Integration: UI", () => {
 
       expect(normalizedOutput).toMatch(/No files were synced/)
       expect(normalizedOutput).toMatch(/No matching files found for/)
+    } finally {
+      await syncManager.stop()
+    }
+  })
+
+  test("displays warning when no matching files found in watch mode", async () => {
+    // Create a config with a rule that won't match any files
+    const configObject = withDefaultConfig({
+      sourceRoot: sourceDir,
+      minecraftSavePath: savePath,
+      rules: [
+        { source: "nonexistent/*.lua", target: "/test/", computers: ["1"] },
+      ],
+    })
+
+    const syncManager = new SyncManager(
+      configObject,
+      new UI({ renderDynamicElements: false })
+    )
+
+    try {
+      // Start watch mode and wait for sync
+      const { controller, start } = syncManager.initWatchMode()
+
+      // Wait for the sync to complete
+      await waitForEventWithTrigger<SyncOperationResult>(
+        controller,
+        SyncEvent.SYNC_ERROR,
+        start,
+        1000
+      )
+
+      // Get the @clack/prompts output
+      clackPromptsSpy.messages.some((m) => {
+        return m.match(/Watch mode cannot be started with 0 matched files/)
+      })
     } finally {
       await syncManager.stop()
     }

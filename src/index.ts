@@ -345,13 +345,19 @@ async function runMainProgram(parsedArgs: ProcessedArgs) {
       // Keep the process alive until explicitly terminated
       await new Promise<void>((resolve) => {
         const checkInterval = setInterval(() => {
-          if (!syncManager.isRunning()) {
+          // Keep going until we SyncManager has stopped (this allows it to close/exit gracefully)
+          if (syncManager.isStopped()) {
             clearInterval(checkInterval)
+
+            const syncManagerError = syncManager.getError()
+            // If SyncManager has an error, try to report it to the user
+            if (syncManagerError?.userMessage) {
+              p.log.error(syncManagerError.userMessage)
+            }
             resolve()
           }
         }, 500)
       })
-
       gracefulExit()
     } catch (error) {
       // Handle errors that bubble up from SyncManager

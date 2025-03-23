@@ -632,7 +632,7 @@ export async function resolveSyncRules(
       // Filter for 'selectedFiles', i.e. changed files from watch mode
       let filesToResolve
 
-      // TODO We should mandate whether the passed 'selectedFiles' are absolute or relative (to sourceRoot). Though we are accounting for either here, this feels messy.
+      // TODO: We should mandate whether the passed 'selectedFiles' are absolute or relative (to sourceRoot). Though we are accounting for either here, this feels messy.
       if (selectedFiles) {
         filesToResolve = matchedSourceFiles.filter((file) => {
           // Get the absolute path of the file
@@ -681,10 +681,10 @@ export async function resolveSyncRules(
         continue
       }
 
-      const missingIds = computerIds.filter(
+      const missingComputerIds = computerIds.filter(
         (id) => !computers.some((c) => c.id === id)
       )
-      resolvedResult.missingComputerIds.push(...missingIds)
+      resolvedResult.missingComputerIds.push(...missingComputerIds)
 
       // Create resolved file entries
       for (const sourcePath of filesToResolve) {
@@ -748,6 +748,10 @@ export async function resolveSyncRules(
   // Deduplicate target computers
   resolvedResult.availableComputers = [
     ...new Set(resolvedResult.availableComputers),
+  ]
+  // Deduplicate missing computer IDs
+  resolvedResult.missingComputerIds = [
+    ...new Set(resolvedResult.missingComputerIds),
   ]
 
   return resolvedResult

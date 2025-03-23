@@ -758,7 +758,7 @@ describe("Integration: SyncManager", () => {
 
   test("missing computers results in a SyncStatus.WARNING status", async () => {
     const configPath = path.join(tempDir, ".ccsync.yaml")
-    const configObject = withDefaultConfig({
+    const configObject: config.Config = withDefaultConfig({
       sourceRoot: sourceDir,
       minecraftSavePath: savePath,
       rules: [
@@ -836,6 +836,49 @@ describe("Integration: SyncManager", () => {
     } finally {
       await syncManager.stop()
     }
+  })
+
+  test("deduplicates missing computers in the sync result", async () => {
+    const configObject: config.Config = withDefaultConfig({
+      sourceRoot: sourceDir,
+      minecraftSavePath: savePath,
+      rules: [
+        {
+          source: "program.lua",
+          target: "/program.lua",
+          computers: ["1"], // computer is present
+        },
+        {
+          source: "program.lua",
+          target: "/program.lua",
+          computers: ["2"], // adds a 2 to missing computer IDs
+        },
+        {
+          source: "program.lua",
+          target: "/program.lua",
+          computers: ["2"], // same missing computer
+        },
+      ],
+    })
+
+    await createTestComputer(computersDir, "1", { createStartup: false })
+
+    const syncManager = new SyncManager(
+      configObject,
+      new UI({ renderDynamicElements: false })
+    )
+
+    // Start manual mode and wait for first sync
+    const { controller, start } = syncManager.initManualMode()
+
+    const syncResult = await waitForEventWithTrigger<SyncOperationResult>(
+      controller,
+      SyncEvent.SYNC_COMPLETE,
+      start
+    )
+    // We should only have 1: the two rules that targeted computer 2 should have only
+    // resulted in 1 total missing computer
+    expect(syncResult.summary.missingComputers).toBe(1)
   })
 
   test("batches multiple file changes with debouncing in watch mode", async () => {

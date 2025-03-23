@@ -316,26 +316,26 @@ export class SyncManager {
 
       // Step 4: Resolve sync rules
       try {
-        const ruleResolution = await resolveSyncRules(
+        const resolved = await resolveSyncRules(
           this.config,
           computers,
           changedFiles
         )
 
-        if (ruleResolution.missingComputerIds.length > 0) {
+        if (resolved.missingComputerIds.length > 0) {
           this.log.warn(
-            `missing computers: ${ruleResolution.missingComputerIds.join(" , ")}`
+            `missing computers: ${resolved.missingComputerIds.join(" , ")}`
           )
         }
 
         // Add resolved files to the plan
-        plan.resolvedFileRules = ruleResolution.resolvedFileRules
-        plan.availableComputers = ruleResolution.availableComputers
-        plan.missingComputerIds = ruleResolution.missingComputerIds
+        plan.resolvedFileRules = resolved.resolvedFileRules
+        plan.availableComputers = resolved.availableComputers
+        plan.missingComputerIds = resolved.missingComputerIds
 
         // Add any errors as issues
-        if (ruleResolution.errors.length > 0) {
-          ruleResolution.errors.forEach((error) => {
+        if (resolved.errors.length > 0) {
+          resolved.errors.forEach((error) => {
             // Determine if this is a fatal error or just a warning
             // Errors about missing files are warnings, configuration issues are errors
             const isFatal =
@@ -358,7 +358,7 @@ export class SyncManager {
         }
 
         // Add missing computers as warnings
-        const missing = ruleResolution.missingComputerIds
+        const missing = resolved.missingComputerIds
         if (missing.length > 0) {
           plan.issues.push(
             createSyncPlanIssue(

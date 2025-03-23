@@ -1,7 +1,0 @@
-sourcePath: "./examples/test1"
-minecraftSavePath: "/Users/bngarren/Documents/curseforge/minecraft/Instances/Craftoria (2)/saves/New World"
-computerGroups: {}
-files:
-  - source: "test.lua"
-    target: "/bng/test.lua"
-    computers: ["1"]

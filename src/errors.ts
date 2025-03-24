@@ -53,41 +53,40 @@ export interface IAppError {
    */
   originalError?: unknown
   userMessage?: string
+  context?: Record<string, unknown>
 }
 
 /**
  * Application error class that can be thrown and includes severity information.
  */
 export class AppError extends Error implements IAppError {
-  severity: ErrorSeverity
-  source?: string
-  originalError?: unknown
-  userMessage?: string
-
-  /**
-   * Create a new application error.
-   * @param message Human readable error message
-   * @param severity Error severity level
-   * @param source Component that generated the error
-   * @param originalError Original error (for logging/debugging)
-   * @param userMessage User friendly error message that may be displayed by UI
-   */
   constructor(
     message: string,
-    severity: ErrorSeverity = ErrorSeverity.ERROR,
-    source?: string,
-    originalError?: unknown,
-    userMessage?: string
+    public readonly severity: ErrorSeverity = ErrorSeverity.ERROR,
+    public readonly source?: string,
+    public readonly originalError?: unknown,
+    public readonly userMessage?: string,
+    public readonly context?: Record<string, unknown>
   ) {
     super(message)
     this.name = "AppError"
-    this.severity = severity
-    this.source = source
-    this.originalError = originalError
-    this.userMessage = userMessage
 
     // This is needed for instanceof to work correctly with custom error classes
     Object.setPrototypeOf(this, AppError.prototype)
+  }
+
+  /**
+   * Returns a new AppError with added context, but otherwise same as the original
+   */
+  withContext(context: Record<string, unknown>): AppError {
+    return new AppError(
+      this.message,
+      this.severity,
+      this.source,
+      this.originalError,
+      this.userMessage,
+      { ...this.context, ...context }
+    )
   }
 
   /**
@@ -121,29 +120,6 @@ export class AppError extends Error implements IAppError {
     originalError?: unknown
   ): AppError {
     return new AppError(message, ErrorSeverity.FATAL, source, originalError)
-  }
-
-  /**
-   * Create an appropriate AppError from an unknown error object.
-   * @param error The original error
-   * @param defaultMessage Message to use if error is not an Error object
-   * @param severity Default severity level
-   * @param source Component that caught the error
-   *
-   * @deprecated
-   */
-  static from_deprecated(
-    error: unknown,
-    defaultMessage = "An unknown error occurred",
-    severity = ErrorSeverity.ERROR,
-    source?: string
-  ): AppError {
-    if (error instanceof AppError) {
-      return error // Return the original AppError
-    }
-
-    const message = error instanceof Error ? error.message : defaultMessage
-    return new AppError(message, severity, source, error)
   }
 
   /**

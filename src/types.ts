@@ -1,10 +1,32 @@
 import { EventEmitter } from "node:events"
-import type { IAppError } from "./errors"
+import { AppError, type IAppError } from "./errors"
 import type { SyncPlan } from "./syncplan"
 
 export enum SyncMode {
   MANUAL = "manual",
   WATCH = "watch",
+}
+
+/**
+ * A structure result type
+ */
+export interface Result<T, E = AppError> {
+  success: boolean
+  value?: T
+  error?: E
+}
+
+/**
+ * Returns a structured {@link Result} of success = true with the given value
+ */
+export function success<T>(value: T): Result<T> {
+  return { success: true, value }
+}
+/**
+ * Returns a structured {@link Result} of success = false with the given AppError
+ */
+export function failure<T, E = AppError>(error: E): Result<T, E> {
+  return { success: false, error }
 }
 
 /**

@@ -3,12 +3,16 @@ import * as fs from "node:fs/promises"
 import path from "path"
 import type { Config } from "./config"
 import { type Path } from "glob"
-import type {
-  Computer,
-  ResolvedFileRule,
-  ValidationResult as ResolveSyncRulesResult,
+import {
+  ok,
+  partial,
+  ResultStatus,
+  type Computer,
+  type ResolvedFileRule,
+  type ValidationResult as ResolveSyncRulesResult,
+  type Result,
 } from "./types"
-import { AppError, getErrorMessage, isNodeError } from "./errors"
+import { AppError, ErrorSeverity, getErrorMessage, isNodeError } from "./errors"
 import stripAnsi from "strip-ansi"
 import { cachedGlob, invalidateGlobCache, pathCache } from "./cache"
 
@@ -844,10 +848,16 @@ export function checkDuplicateTargetPaths(
 export async function copyFilesToComputer(
   resolvedFileRules: ResolvedFileRule[],
   computerPath: string
-) {
+): Promise<
+  Result<{
+    copiedFiles: string[]
+    skippedFiles: string[]
+  }>
+> {
   const copiedFiles = []
   const skippedFiles = []
-  const errors = []
+  const errors: AppError[] = []
+  let resultStatus: ResultStatus = ResultStatus.OK
 
   // Normalize the computer path
   const normalizedComputerPath = normalizePath(computerPath)
@@ -877,8 +887,15 @@ export async function copyFilesToComputer(
     ) {
       skippedFiles.push(rule.sourceAbsolutePath)
       errors.push(
-        `For security reasons, the target path '${toSystemPath(rule.target.path)}' cannot write files outside the computer directory. Please update your rule to target a valid location within the computer.`
+        new AppError(
+          `Security violation: the target path is outside the computer's directory`,
+          ErrorSeverity.WARNING,
+          "copyFilesToComputer",
+          undefined,
+          `For security reasons, the target path '${toSystemPath(rule.target.path)}' cannot write files outside the computer directory. Please update your rule to target a valid location within the computer.`
+        )
       )
+      resultStatus = ResultStatus.PARTIAL
       continue
     }
 
@@ -889,15 +906,35 @@ export async function copyFilesToComputer(
       if (!sourceStats.isFile()) {
         skippedFiles.push(rule.sourceAbsolutePath)
         errors.push(
-          `Source is not a file: ${toSystemPath(rule.sourceAbsolutePath)}`
+          new AppError(
+            `Source is not a file: ${toSystemPath(rule.sourceAbsolutePath)}`,
+            ErrorSeverity.ERROR,
+            "copyFilesToComputer",
+            undefined,
+            undefined,
+            {
+              syncRule: rule,
+            }
+          )
         )
+        resultStatus = ResultStatus.PARTIAL
         continue
       }
     } catch (err) {
       skippedFiles.push(rule.sourceAbsolutePath)
       errors.push(
-        `Source file not found: ${toSystemPath(rule.sourceAbsolutePath)}`
+        new AppError(
+          `Source file not found: ${toSystemPath(rule.sourceAbsolutePath)}`,
+          ErrorSeverity.ERROR,
+          "copyFilesToComputer",
+          undefined,
+          undefined,
+          {
+            syncRule: rule,
+          }
+        )
       )
+      resultStatus = ResultStatus.PARTIAL
       continue
     }
 
@@ -909,8 +946,18 @@ export async function copyFilesToComputer(
         if (!targetDirStats.isDirectory()) {
           skippedFiles.push(rule.sourceAbsolutePath)
           errors.push(
-            `Cannot create directory '${toSystemPath(path.basename(targetDirPath))}' because a file with that name already exists`
+            new AppError(
+              `Cannot create directory '${toSystemPath(path.basename(targetDirPath))}' because a file with that name already exists`,
+              ErrorSeverity.WARNING,
+              "copyFilesToComputer",
+              undefined,
+              undefined,
+              {
+                syncRule: rule,
+              }
+            )
           )
+          resultStatus = ResultStatus.PARTIAL
           continue
         }
         // Mark directory as verified
@@ -923,7 +970,19 @@ export async function copyFilesToComputer(
           verifiedDirs.add(targetDirPath)
         } catch (mkdirErr) {
           skippedFiles.push(rule.sourceAbsolutePath)
-          errors.push(`Failed to create directory: ${mkdirErr}`)
+          errors.push(
+            new AppError(
+              `Failed to create directory: ${mkdirErr}`,
+              ErrorSeverity.ERROR,
+              "copyFilesToComputer",
+              undefined,
+              undefined,
+              {
+                syncRule: rule,
+              }
+            )
+          )
+          resultStatus = ResultStatus.PARTIAL
           continue
         }
       }
@@ -939,36 +998,40 @@ export async function copyFilesToComputer(
     } catch (err) {
       skippedFiles.push(rule.sourceAbsolutePath)
 
+      let msg = getErrorMessage(err)
       if (isNodeError(err)) {
         if (err.code === "ENOENT") {
-          errors.push(
-            `Source file not found: ${toSystemPath(rule.sourceAbsolutePath)}`
-          )
+          msg = `Source file not found: ${toSystemPath(rule.sourceAbsolutePath)}`
         } else if (err.code === "EACCES") {
-          errors.push(`Permission denied: ${err.message}`)
+          msg = `Permission denied: ${err.message}`
         } else if (err.code === "EISDIR") {
-          errors.push(
-            `Cannot copy to '${toSystemPath(targetFilePath)}': Is a directory`
-          )
+          msg = `Cannot copy to '${toSystemPath(targetFilePath)}': Is a directory`
         } else if (err.code === "EBUSY") {
-          errors.push(
-            `File is locked or in use: ${toSystemPath(targetFilePath)}`
-          )
-        } else {
-          errors.push(err instanceof Error ? err.message : String(err))
+          msg = `File is locked or in use: ${toSystemPath(targetFilePath)}`
         }
-      } else {
-        errors.push(err instanceof Error ? err.message : String(err))
       }
-
+      errors.push(
+        new AppError(
+          msg,
+          ErrorSeverity.ERROR,
+          "copyFilesToComputer",
+          err,
+          undefined,
+          {
+            syncRule: rule,
+          }
+        )
+      )
+      resultStatus = ResultStatus.PARTIAL
       continue
     }
   }
-  return {
+
+  const result = {
     copiedFiles,
     skippedFiles,
-    errors,
   }
+  return resultStatus === ResultStatus.OK ? ok(result) : partial(result, errors)
 }
 
 const clearComputer = async (computerDirPath: string) => {

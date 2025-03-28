@@ -27,7 +27,12 @@ import {
 } from "./test-helpers"
 import { testLog } from "./setup"
 import { getErrorMessage } from "../src/errors"
-import type { ResolvedFileRule } from "../src/types"
+import {
+  isOk,
+  isPartial,
+  ResultStatus,
+  type ResolvedFileRule,
+} from "../src/types"
 
 // ---- MC SAVE OPERATIONS ----
 describe("Save Directory Validation", () => {
@@ -1050,9 +1055,9 @@ describe("File Operations", () => {
 
         const result = await copyFilesToComputer([resolvedFile], targetComputer)
         // THEN files should be copied with normalized paths
+        if (!isOk(result)) throw new Error("not OK")
 
-        expect(result.errors).toHaveLength(0)
-        expect(result.copiedFiles).toHaveLength(1)
+        expect(result.value.copiedFiles).toHaveLength(1)
 
         // Verify file exists at expected normalized path
         const expectedFilePath = path.join(targetComputer, test.expectedPath)
@@ -1090,8 +1095,9 @@ describe("File Operations", () => {
       await fs.mkdir(targetComputer, { recursive: true })
 
       const result = await copyFilesToComputer(resolvedFiles, targetComputer)
-      expect(result.errors).toHaveLength(0)
-      expect(result.copiedFiles).toHaveLength(1)
+      if (result.status !== ResultStatus.OK) throw new Error("not OK")
+
+      expect(result.value.copiedFiles).toHaveLength(1)
 
       // Verify file exists with normalized path
       const expectedPath = path.join(targetComputer, "programs/test/file.lua")
@@ -1222,11 +1228,9 @@ describe("File Operations", () => {
       ])
 
       const result = await copyFilesToComputer(resolvedFiles, computerDir)
-
+      if (!isPartial(result)) throw new Error("not PARTIAL")
       // Should fail with appropriate error
-      expect(result.copiedFiles).toHaveLength(0)
-      expect(result.skippedFiles).toHaveLength(1)
-      expect(result.errors[0]).toContain("Cannot create directory") // Verify error message
+      expect(result.errors[0].message).toContain("Cannot create directory") // Verify error message
     })
 
     test("renames file when target has extension", async () => {
@@ -1243,10 +1247,10 @@ describe("File Operations", () => {
 
       const result = await copyFilesToComputer(resolvedFiles, computerDir)
 
+      if (result.status !== ResultStatus.OK) throw new Error("not OK")
       // Should succeed
-      expect(result.copiedFiles).toHaveLength(1)
-      expect(result.skippedFiles).toHaveLength(0)
-      expect(result.errors).toHaveLength(0)
+      expect(result.value.copiedFiles).toHaveLength(1)
+      expect(result.value.skippedFiles).toHaveLength(0)
 
       // Verify file was renamed and copied correctly
       const targetPath = path.join(computerDir, "startup.lua")
@@ -1374,11 +1378,13 @@ describe("File Operations", () => {
 
       const result = await copyFilesToComputer(resolvedFiles, computerDir)
 
+      // expect a PARTIAL result status here, with errors
+      if (!isPartial(result)) throw new Error("not PARTIAL")
       // First file should fail, other two should succeed
-      expect(result.copiedFiles).toHaveLength(2)
-      expect(result.skippedFiles).toHaveLength(1)
+      expect(result.value.copiedFiles).toHaveLength(2)
+      expect(result.value.skippedFiles).toHaveLength(1)
       expect(result.errors).toHaveLength(1)
-      expect(result.errors[0]).toContain("Cannot create directory")
+      expect(result.errors[0].message).toContain("Cannot create directory")
 
       // Verify successful copies
       expect(
@@ -1420,13 +1426,13 @@ describe("File Operations", () => {
         ])
 
         // Expect the copy operation to fail
-        const { copiedFiles, skippedFiles } = await copyFilesToComputer(
-          resolvedFiles,
-          computer1Dir
-        )
+        const result = await copyFilesToComputer(resolvedFiles, computer1Dir)
 
-        expect(copiedFiles).toHaveLength(0)
-        expect(skippedFiles).toHaveLength(resolvedFiles.length)
+        // expect a PARTIAL result status here, with errors
+        if (!isPartial(result)) throw new Error("not PARTIAL")
+
+        expect(result.value.copiedFiles).toHaveLength(0)
+        expect(result.value.skippedFiles).toHaveLength(resolvedFiles.length)
 
         // Verify no files were created in parent directories
         for (const checkPath of [
@@ -1448,12 +1454,14 @@ describe("File Operations", () => {
         },
       ])
 
-      const { copiedFiles, skippedFiles } = await copyFilesToComputer(
-        resolvedFiles,
-        computer1Dir
-      )
-      expect(copiedFiles).toHaveLength(0)
-      expect(skippedFiles).toHaveLength(resolvedFiles.length)
+      // Expect the copy operation to fail
+      const result = await copyFilesToComputer(resolvedFiles, computer1Dir)
+
+      // expect a PARTIAL result status here, with errors
+      if (!isPartial(result)) throw new Error("not PARTIAL")
+
+      expect(result.value.copiedFiles).toHaveLength(0)
+      expect(result.value.skippedFiles).toHaveLength(resolvedFiles.length)
     })
 
     test("handles target file being in use by another process", async () => {
@@ -1480,8 +1488,13 @@ describe("File Operations", () => {
         resolvedFiles,
         path.join(computersDir, "1")
       )
-      expect(result.skippedFiles).toContain(path.join(sourceDir, "program.lua"))
-      expect(result.errors[0]).toContain("File is locked or in use")
+      // expect a PARTIAL result status here, with errors
+      if (!isPartial(result)) throw new Error("not PARTIAL")
+
+      expect(result.value.skippedFiles).toContain(
+        path.join(sourceDir, "program.lua")
+      )
+      expect(result.errors[0].message).toContain("File is locked or in use")
       expect(spy).toHaveBeenCalled()
       spy.mockRestore()
     })

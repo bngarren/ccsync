@@ -7,26 +7,78 @@ export enum SyncMode {
   WATCH = "watch",
 }
 
-/**
- * A structure result type
- */
-export interface Result<T, E = AppError> {
-  success: boolean
-  value?: T
-  error?: E
+export enum ResultStatus {
+  OK = "ok",
+  PARTIAL = "partial",
+  FAILURE = "failure",
 }
 
-/**
- * Returns a structured {@link Result} of success = true with the given value
- */
-export function success<T>(value: T): Result<T> {
-  return { success: true, value }
+export interface ResultBase {
+  status: ResultStatus
 }
-/**
- * Returns a structured {@link Result} of success = false with the given AppError
- */
-export function failure<T, E = AppError>(error: E): Result<T, E> {
-  return { success: false, error }
+
+export interface OkResult<T> extends ResultBase {
+  status: ResultStatus.OK
+  value: T
+  errors?: never // No errors in OK case
+}
+
+export interface PartialResult<T, E = AppError[]> extends ResultBase {
+  status: ResultStatus.PARTIAL
+  value: T
+  errors: E
+}
+
+export interface FailureResult<E = AppError[]> extends ResultBase {
+  status: ResultStatus.FAILURE
+  value?: never // No value in failure case
+  errors: E
+}
+
+export type Result<T, E = AppError[]> =
+  | OkResult<T>
+  | PartialResult<T, E>
+  | FailureResult<E>
+
+// Type guard functions
+export function isOk<T, E>(result: Result<T, E>): result is OkResult<T> {
+  return result.status === ResultStatus.OK
+}
+
+export function isPartial<T, E>(
+  result: Result<T, E>
+): result is PartialResult<T, E> {
+  return result.status === ResultStatus.PARTIAL
+}
+
+export function isFailure<T, E>(
+  result: Result<T, E>
+): result is FailureResult<E> {
+  return result.status === ResultStatus.FAILURE
+}
+
+export function ok<T>(value: T): OkResult<T> {
+  return { status: ResultStatus.OK, value }
+}
+export function partial<T, E = AppError[]>(
+  value: T,
+  errors: E
+): PartialResult<T, E> {
+  return { status: ResultStatus.PARTIAL, value, errors }
+}
+export function failure<E = AppError[]>(errors: E): FailureResult<E> {
+  return { status: ResultStatus.FAILURE, errors }
+}
+
+// For void-returning functions, use undefined as the value
+export function okVoid(): OkResult<undefined> {
+  return ok(undefined)
+}
+
+export function partialVoid<E = AppError[]>(
+  errors: E
+): PartialResult<undefined, E> {
+  return partial(undefined, errors)
 }
 
 /**
@@ -90,6 +142,12 @@ export interface ValidationResult {
   availableComputers: Computer[]
   missingComputerIds: string[]
   errors: string[]
+}
+
+export interface SyncToComputerResult {
+  computerId: string
+  copiedFiles: string[]
+  skippedFiles: string[]
 }
 
 export enum SyncStatus {
@@ -192,8 +250,10 @@ export interface SyncOperationResult {
    * Note: A computer will only generate a {@link ComputerSyncResult} if it was targeted by a sync rule that actually matched files. In other words, if a sync rule source pattern does not match a file, the computers in the target will not show up in this array (unless they are part of another sync rule).  */
   computerResults: ComputerSyncResult[]
 
-  /** Error messages that occurred during the operation */
-  errors: string[]
+  /** Error messages that occurred during the operations
+   * @deprecated
+   * */
+  errors?: string[]
 }
 
 export enum SyncEvent {

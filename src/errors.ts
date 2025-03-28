@@ -89,6 +89,10 @@ export class AppError extends Error implements IAppError {
     )
   }
 
+  getDisplayMessage(): string {
+    return this.userMessage || this.message
+  }
+
   /**
    * Create a warning-level application error.
    */

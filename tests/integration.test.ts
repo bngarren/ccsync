@@ -138,8 +138,6 @@ describe("Integration: SyncManager", () => {
       })
       expect(fileResult.sourcePath).toContain("program.lua")
 
-      // Verify no errors
-      expect(syncResult.errors).toHaveLength(0)
       expect(syncResult.summary.successfulFiles).toBe(1)
       expect(syncResult.summary.fullySuccessfulComputers).toBe(1)
 
@@ -820,8 +818,6 @@ describe("Integration: SyncManager", () => {
       })
       expect(fileResult.sourcePath).toContain("program.lua")
 
-      // Verify no errors
-      expect(syncResult.errors).toHaveLength(0)
       expect(syncResult.summary.successfulFiles).toBe(1)
       expect(syncResult.summary.fullySuccessfulComputers).toBe(1)
 
@@ -1953,7 +1949,6 @@ describe("Integration: UI", () => {
 
       expect(result.status).toBe(SyncStatus.WARNING)
       expect(result.summary.fullySuccessfulComputers).toBe(1)
-      expect(result.errors).toHaveLength(0)
 
       // Get the captured output
       const normalizedOutput = normalizeOutput(outputCapture.getOutput())

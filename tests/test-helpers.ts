@@ -324,7 +324,7 @@ export function waitForEventWithTrigger<T>(
     off: (event: any, callback: any) => void
   },
   awaitedEvent: SyncEvent,
-  triggerFn?: () => void | Promise<void>, // Function that triggers the event
+  triggerFn?: () => unknown, // Function that triggers the event
   timeoutMs = 5000,
   ignoreError = false
 ): Promise<T> {

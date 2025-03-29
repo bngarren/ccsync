@@ -12,7 +12,7 @@ import * as p from "@clack/prompts"
 import { expect, mock } from "bun:test"
 import { DEFAULT_CONFIG, type Config, type SyncRule } from "../src/config"
 import * as yaml from "yaml"
-import { getErrorMessage, type IAppError } from "../src/errors"
+import { getErrorMessage } from "../src/errors"
 import stripAnsi from "strip-ansi"
 import { rmSync } from "node:fs"
 
@@ -325,8 +325,7 @@ export function waitForEventWithTrigger<T>(
   },
   awaitedEvent: SyncEvent,
   triggerFn?: () => unknown, // Function that triggers the event
-  timeoutMs = 5000,
-  ignoreError = false
+  timeoutMs = 5000
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     // Set timeout to avoid test hanging
@@ -345,24 +344,14 @@ export function waitForEventWithTrigger<T>(
       resolve(data)
     }
 
-    // Error handler
-    const handleError = (error: IAppError) => {
-      if (ignoreError) return
-
-      cleanup()
-      reject(new Error(`Operation failed: ${error.message}`))
-    }
-
     // Clean up listeners
     const cleanup = () => {
       clearTimeout(timeout)
       emitter.off(awaitedEvent, handleSuccess)
-      emitter.off(SyncEvent.SYNC_ERROR, handleError)
     }
 
     // Register listeners FIRST
     emitter.on(awaitedEvent, handleSuccess)
-    emitter.on(SyncEvent.SYNC_ERROR, handleError)
 
     // THEN execute the trigger function
     if (triggerFn) {

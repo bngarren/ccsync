@@ -6,7 +6,6 @@ import { type Path } from "glob"
 import {
   ok,
   partial,
-  ResultStatus,
   type Computer,
   type ResolvedFileRule,
   type ValidationResult as ResolveSyncRulesResult,
@@ -843,7 +842,10 @@ export function checkDuplicateTargetPaths(
 }
 
 /**
- * Copies files to a specific computer
+ * Copies files to a specific computer's directory.
+ *
+ * This function handles various error cases while trying to copy all files,
+ * continuing through non-fatal errors and collecting them for reporting.
  */
 export async function copyFilesToComputer(
   resolvedFileRules: ResolvedFileRule[],
@@ -857,7 +859,6 @@ export async function copyFilesToComputer(
   const copiedFiles = []
   const skippedFiles = []
   const errors: AppError[] = []
-  let resultStatus: ResultStatus = ResultStatus.OK
 
   // Normalize the computer path
   const normalizedComputerPath = normalizePath(computerPath)
@@ -895,7 +896,6 @@ export async function copyFilesToComputer(
           `For security reasons, the target path '${toSystemPath(rule.target.path)}' cannot write files outside the computer directory. Please update your rule to target a valid location within the computer.`
         )
       )
-      resultStatus = ResultStatus.PARTIAL
       continue
     }
 
@@ -917,7 +917,6 @@ export async function copyFilesToComputer(
             }
           )
         )
-        resultStatus = ResultStatus.PARTIAL
         continue
       }
     } catch (err) {
@@ -934,7 +933,6 @@ export async function copyFilesToComputer(
           }
         )
       )
-      resultStatus = ResultStatus.PARTIAL
       continue
     }
 
@@ -957,7 +955,6 @@ export async function copyFilesToComputer(
               }
             )
           )
-          resultStatus = ResultStatus.PARTIAL
           continue
         }
         // Mark directory as verified
@@ -982,7 +979,6 @@ export async function copyFilesToComputer(
               }
             )
           )
-          resultStatus = ResultStatus.PARTIAL
           continue
         }
       }
@@ -1022,7 +1018,6 @@ export async function copyFilesToComputer(
           }
         )
       )
-      resultStatus = ResultStatus.PARTIAL
       continue
     }
   }
@@ -1031,7 +1026,8 @@ export async function copyFilesToComputer(
     copiedFiles,
     skippedFiles,
   }
-  return resultStatus === ResultStatus.OK ? ok(result) : partial(result, errors)
+  // Return appropriate Result type based on whether there were errors
+  return errors.length === 0 ? ok(result) : partial(result, errors)
 }
 
 const clearComputer = async (computerDirPath: string) => {

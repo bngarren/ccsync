@@ -1218,7 +1218,7 @@ describe("Integration: SyncManager", () => {
       start
     )
 
-    expect(error.message).toContain("File system error during copy")
+    expect(error.message).toContain("Error copying files to computer")
     expect(copyFileSpy).toHaveBeenCalledTimes(2) // 2 files x 1 attempt
     expect(syncManager.isRunning()).toBe(true)
 
@@ -1305,8 +1305,7 @@ describe("Integration: SyncManager", () => {
           "print('Program updated')"
         )
       },
-      undefined,
-      true // ignore the expected SyncError
+      undefined
     )
 
     expect(syncResult2.status).toBe(SyncStatus.ERROR)

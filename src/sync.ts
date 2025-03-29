@@ -959,19 +959,6 @@ export class SyncManager {
         this.ui.stop()
       })
 
-      // High level controller functions should emit a SYNC_ERROR when they catch thrown errors from subordinate functions
-      // eslint-disable-next-line n/handle-callback-err
-      manualController.on(SyncEvent.SYNC_ERROR, (error) => {
-        // Handle based on severity
-        // if (error.severity === ErrorSeverity.FATAL) {
-        //   this.log.fatal(error, "MANUAL mode")
-        //   this.setErrorState(error)
-        // } else {
-        //   this.log.error(error, "MANUAL mode")
-        //   // continue operations
-        // }
-      })
-
       const manualControllerStart = () => {
         this.setState(SyncManagerState.STARTING)
 
@@ -1038,18 +1025,6 @@ export class SyncManager {
         this.setState(SyncManagerState.STOPPED)
         this.log.trace("watchController SyncEvent.STOPPED")
         this.ui.stop()
-      })
-
-      // eslint-disable-next-line n/handle-callback-err
-      watchController.on(SyncEvent.SYNC_ERROR, (error) => {
-        // Handle based on severity
-        // if (error.severity === ErrorSeverity.FATAL) {
-        //   this.log.fatal(error, "WATCH mode")
-        //   this.setErrorState(error)
-        // } else {
-        //   this.log.error(error, "WATCH mode")
-        //   // continue operations
-        // }
       })
 
       const watchControllerStart = () => {
@@ -1243,11 +1218,6 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
         const syncResult = await this.performSyncCycle()
 
         if (!isOk(syncResult)) {
-          // Only emit for notifications
-          syncResult.errors.forEach((error) => {
-            this.emit(SyncEvent.SYNC_ERROR, error)
-          })
-
           if (isFailure(syncResult)) {
             // Check if any error is fatal
             const fatalErrors = syncResult.errors.filter(
@@ -1269,15 +1239,10 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
         await this.waitForUserInput()
       }
     } catch (error) {
-      if (error instanceof AppError) {
-        this.emit(SyncEvent.SYNC_ERROR, error)
-        throw error
-      }
       const fatalAppError = AppError.from(error, {
         severity: ErrorSeverity.FATAL,
         source: "ManualModeController.run",
       })
-      this.emit(SyncEvent.SYNC_ERROR, fatalAppError)
       throw fatalAppError
     }
   }
@@ -1531,18 +1496,12 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       try {
         await this.setupWatcher()
       } catch (error: unknown) {
-        if (error instanceof AppError) {
-          this.emit(SyncEvent.SYNC_ERROR, error)
-          throw error
-        } else {
-          const appError = AppError.fatal(
-            `Unknown error in setupWatcher: ${getErrorMessage(error)}`,
-            "WatchModeController.run",
-            error
-          )
-          this.emit(SyncEvent.SYNC_ERROR, appError)
-          throw appError
-        }
+        const appError = AppError.fatal(
+          `Unknown error in setupWatcher: ${getErrorMessage(error)}`,
+          "WatchModeController.run",
+          error
+        )
+        throw appError
       }
 
       this.emit(SyncEvent.STARTED) // Signal ready to run
@@ -1558,11 +1517,6 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       const initialSyncResult = await this.performSyncCycle()
 
       if (!isOk(initialSyncResult)) {
-        // Only emit for notifications
-        initialSyncResult.errors.forEach((error) => {
-          this.emit(SyncEvent.SYNC_ERROR, error)
-        })
-
         if (isFailure(initialSyncResult)) {
           // Check if any error is fatal
           const fatalErrors = initialSyncResult.errors.filter(
@@ -1589,15 +1543,10 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
         })
       }
     } catch (error) {
-      if (error instanceof AppError) {
-        this.emit(SyncEvent.SYNC_ERROR, error)
-        throw error
-      }
       const fatalAppError = AppError.from(error, {
         severity: ErrorSeverity.FATAL,
         source: "WatchModeController.run",
       })
-      this.emit(SyncEvent.SYNC_ERROR, fatalAppError)
       throw fatalAppError
     }
   }
@@ -1971,10 +1920,6 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       const syncResult = await this.performSyncCycle()
 
       if (!isOk(syncResult)) {
-        // Only emit for notifications
-        syncResult.errors.forEach((error) => {
-          this.emit(SyncEvent.SYNC_ERROR, error)
-        })
         if (isFailure(syncResult)) {
           // Check if any error is fatal
           const fatalErrors = syncResult.errors.filter(
@@ -2010,7 +1955,6 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
         { error: appError },
         "Unexpected error processing file changes in watch mode sync"
       )
-      this.emit(SyncEvent.SYNC_ERROR, appError)
       throw appError
     } finally {
       this.onChangeSyncInProgress = false
@@ -2026,15 +1970,9 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
         // Schedule processing of new changes
         this.onChangeSyncDebounceTimer = setTimeout(() => {
           this.onChangeSyncDebounceTimer = null
+          // eslint-disable-next-line n/handle-callback-err
           this.processPendingChanges().catch((error: unknown) => {
-            this.emit(
-              SyncEvent.SYNC_ERROR,
-              AppError.error(
-                `Error processing pending changes: ${getErrorMessage(error)}`,
-                "WatchModeController.processPendingChanges",
-                error
-              )
-            )
+            // TODO: Need to handle this
           })
         }, PROCESS_CHANGES_DELAY)
       }
@@ -2179,8 +2117,6 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
           "WatchModeController.watcher",
           error
         )
-        // Notifications only
-        this.emit(SyncEvent.SYNC_ERROR, watcherError)
 
         this.log.error(
           { error: watcherError },

@@ -1,6 +1,7 @@
 import { EventEmitter } from "node:events"
 import { AppError, type IAppError } from "./errors"
 import type { SyncPlan } from "./syncplan"
+import type { SyncOperationSummary } from "./results"
 
 export enum SyncMode {
   MANUAL = "manual",
@@ -269,7 +270,7 @@ export type BaseControllerEvents = {
   [SyncEvent.STOPPED]: undefined
   [SyncEvent.STARTED]: undefined
   [SyncEvent.SYNC_PLANNED]: SyncPlan
-  [SyncEvent.SYNC_COMPLETE]: SyncOperationResult
+  [SyncEvent.SYNC_COMPLETE]: SyncOperationSummary
   [SyncEvent.SYNC_ERROR]: IAppError
 }
 
@@ -277,7 +278,7 @@ export type BaseControllerEvents = {
 export type ManualSyncEvents = BaseControllerEvents
 
 export type WatchSyncEvents = {
-  [SyncEvent.INITIAL_SYNC_COMPLETE]: SyncOperationResult
+  [SyncEvent.INITIAL_SYNC_COMPLETE]: SyncOperationSummary
 } & BaseControllerEvents
 
 // Type-safe event emitter factory

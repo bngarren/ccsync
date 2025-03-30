@@ -109,23 +109,30 @@ export function initializeLogger(options: {
 
     const symlinkIsSupported = isSymlinkSupported(logDir)
 
-    const transport = pino.transport({
-      target: "pino-roll",
-      options: {
-        file: logFilePath,
-        sync: options.isTest || false, // synchronous writes in test env
-        frequency: LOG_ROTATION_FREQ, // Rotate logs daily
-        mkdir: true, // Create the directory if it doesn't exist
-        size: LOG_MAX_SIZE, // Also rotate if a log file reaches 10 MB
-        extension: ".log", // Add .log extension to the files
-        symlink: !options.isTest && symlinkIsSupported, // Create a symlink to the current log file
-        dateFormat: "yyyy-MM-dd", // Format for date in filename
-        limit: {
-          count: LOG_RETENTION_COUNT, // Keep 2 days of logs
+    let transport: DestinationStream
+    if (options.isTest) {
+      transport = pino.destination({
+        dest: logFilePath + ".log", // Add .log extension
+        sync: true, // Use synchronous writes for tests
+      })
+    } else {
+      transport = pino.transport({
+        target: "pino-roll",
+        options: {
+          file: logFilePath,
+          frequency: LOG_ROTATION_FREQ, // Rotate logs daily
+          mkdir: true, // Create the directory if it doesn't exist
+          size: LOG_MAX_SIZE, // Also rotate if a log file reaches 10 MB
+          extension: ".log", // Add .log extension to the files
+          symlink: symlinkIsSupported, // Create a symlink to the current log file
+          dateFormat: "yyyy-MM-dd", // Format for date in filename
+          limit: {
+            count: LOG_RETENTION_COUNT, // Keep 2 days of logs
+          },
+          messageFormat: "{if component} [{component}]: {end}{msg}",
         },
-        messageFormat: "{if component} [{component}]: {end}{msg}",
-      },
-    }) as DestinationStream
+      }) as DestinationStream
+    }
 
     // Create the logger with serializers for better error reporting
     logger = pino(

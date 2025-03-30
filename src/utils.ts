@@ -4,16 +4,20 @@ import path from "path"
 import type { Config } from "./config"
 import { type Path } from "glob"
 import {
-  ok,
-  partial,
   type Computer,
   type ResolvedFileRule,
   type ValidationResult as ResolveSyncRulesResult,
-  type Result,
 } from "./types"
 import { AppError, ErrorSeverity, getErrorMessage, isNodeError } from "./errors"
 import stripAnsi from "strip-ansi"
 import { cachedGlob, invalidateGlobCache, pathCache } from "./cache"
+import { err, ok, Result } from "neverthrow"
+import {
+  createFileSyncResult,
+  createFileSyncSummary,
+  type FileSyncResult,
+  type FileSyncSummary,
+} from "./results"
 
 // ---- Language ----
 export const pluralize = (text: string) => {
@@ -841,24 +845,11 @@ export function checkDuplicateTargetPaths(
   )
 }
 
-/**
- * Copies files to a specific computer's directory.
- *
- * This function handles various error cases while trying to copy all files,
- * continuing through non-fatal errors and collecting them for reporting.
- */
 export async function copyFilesToComputer(
   resolvedFileRules: ResolvedFileRule[],
   computerPath: string
-): Promise<
-  Result<{
-    copiedFiles: string[]
-    skippedFiles: string[]
-  }>
-> {
-  const copiedFiles = []
-  const skippedFiles = []
-  const errors: AppError[] = []
+): Promise<Result<FileSyncSummary, AppError>> {
+  const fileResults: FileSyncResult[] = []
 
   // Normalize the computer path
   const normalizedComputerPath = normalizePath(computerPath)
@@ -866,168 +857,167 @@ export async function copyFilesToComputer(
   // Track directories we've already verified/created to avoid redundant checks
   const verifiedDirs = new Set<string>()
 
-  for (const rule of resolvedFileRules) {
-    // Get the resolved target path relative to computer root
-    const relativeTargetPath = resolveTargetPath(rule)
+  try {
+    for (const rule of resolvedFileRules) {
+      // Get the resolved target path relative to computer root
+      const relativeTargetPath = resolveTargetPath(rule)
 
-    // Build absolute path by joining with computer path
-    const targetFilePath = path.join(normalizedComputerPath, relativeTargetPath)
-
-    // Get directory portion for creating folders if needed
-    const targetDirPath = path.dirname(targetFilePath)
-
-    // Security check: Ensure the target path stays within the computer directory
-    const relativeToComputer = path.relative(
-      normalizedComputerPath,
-      targetFilePath
-    )
-
-    if (
-      normalizePath(relativeToComputer).startsWith("..") ||
-      path.isAbsolute(relativeToComputer)
-    ) {
-      skippedFiles.push(rule.sourceAbsolutePath)
-      errors.push(
-        new AppError(
-          `Security violation: the target path is outside the computer's directory`,
-          ErrorSeverity.WARNING,
-          "copyFilesToComputer",
-          undefined,
-          `For security reasons, the target path '${toSystemPath(rule.target.path)}' cannot write files outside the computer directory. Please update your rule to target a valid location within the computer.`
-        )
+      // Build absolute path by joining with computer path
+      const targetFilePath = path.join(
+        normalizedComputerPath,
+        relativeTargetPath
       )
-      continue
-    }
 
-    // First ensure source file exists and is a file
-    let sourceStats
-    try {
-      sourceStats = await fs.stat(toSystemPath(rule.sourceAbsolutePath))
-      if (!sourceStats.isFile()) {
-        skippedFiles.push(rule.sourceAbsolutePath)
-        errors.push(
-          new AppError(
-            `Source is not a file: ${toSystemPath(rule.sourceAbsolutePath)}`,
-            ErrorSeverity.ERROR,
-            "copyFilesToComputer",
-            undefined,
-            undefined,
-            {
-              syncRule: rule,
-            }
+      // Get directory portion for creating folders if needed
+      const targetDirPath = path.dirname(targetFilePath)
+
+      // Security check: Ensure the target path stays within the computer directory
+      const relativeToComputer = path.relative(
+        normalizedComputerPath,
+        targetFilePath
+      )
+      if (
+        normalizePath(relativeToComputer).startsWith("..") ||
+        path.isAbsolute(relativeToComputer)
+      ) {
+        fileResults.push(
+          createFileSyncResult(
+            rule.sourceAbsolutePath,
+            relativeTargetPath,
+            false,
+            new AppError(
+              `Security violation: target path outside computer directory`,
+              ErrorSeverity.WARNING,
+              "copyFilesToComputer"
+            )
           )
         )
         continue
       }
-    } catch (err) {
-      skippedFiles.push(rule.sourceAbsolutePath)
-      errors.push(
-        new AppError(
-          `Source file not found: ${toSystemPath(rule.sourceAbsolutePath)}`,
-          ErrorSeverity.ERROR,
-          "copyFilesToComputer",
-          undefined,
-          undefined,
-          {
-            syncRule: rule,
-          }
-        )
-      )
-      continue
-    }
 
-    // Check if target directory exists and is actually a directory
-    // Only verify directories we haven't checked yet
-    if (!verifiedDirs.has(targetDirPath)) {
+      // Ensure source file exists and is a file
       try {
-        const targetDirStats = await fs.stat(toSystemPath(targetDirPath))
-        if (!targetDirStats.isDirectory()) {
-          skippedFiles.push(rule.sourceAbsolutePath)
-          errors.push(
-            new AppError(
-              `Cannot create directory '${toSystemPath(path.basename(targetDirPath))}' because a file with that name already exists`,
-              ErrorSeverity.WARNING,
-              "copyFilesToComputer",
-              undefined,
-              undefined,
-              {
-                syncRule: rule,
-              }
+        const sourceStats = await fs.stat(toSystemPath(rule.sourceAbsolutePath))
+        if (!sourceStats.isFile()) {
+          fileResults.push(
+            createFileSyncResult(
+              rule.sourceAbsolutePath,
+              relativeTargetPath,
+              false,
+              new AppError(
+                `Source is not a file: ${toSystemPath(rule.sourceAbsolutePath)}`,
+                ErrorSeverity.ERROR,
+                "copyFilesToComputer"
+              )
             )
           )
           continue
         }
-        // Mark directory as verified
-        verifiedDirs.add(targetDirPath)
-      } catch (err) {
-        // Directory doesn't exist, create it
-        try {
-          await fs.mkdir(toSystemPath(targetDirPath), { recursive: true })
-          // Mark directory as verified after creation
-          verifiedDirs.add(targetDirPath)
-        } catch (mkdirErr) {
-          skippedFiles.push(rule.sourceAbsolutePath)
-          errors.push(
+      } catch (error) {
+        fileResults.push(
+          createFileSyncResult(
+            rule.sourceAbsolutePath,
+            relativeTargetPath,
+            false,
             new AppError(
-              `Failed to create directory: ${mkdirErr}`,
+              `Source file not found: ${toSystemPath(rule.sourceAbsolutePath)}`,
               ErrorSeverity.ERROR,
-              "copyFilesToComputer",
-              undefined,
-              undefined,
-              {
-                syncRule: rule,
-              }
+              "copyFilesToComputer"
             )
           )
-          continue
-        }
+        )
+        continue
       }
-    }
 
-    try {
-      // Copy the file using system-specific paths for fs operations
-      await fs.copyFile(
-        toSystemPath(rule.sourceAbsolutePath),
-        toSystemPath(targetFilePath)
-      )
-      copiedFiles.push(rule.sourceAbsolutePath)
-    } catch (err) {
-      skippedFiles.push(rule.sourceAbsolutePath)
-
-      let msg = getErrorMessage(err)
-      if (isNodeError(err)) {
-        if (err.code === "ENOENT") {
-          msg = `Source file not found: ${toSystemPath(rule.sourceAbsolutePath)}`
-        } else if (err.code === "EACCES") {
-          msg = `Permission denied: ${err.message}`
-        } else if (err.code === "EISDIR") {
-          msg = `Cannot copy to '${toSystemPath(targetFilePath)}': Is a directory`
-        } else if (err.code === "EBUSY") {
-          msg = `File is locked or in use: ${toSystemPath(targetFilePath)}`
+      // Check if target directory exists. Only need to verify
+      // directories that haven't been previously verified
+      if (!verifiedDirs.has(targetDirPath)) {
+        try {
+          const targetDirStats = await fs.stat(toSystemPath(targetDirPath))
+          if (!targetDirStats.isDirectory()) {
+            fileResults.push(
+              createFileSyncResult(
+                rule.sourceAbsolutePath,
+                relativeTargetPath,
+                false,
+                new AppError(
+                  `Cannot create directory '${toSystemPath(path.basename(targetDirPath))}' because a file with that name already exists`,
+                  ErrorSeverity.ERROR,
+                  "copyFilesToComputer"
+                )
+              )
+            )
+            continue
+          }
+        } catch {
+          // Directory doesn't exist, create it
+          try {
+            await fs.mkdir(toSystemPath(targetDirPath), { recursive: true })
+          } catch (mkdirErr) {
+            fileResults.push(
+              createFileSyncResult(
+                rule.sourceAbsolutePath,
+                relativeTargetPath,
+                false,
+                new AppError(
+                  `Failed to create directory: ${mkdirErr}`,
+                  ErrorSeverity.ERROR,
+                  "copyFilesToComputer"
+                )
+              )
+            )
+            continue
+          }
         }
+        verifiedDirs.add(targetDirPath)
       }
-      errors.push(
-        new AppError(
-          msg,
+
+      // Attempt the file copy operation
+      try {
+        // Copy the file using system-specific paths
+        await fs.copyFile(
+          toSystemPath(rule.sourceAbsolutePath),
+          toSystemPath(targetFilePath)
+        )
+        // success
+        fileResults.push(
+          createFileSyncResult(
+            rule.sourceAbsolutePath,
+            relativeTargetPath,
+            true
+          )
+        )
+      } catch (err) {
+        // Handle file copy errors
+        const error = new AppError(
+          getErrorMessage(err),
           ErrorSeverity.ERROR,
           "copyFilesToComputer",
-          err,
-          undefined,
-          {
-            syncRule: rule,
-          }
+          err
         )
-      )
-      continue
-    }
-  }
 
-  const result = {
-    copiedFiles,
-    skippedFiles,
+        fileResults.push(
+          createFileSyncResult(
+            rule.sourceAbsolutePath,
+            relativeTargetPath,
+            false,
+            error
+          )
+        )
+      }
+    }
+    return ok(createFileSyncSummary(fileResults))
+  } catch (error) {
+    // Only return Err for fatal errors that prevent the entire operation
+    return err(
+      new AppError(
+        `Fatal error in copy operation: ${getErrorMessage(err)}`,
+        ErrorSeverity.FATAL,
+        "copyFilesToComputerNew",
+        err
+      )
+    )
   }
-  // Return appropriate Result type based on whether there were errors
-  return errors.length === 0 ? ok(result) : partial(result, errors)
 }
 
 const clearComputer = async (computerDirPath: string) => {

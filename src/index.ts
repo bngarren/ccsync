@@ -387,22 +387,26 @@ async function main() {
   // Parse CLI arguments
   const parsedArgs = await parseArgs()
 
-  const { config, log } = await init(parsedArgs)
-
   // Handle commands based on the parsed arguments
-  if (parsedArgs.command === "init") {
-    await handleInitCommand(parsedArgs, log)
-  } else if (parsedArgs.command === "computers") {
-    switch (parsedArgs.computersCommand) {
-      case "find":
-        await handleComputersFindCommand(parsedArgs, config, log)
-        break
-      case "clear":
-        await handleComputersClear(parsedArgs, config, log)
-        break
-      default:
-        p.log.error(`Unknown computers command: ${parsedArgs.computersCommand}`)
-        break
+  if (parsedArgs.command) {
+    const { config, log } = await init(parsedArgs)
+    if (parsedArgs.command === "init") {
+      await handleInitCommand(parsedArgs, log)
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+    } else if (parsedArgs.command === "computers") {
+      switch (parsedArgs.computersCommand) {
+        case "find":
+          await handleComputersFindCommand(parsedArgs, config, log)
+          break
+        case "clear":
+          await handleComputersClear(parsedArgs, config, log)
+          break
+        default:
+          p.log.error(
+            `Unknown computers command: ${parsedArgs.computersCommand}`
+          )
+          break
+      }
     }
   } else {
     await runMainProgram(parsedArgs)

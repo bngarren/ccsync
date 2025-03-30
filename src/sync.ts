@@ -8,33 +8,19 @@ import {
   type WatchSyncEvents,
   SyncEvent,
   type ResolvedFileRule,
-  type ComputerSyncResult,
   SyncMode,
-  SyncStatus,
   type BaseControllerEvents,
-  type SyncOperationResult,
-  type Result,
-  failure,
-  ok,
-  type SyncToComputerResult,
-  partial,
-  isOk,
-  okVoid,
-  partialVoid,
-  isFailure,
-  isPartial,
 } from "./types"
 import {
   validateMinecraftSave,
   findMinecraftComputers,
   resolveSyncRules,
-  copyFilesToComputer,
   pluralize,
-  resolveTargetPath,
   processPath,
   filterFilesOnly,
   getRelativePath,
   checkDuplicateTargetPaths,
+  copyFilesToComputer,
 } from "./utils"
 import { KeyHandler } from "./keys"
 import { setTimeout as setTimeoutPromise } from "node:timers/promises"
@@ -60,6 +46,13 @@ import NodeCache from "node-cache"
 import crypto from "crypto"
 import { clearGlobCache } from "./cache"
 import { PROCESS_CHANGES_DELAY } from "./constants"
+import { err, ok, okAsync, ResultAsync, type Result } from "neverthrow"
+import {
+  createComputerSyncSummary,
+  createSyncOperationSummary,
+  type ComputerSyncSummary,
+  type SyncOperationSummary,
+} from "./results"
 
 export enum SyncManagerState {
   IDLE,
@@ -503,396 +496,142 @@ export class SyncManager {
     }
   }
 
-  /**
-   * Synchronizes (copies) source files to a specific computer according to the provided rules.
-   *
-   * 'skippedFiles' come from the copyFilesToComputer operation and may be due to security violations or source files not found
-   * @returns Result containing success/failure information and lists of copied/skipped files
-   */
   private async syncToComputer(
     computer: Computer,
     fileRules: ResolvedFileRule[]
-  ): Promise<Result<SyncToComputerResult>> {
-    const result: SyncToComputerResult = {
-      computerId: computer.id,
-      copiedFiles: [],
-      skippedFiles: [],
-    }
-
-    // Filter the file rules for rules applicable to this computer
+  ): Promise<Result<ComputerSyncSummary, AppError>> {
+    // Filter rules applicable to this computer
     const filesToCopy = fileRules.filter((file) =>
       file.computers.includes(computer.id)
     )
 
     if (filesToCopy.length === 0) {
-      this.log.warn(`syncToComputer called with 0 files to copy!`)
-      return ok(result)
+      return ok(createComputerSyncSummary(computer.id, true))
     }
 
-    this.log.debug(
-      {
-        computerPath: computer.shortPath,
-        numberOfFiles: filesToCopy.length,
-      },
-      `starting copy of files to computer ${computer.id}`
-    )
-
     try {
-      // Execute the file copy operations
       const copyResult = await copyFilesToComputer(filesToCopy, computer.path)
 
-      // Small delay between computers to avoid overwhelming the file system
-      await setTimeoutPromise(25)
-
-      this.log.info(
-        copyResult,
-        `finished copying files to computer ${computer.id}.`
-      )
-
-      // Process the results
-      if (isFailure(copyResult)) {
-        // Local handling of syncToComputer failure
-        this.log.error(
-          { computer, errors: copyResult.errors.map((e) => e.message) },
-          `syncToComputer failed with errors`
-        )
-        return failure(copyResult.errors)
-      }
-
-      // Populate result values (applies to both OK and PARTIAL results)
-      result.copiedFiles = copyResult.value.copiedFiles
-      result.skippedFiles = copyResult.value.skippedFiles
-
-      if (isPartial(copyResult)) {
-        this.log.warn(
-          {
-            computerId: computer.id,
-            copied: copyResult.value.copiedFiles.length,
-            skipped: copyResult.value.skippedFiles.length,
-            errors: copyResult.errors.map((e) => e.message),
-          },
-          `Partial success copying to computer ${computer.id}`
-        )
-        return partial(result, copyResult.errors)
-      }
-      // Log successful completion
-      this.log.info(
-        {
-          computerId: computer.id,
-          copied: result.copiedFiles.length,
-          skipped: result.skippedFiles.length,
+      return copyResult.match(
+        (fileSyncSummary) => {
+          // Log any per-file sync errors
+          for (const fileSyncError of fileSyncSummary.errors) {
+            this.log.warn(
+              { error: fileSyncError },
+              `File copy encounted an error`
+            )
+          }
+          // Convert FileSyncSummary to ComputerSyncSummary
+          return ok(
+            createComputerSyncSummary(computer.id, true, [
+              ...fileSyncSummary.succeededFiles,
+              ...fileSyncSummary.failedFiles,
+            ])
+          )
         },
-        `Successfully copied files to computer ${computer.id}`
+        (error) => {
+          // Only catastrophic errors propagate as Err
+          return err(error)
+        }
       )
-
-      return ok(result)
-    } catch (error: unknown) {
-      // Handle unexpected errors not already returned as Result objects
-      const appError = AppError.fatal(
-        `Unexpected error in syncToComputer: ${getErrorMessage(error)}`,
-        "syncToComputer",
-        error
+    } catch (error) {
+      // Handle unexpected errors
+      return err(
+        AppError.fatal(
+          `Unexpected error in syncToComputer: ${getErrorMessage(error)}`,
+          "syncToComputerNew",
+          error
+        )
       )
-      this.log.error(
-        { computerId: computer.id, error: appError },
-        `Unexpected error syncing to computer ${computer.id}`
-      )
-      return failure([appError])
     }
   }
 
   public async performSync(
     syncPlan: SyncPlan
-  ): Promise<Result<SyncOperationResult>> {
-    // throw exception here as this is bad state
+  ): Promise<Result<SyncOperationSummary, AppError>> {
     if (this.state !== SyncManagerState.RUNNING) {
-      throw AppError.fatal(
-        "Cannot perform sync when not in RUNNING state",
-        "SyncManager.performSync"
+      return err(
+        AppError.fatal(
+          "Cannot perform sync when not in RUNNING state",
+          "SyncManager.performSyncNew"
+        )
       )
     }
 
-    const computerResults: ComputerSyncResult[] = []
-    const allComputerIds = new Set<string>()
-    // A set of available computer IDs for faster lookup
-    const availableComputerIds = new Set(
-      syncPlan.availableComputers.map((c) => c.id)
-    )
-
-    // - - - - - Warnings - - - - -
-    // We accumulate warnings from both the syncPlan's issues that were identified during sync plan creation
-    // and from the running of this performSync operation
-    let warningCount = 0
-    /** Errors during performSync operation */
+    const computerResults: ComputerSyncSummary[] = []
     const errors: AppError[] = []
 
-    let totalAttemptedFiles = 0
-
-    const planWarnings = syncPlan.issues.filter(
-      (issue) => issue.severity === SyncPlanIssueSeverity.WARNING
-    ).length
-
-    if (planWarnings > 0) {
-      warningCount += planWarnings
-      this.log.debug(
-        `Including ${planWarnings} warnings from sync plan in operation status`
-      )
-    }
-
-    // Phase 1: Prepare computer results structure
     try {
-      // First create entries for all computers
-      for (const fileRule of syncPlan.resolvedFileRules) {
-        for (const computerId of fileRule.computers) {
-          // Create computer if it doesn't exist yet
-          if (!allComputerIds.has(computerId)) {
-            allComputerIds.add(computerId)
-
-            // Check if this is a missing computer
-            const isExisting = availableComputerIds.has(computerId)
-
-            computerResults.push({
-              computerId,
-              exists: isExisting,
-              files: [],
-              successCount: 0,
-              failureCount: 0,
-            })
-          }
-
-          // Get the pre-made computerResult entry
-          const computerResult = computerResults.find(
-            (cr) => cr.computerId === computerId
-          )
-
-          if (!computerResult) {
-            // This is a programming error -- we just created this entry
-            this.invalidateCache(
-              "Missing a pre-made computer result for a synced computer"
-            )
-            return failure([
-              AppError.fatal(
-                `Computer result not found for ID: ${computerId}`,
-                "performSync"
-              ),
-            ])
-          }
-          // Prepare target path based on target type
-          const targetPath = resolveTargetPath(fileRule)
-
-          // Add file entry with explicit type information
-          computerResult.files.push({
-            targetPath,
-            sourcePath: fileRule.sourceAbsolutePath,
-            success: false, // Mark all as unsuccessful initially
-          })
-          totalAttemptedFiles++
-        }
-      }
-    } catch (error: unknown) {
-      // Catch any unexpected errors in preparation phase
-      const fatalError = AppError.fatal(
-        `Unexpected error preparing sync: ${getErrorMessage(error)}`,
-        "performSync",
-        error
-      )
-      this.log.fatal(
-        { error: fatalError },
-        "Fatal error during sync preparation"
-      )
-
-      return failure([fatalError])
-    }
-
-    // Phase 2: Execute file copy operations for each computer
-
-    /**
-     * Execute the actual sync operation for each available computer:
-     * 1. Copy the files to each computer according to resolved rules
-     * 2. Track successful and failed file transfers
-     * 3. Update UI with results for each computer
-     * 4. Aggregate results to determine overall sync status
-     *
-     * This is the core synchronization process where file transfers actually occur
-     * and success/failure is determined for the operation.
-     */
-    for (const computer of syncPlan.availableComputers) {
-      // Find this computer's result object
-      const computerResult = computerResults.find(
-        (cr) => cr.computerId === computer.id
-      )
-
-      if (!computerResult) continue // Should never happen
-
-      // Copy files to this computer
-      const syncToComputerResult = await this.syncToComputer(
-        computer,
-        syncPlan.resolvedFileRules
-      )
-
-      // If a failure occured during syncToComputer, exit early. This may limit corrupted/bad copiedFiles
-      // to other computers
-      if (isFailure(syncToComputerResult)) {
-        this.log.error(
-          { computer },
-          `performSync aborted early due to syncToComputer failure`
+      // Process each available computer
+      for (const computer of syncPlan.availableComputers) {
+        const syncResult = await this.syncToComputer(
+          computer,
+          syncPlan.resolvedFileRules
         )
-        return failure(syncToComputerResult.errors)
-      }
-      // Process the result value - we know it exists in both OK and PARTIAL cases
-      const { copiedFiles, skippedFiles } = syncToComputerResult.value
 
-      // If syncToComputerResult was PARTIALLY successful, then consolidate these non-fatal errors into current errors array
-      if (isPartial(syncToComputerResult)) {
-        // log the partial success
-        const syncToComputerErrors = syncToComputerResult.errors.map(
-          (e) => e.message
-        )
-        this.log.warn(
-          { errors: syncToComputerErrors },
-          `Completed sync (with errors) with computer ID ${syncToComputerResult.value.computerId}`
-        )
-        errors.push(
-          new AppError(
-            `Error copying files to computer ID ${syncToComputerResult.value.computerId}`,
-            ErrorSeverity.ERROR,
-            "performSync",
-            undefined,
-            `There was an error encountered when copying files to computer ID ${syncToComputerResult.value.computerId}`,
-            { computer: computer.id, errors: syncToComputerErrors }
-          )
-        )
-      } else {
-        // Log successful sync
-        this.log.debug(
-          {
-            copiedFiles,
-            skippedFiles,
+        syncResult.match(
+          (computerSyncSummary) => {
+            computerResults.push(computerSyncSummary)
           },
-          `Completed sync with computer ID ${syncToComputerResult.value.computerId}`
-        )
-      }
-
-      // Now that syncing is finished, we process the results
-
-      // Update success status for copied files
-      for (const filePath of copiedFiles) {
-        // Process ALL rules that match this file
-        const matchingRules = syncPlan.resolvedFileRules.filter(
-          (rule) =>
-            rule.sourceAbsolutePath === filePath &&
-            rule.computers.includes(computer.id)
-        )
-
-        for (const rule of matchingRules) {
-          const targetPath = resolveTargetPath(rule)
-
-          // Find and update the file entry
-          const fileEntries = computerResult.files.filter(
-            (f) => f.targetPath === targetPath && f.sourcePath === filePath
-          )
-
-          for (const fileEntry of fileEntries) {
-            fileEntry.success = true
-            computerResult.successCount++
+          (error) => {
+            // Log the error but continue with other computers
+            errors.push(error)
+            this.log.error(
+              { computer: computer.id, error },
+              `Failed to sync computer ${computer.id}`
+            )
           }
-        }
+        )
       }
 
-      // Handle skipped files
-      if (skippedFiles.length > 0) {
-        warningCount++
-        // Update computer failure count
-        computerResult.failureCount += skippedFiles.length
+      // Add entries for missing computers
+      for (const computerId of syncPlan.missingComputerIds) {
+        computerResults.push(createComputerSyncSummary(computerId, false))
       }
 
-      // Update final computer success/failure counts
-      computerResult.successCount = computerResult.files.filter(
-        (f) => f.success
-      ).length
-      computerResult.failureCount =
-        computerResult.files.length - computerResult.successCount
-    } // end loop that syncs each computer
+      // Create the final operation summary
+      const operationSummary = createSyncOperationSummary(
+        computerResults,
+        errors
+      )
 
-    // Phase 3: Build final result with appropriate status
+      // Update UI with the results
+      this.updateUIWithResults(operationSummary)
 
-    // Calculate summary statistics
-    const summary = {
-      totalFiles: totalAttemptedFiles,
-      successfulFiles: computerResults.reduce(
-        (sum, cr) => sum + cr.successCount,
-        0
-      ),
-      failedFiles: computerResults.reduce(
-        (sum, cr) => sum + cr.failureCount,
-        0
-      ),
-      totalComputers: allComputerIds.size,
-      fullySuccessfulComputers: computerResults.filter(
-        (cr) => cr.exists && cr.files.length > 0 && cr.failureCount === 0
-      ).length,
-      partiallySuccessfulComputers: computerResults.filter(
-        (cr) => cr.exists && cr.successCount > 0 && cr.failureCount > 0
-      ).length,
-      failedComputers: computerResults.filter(
-        (cr) => cr.exists && cr.files.length > 0 && cr.successCount === 0
-      ).length,
-      missingComputers: syncPlan.missingComputerIds.length,
-    } as SyncOperationResult["summary"]
-
-    // Determine overall operation status (for UI purposes)
-    // The SyncStatus is determined so that the UI can be updated according to how well the sync went.
-    // This is different than the return type (Result) of this overall function which is more of a programmatic concern
-    let status = SyncStatus.SUCCESS
-
-    if (summary.totalFiles === 0) {
-      status = SyncStatus.WARNING
-    } else if (summary.successfulFiles === 0 && summary.failedFiles > 0) {
-      status = SyncStatus.ERROR
-    } else if (summary.failedFiles > 0) {
-      status = SyncStatus.PARTIAL
-    } else if (warningCount > 0 || summary.missingComputers > 0) {
-      status = SyncStatus.WARNING
+      return ok(operationSummary)
+    } catch (error) {
+      // Only catastrophic errors that prevent the entire operation return Err
+      return err(
+        AppError.fatal(
+          `Fatal error during sync operation: ${getErrorMessage(error)}`,
+          "SyncManager.performSyncNew",
+          error
+        )
+      )
     }
-    // Log completion info
-    this.log.info(
-      {
-        totalFiles: totalAttemptedFiles,
-        totalComputers: allComputerIds.size,
-        successfulFiles: summary.successfulFiles,
-        status,
-      },
-      "performSync completed"
-    )
+  }
 
-    // Create an appropriate result object
-    const operationResult = {
-      status,
-      timestamp: Date.now(),
-      summary,
-      computerResults,
-    }
+  private updateUIWithResults(summary: SyncOperationSummary): void {
+    // Display errors in UI
+    summary.errors.forEach((error) => {
+      this.ui.addMessage(UIMessageType.ERROR, error.getDisplayMessage())
+    })
 
-    // Update UI with messages first, then the operation result
-    if (errors.length > 0) {
-      // Display error messages in UI
-      errors.forEach((error) => {
-        this.ui.addMessage(UIMessageType.ERROR, error.getDisplayMessage())
-      })
-      this.invalidateCache("Errors in sync result")
-    }
-
-    // Handle warnings for skipped files in UI
-    if (summary.failedFiles > 0) {
+    // Handle warnings for failed files
+    if (summary.summary.failedFiles > 0) {
       this.ui.addMessage(
         UIMessageType.WARNING,
-        `${summary.failedFiles} ${pluralize("file")(summary.failedFiles)} could not be synced`
+        `${summary.summary.failedFiles} ${pluralize("file")(summary.summary.failedFiles)} could not be synced`
       )
     }
 
-    // Handle missing computers in UI
-    if (summary.missingComputers > 0) {
-      const missingIds = syncPlan.missingComputerIds.join(", ")
+    // Handle missing computers
+    if (summary.summary.missingComputers > 0) {
+      const missingIds = summary.computerResults
+        .filter((cr) => !cr.exists)
+        .map((cr) => cr.computerId)
+        .join(", ")
+
       this.ui.addMessage(
         UIMessageType.WARNING,
         `Missing computers: ${missingIds}`
@@ -901,31 +640,12 @@ export class SyncManager {
 
     // Update UI with final results
     this.ui.updateOperationStats({
-      totalFiles: totalAttemptedFiles,
-      totalComputers: allComputerIds.size,
+      totalFiles: summary.summary.totalFiles,
+      totalComputers: summary.summary.totalComputers,
     })
-    this.ui.updateComputerResults(computerResults)
 
-    this.ui.completeOperation(operationResult)
-
-    // Return appropriate result type based on status
-    if (status === SyncStatus.ERROR) {
-      return failure(
-        errors.length > 0
-          ? errors
-          : [
-              new AppError(
-                "Sync operation failed unexpectedly",
-                ErrorSeverity.ERROR,
-                "SyncManager.performSync"
-              ),
-            ]
-      )
-    } else if (status === SyncStatus.PARTIAL || status === SyncStatus.WARNING) {
-      return partial(operationResult, errors)
-    } else {
-      return ok(operationResult)
-    }
+    // Convert to the current UI format for backwards compatibility
+    this.ui.completeOperation(summary)
   }
 
   initManualMode(): {
@@ -1155,15 +875,14 @@ abstract class BaseController<T extends BaseControllerEvents> {
    * Creates a basic error operation result from an error message
    */
   protected createErrorOperationResult(
-    errorMessage: string,
+    errors: AppError[],
     missingComputerIds: string[] = []
-  ): SyncOperationResult {
+  ): SyncOperationSummary {
     return {
-      status: SyncStatus.ERROR,
       timestamp: Date.now(),
       summary: {
         totalFiles: 0,
-        successfulFiles: 0,
+        succeededFiles: 0,
         failedFiles: 0,
         totalComputers: 0,
         fullySuccessfulComputers: 0,
@@ -1172,7 +891,9 @@ abstract class BaseController<T extends BaseControllerEvents> {
         missingComputers: missingComputerIds.length,
       },
       computerResults: [],
-      errors: [errorMessage],
+      allSucceeded: false,
+      anySucceeded: false,
+      errors,
     }
   }
 
@@ -1217,26 +938,29 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
       while (this.syncManager.getState() === SyncManagerState.RUNNING) {
         const syncResult = await this.performSyncCycle()
 
-        if (!isOk(syncResult)) {
-          if (isFailure(syncResult)) {
-            // Check if any error is fatal
-            const fatalErrors = syncResult.errors.filter(
-              (error) => error.severity === ErrorSeverity.FATAL
-            )
-            if (fatalErrors.length > 0) {
-              // Stop on fatal errors
+        // Use match() for more elegant error handling
+        await syncResult.match(
+          // Success case
+          () => {
+            this.ui?.setReady()
+            return this.waitForUserInput()
+          },
+
+          // Error case
+          (error) => {
+            // Stop on fatal errors
+            if (error.severity === ErrorSeverity.FATAL) {
               throw AppError.fatal(
                 "Fatal error caused run to stop",
                 "ManualModeController.run",
-                fatalErrors[0]
+                error
               )
             }
+            // For non-fatal errors, continue
+            this.ui?.setReady()
+            return this.waitForUserInput()
           }
-        }
-
-        this.ui?.setReady()
-
-        await this.waitForUserInput()
+        )
       }
     } catch (error) {
       const fatalAppError = AppError.from(error, {
@@ -1271,12 +995,17 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
     this.log.trace("ManualController specific cleanup complete.")
   }
 
-  public async performSyncCycle(): Promise<Result<void>> {
+  /**
+   * ManualModeController's performSyncCycle
+   */
+  public async performSyncCycle(): Promise<Result<void, AppError>> {
     if (this.syncManager.getState() !== SyncManagerState.RUNNING) {
       // throw this, a programming error
-      throw AppError.error(
-        "Cannot perform sync when not in RUNNING state",
-        "ManualModeController.performSyncCycle"
+      return err(
+        AppError.error(
+          "Cannot perform sync when not in RUNNING state",
+          "ManualModeController.performSyncCycleNew"
+        )
       )
     }
 
@@ -1298,71 +1027,52 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
 
       // Check if the plan has critical issues
       if (!syncPlan.isValid) {
-        // Create an AppError and emit it
-        const errorMessage = getSyncPlanErrorMessage(syncPlan)
-
-        const syncPlanError = AppError.error(
-          "Sync plan creation failed: " + errorMessage,
-          "ManualModeController.createSyncPlan"
+        // Handle invalid sync plan
+        return err(
+          AppError.error(
+            "Sync plan creation failed: " + getSyncPlanErrorMessage(syncPlan),
+            "ManualModeController.createSyncPlan"
+          )
         )
-
-        this.log.error({ error: syncPlanError })
-
-        // Update UI
-        const errorResult = this.createErrorOperationResult(
-          errorMessage,
-          syncPlan.missingComputerIds
-        )
-        this.ui?.completeOperation(errorResult)
-
-        // Stop here, don't proceed with sync
-        return failure([syncPlanError])
       }
 
       // Step 2: Perform the actual sync
       const performSyncResult = await this.syncManager.performSync(syncPlan)
 
-      if (!isOk(performSyncResult)) {
-        const errors = performSyncResult.errors
-        if (isFailure(performSyncResult)) {
-          // Handle failed performSync
-          // Create a minimal error result to emit for consistency
-          const errorResult = this.createErrorOperationResult(
-            "Sync failed: " +
-              performSyncResult.errors.map((e) => e.message).join(", "),
-            syncPlan.missingComputerIds
-          )
+      return performSyncResult.match(
+        (operationSummary) => {
+          // Success case - emit event with the result
+          this.emit(SyncEvent.SYNC_COMPLETE, operationSummary)
+          return ok(undefined)
+        },
+        (error) => {
+          // Fatal error case
+          this.log.fatal({ error }, "Fatal error during sync operation")
+
+          // Create an error result for UI
+          const errorResult = this.createErrorOperationResult([error], [])
+
           this.emit(SyncEvent.SYNC_COMPLETE, errorResult)
-          return failure(errors)
-        } else {
-          // Handle the partial sync
-          this.emit(SyncEvent.SYNC_COMPLETE, performSyncResult.value)
-          return partialVoid(errors)
+          return err(error)
         }
-      } else {
-        // Handle the successful performSync
-        this.emit(SyncEvent.SYNC_COMPLETE, performSyncResult.value)
-        return okVoid()
-      }
+      )
     } catch (error) {
-      const fatalAppError = AppError.from(error, {
+      // Handle unexpected errors
+      const fatalError = AppError.from(error, {
         severity: ErrorSeverity.FATAL,
-        source: "ManualModeController.performSyncCycle",
+        source: "ManualModeController.performSyncCycleNew",
       })
-      // Log the fatal error
+
       this.log.fatal(
-        { error: fatalAppError },
+        { error: fatalError },
         "Unexpected fatal error during sync cycle"
       )
 
       // Create error operation result for UI
-      const errorResult = this.createErrorOperationResult(
-        "Sync failed with unexpected error: " + fatalAppError.message,
-        []
-      )
-      this.emit(SyncEvent.SYNC_COMPLETE, errorResult)
+      const errorResult = this.createErrorOperationResult([fatalError], [])
 
-      return failure([fatalAppError])
+      this.emit(SyncEvent.SYNC_COMPLETE, errorResult)
+      return err(fatalError)
     } finally {
       // Performance tracking
       const endTime = process.hrtime.bigint()
@@ -1516,24 +1226,29 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       // Peform initial sync
       const initialSyncResult = await this.performSyncCycle()
 
-      if (!isOk(initialSyncResult)) {
-        if (isFailure(initialSyncResult)) {
-          // Check if any error is fatal
-          const fatalErrors = initialSyncResult.errors.filter(
-            (error) => error.severity === ErrorSeverity.FATAL
-          )
-          if (fatalErrors.length > 0) {
-            // Stop on fatal errors
+      // Handle the initial sync result
+      await initialSyncResult.match(
+        // Success case
+        () => {
+          this.ui?.setReady()
+          return Promise.resolve()
+        },
+
+        // Error case
+        (error) => {
+          // Stop on fatal errors
+          if (error.severity === ErrorSeverity.FATAL) {
             throw AppError.fatal(
               "Fatal error caused run to stop",
               "WatchModeController.run",
-              fatalErrors[0]
+              error
             )
           }
+          // For non-fatal errors, allow continuing
+          this.ui?.setReady()
+          return Promise.resolve()
         }
-      }
-
-      this.ui?.setReady()
+      )
 
       // Keep running until state changes
       while (this.syncManager.getState() === SyncManagerState.RUNNING) {
@@ -1597,12 +1312,17 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     this.log.trace("WatchController specific cleanup complete.")
   }
 
-  private async performSyncCycle(): Promise<Result<void>> {
+  /**
+   * WatchModeController's performSyncCycle
+   */
+  private async performSyncCycle(): Promise<Result<void, AppError>> {
     // Throw exception here as this is unexpected bad state
     if (this.syncManager.getState() !== SyncManagerState.RUNNING) {
-      throw AppError.error(
-        "Cannot perform sync when not in RUNNING state",
-        "WatchModeController.performSyncCycle"
+      return err(
+        AppError.error(
+          "Cannot perform sync when not in RUNNING state",
+          "WatchModeController.performSyncCycleNew"
+        )
       )
     }
 
@@ -1662,11 +1382,12 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
         this.log.error({ error: syncPlanError })
 
         const errorResult = this.createErrorOperationResult(
-          errorMessage,
+          [syncPlanError],
           syncPlan.missingComputerIds
         )
 
         this.ui?.completeOperation(errorResult)
+
         // Emit the sync complete event with the error result
         if (this.isInitialSync) {
           this.isInitialSync = false
@@ -1676,75 +1397,63 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
         }
 
         // Stop here, don't proceed with sync
-        return failure([syncPlanError])
+        return err(syncPlanError)
       }
 
       // Step 2: Perform the actual sync
       const performSyncResult = await this.syncManager.performSync(syncPlan)
 
-      //*watch mode specific - must deal with initial vs subsequent syncs
-      const emitSyncCompleteEvent = (result: Result<SyncOperationResult>) => {
-        // Store the initial state before changing it
-        const wasInitialSync = this.isInitialSync
-        // We always emit appropriate event regardless of success/failure
-        if (this.isInitialSync) {
-          this.isInitialSync = false
-          if (isOk(result) || isPartial(result)) {
-            this.emit(SyncEvent.INITIAL_SYNC_COMPLETE, result.value)
+      // Extract current initial sync state before changing it
+      const wasInitialSync = this.isInitialSync
+
+      return performSyncResult.match(
+        (operationSummary) => {
+          // Success case - emit appropriate event
+          if (wasInitialSync) {
+            this.isInitialSync = false
+            this.emit(SyncEvent.INITIAL_SYNC_COMPLETE, operationSummary)
           } else {
-            // Create an error result to emit for failures
-            const errorResult = this.createErrorOperationResult(
-              "Initial sync failed: " +
-                result.errors.map((e) => e.message).join(", "),
-              syncPlan.missingComputerIds
-            )
-            this.emit(SyncEvent.INITIAL_SYNC_COMPLETE, errorResult)
+            this.emit(SyncEvent.SYNC_COMPLETE, operationSummary)
           }
-        } else {
-          if (isOk(result) || isPartial(result)) {
-            this.emit(SyncEvent.SYNC_COMPLETE, result.value)
+
+          // Clear active changes since we've processed them
+          this.activeChanges.clear()
+
+          // Log success
+          this.log.debug(`${wasInitialSync ? "Initial " : ""}Sync Complete.`)
+
+          // Set back to ready state after operation completes
+          this.ui?.setReady()
+
+          return ok(undefined)
+        },
+        (error) => {
+          // Fatal error case
+          this.log.fatal({ error }, "Fatal error during sync operation")
+
+          // Create an error result for UI
+          const errorResult = this.createErrorOperationResult(
+            [error],
+            syncPlan.missingComputerIds
+          )
+
+          // Emit appropriate event based on initial sync state
+          if (wasInitialSync) {
+            this.isInitialSync = false
+            this.emit(SyncEvent.INITIAL_SYNC_COMPLETE, errorResult)
           } else {
-            // Create an error result to emit for failures
-            const errorResult = this.createErrorOperationResult(
-              "Sync failed: " + result.errors.map((e) => e.message).join(", "),
-              syncPlan.missingComputerIds
-            )
             this.emit(SyncEvent.SYNC_COMPLETE, errorResult)
           }
+
+          this.ui?.setReady()
+
+          return err(error)
         }
-
-        this.log.debug(`${wasInitialSync ? "Initial " : ""}Sync Complete.`)
-
-        // Set back to ready state after operation completes
-        this.ui?.setReady()
-      }
-
-      // Process the result
-      if (!isOk(performSyncResult)) {
-        const errors = performSyncResult.errors
-
-        // Always emit sync complete event
-        emitSyncCompleteEvent(performSyncResult)
-
-        if (isFailure(performSyncResult)) {
-          // Handle failed performSync
-          return failure(errors)
-        } else {
-          // Handle the partial sync
-          // TODO: should we clear changes here?
-          this.activeChanges.clear()
-          return partialVoid(errors)
-        }
-      } else {
-        // Handle the successful performSync
-        emitSyncCompleteEvent(performSyncResult)
-        this.activeChanges.clear()
-        return okVoid()
-      }
+      )
     } catch (error) {
       const fatalAppError = AppError.from(error, {
         severity: ErrorSeverity.FATAL,
-        source: "WatchModeController.performSyncCycle",
+        source: "WatchModeController.performSyncCycleNew",
       })
 
       // Log the fatal error
@@ -1754,18 +1463,17 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       )
 
       // Create error operation result for UI
-      const errorResult = this.createErrorOperationResult(
-        "Sync failed with unhandled error: " + fatalAppError.message,
-        []
-      )
+      const errorResult = this.createErrorOperationResult([fatalAppError], [])
 
+      // Set initial sync state and emit appropriate event
       if (this.isInitialSync) {
         this.isInitialSync = false
         this.emit(SyncEvent.INITIAL_SYNC_COMPLETE, errorResult)
       } else {
         this.emit(SyncEvent.SYNC_COMPLETE, errorResult)
       }
-      return failure([fatalAppError])
+
+      return err(fatalAppError)
     } finally {
       // Performance tracking
       const endTime = process.hrtime.bigint()
@@ -1894,13 +1602,11 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
    * triggering a sync operation. Handles race conditions by ensuring changes
    * that occur during sync are captured for the next sync cycle.
    *
-   * @returns Promise that resolves when the sync is complete
-   * @throws AppError if the sync operation fails
    */
-  private async processPendingChanges(): Promise<void> {
+  private processPendingChanges(): ResultAsync<void, AppError> {
     // Safety check - only proceed if we have changes
     if (this.pendingChanges.size === 0) {
-      return
+      return okAsync(undefined)
     }
 
     this.onChangeSyncInProgress = true
@@ -1915,68 +1621,76 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       "Processing changes"
     )
 
-    try {
-      // Execute sync with current set of changes
-      const syncResult = await this.performSyncCycle()
+    // Wrap the try/catch/finally in ResultAsync
+    return ResultAsync.fromPromise(
+      (async () => {
+        try {
+          // Execute sync with current set of changes
+          const syncResult = await this.performSyncCycle()
 
-      if (!isOk(syncResult)) {
-        if (isFailure(syncResult)) {
-          // Check if any error is fatal
-          const fatalErrors = syncResult.errors.filter(
-            (error) => error.severity === ErrorSeverity.FATAL
+          return syncResult.match(
+            // Success case - nothing special to do
+            () => undefined,
+
+            // Error case - rethrow fatal errors to be caught by the fromPromise wrapper
+            (error) => {
+              if (error.severity === ErrorSeverity.FATAL) {
+                this.log.fatal(
+                  { error },
+                  "Fatal error during processPendingChanges in watch mode sync"
+                )
+                throw error // This will be caught by fromPromise
+              }
+
+              // For non-fatal errors, log them but consider the operation "ok"
+              this.log.error(
+                { error },
+                `Error during processPendingChanges in watch mode sync: ${error.message}`
+              )
+              return undefined
+            }
           )
-          if (fatalErrors.length > 0) {
-            this.log.fatal(
-              { error: fatalErrors[0] },
-              "Fatal error during processPendingChanges in watch mode sync"
+        } finally {
+          this.onChangeSyncInProgress = false
+          this.activeChanges.clear()
+
+          // Process any changes that accumulated during sync
+          if (this.pendingChanges.size > 0) {
+            this.log.info(
+              { pendingChangeCount: this.pendingChanges.size },
+              "Additional changes detected during sync, processing"
             )
-            // Stop on fatal errors
-            throw AppError.fatal(
-              "Fatal error caused run to stop",
-              "WatchModeController.run",
-              fatalErrors[0]
-            )
+
+            // Schedule processing of new changes
+            this.onChangeSyncDebounceTimer = setTimeout(() => {
+              this.onChangeSyncDebounceTimer = null
+
+              // Process pending changes and properly handle the ResultAsync
+              // eslint-disable-next-line no-void
+              void this.processPendingChanges().match(
+                // Success case - do nothing
+                () => {},
+
+                // Error case - log the error
+                (err) => {
+                  this.log.error(
+                    { error: err },
+                    "Error processing subsequent changes"
+                  )
+                }
+              )
+            }, PROCESS_CHANGES_DELAY)
           }
         }
-        // For non-fatal failures, just log them
-        syncResult.errors.forEach((error) => {
-          this.log.error(
-            { error },
-            `Error during processPendingChanges in watch mode sync: ${error.message}`
-          )
+      })(),
+      (error: unknown) => {
+        // Convert any unhandled errors to AppError
+        return AppError.from(error, {
+          severity: ErrorSeverity.FATAL,
+          source: "WatchModeController.processPendingChangesNew",
         })
       }
-    } catch (error) {
-      const appError = AppError.from(error, {
-        severity: ErrorSeverity.FATAL,
-        source: "WatchModeController.run",
-      })
-      this.log.fatal(
-        { error: appError },
-        "Unexpected error processing file changes in watch mode sync"
-      )
-      throw appError
-    } finally {
-      this.onChangeSyncInProgress = false
-      this.activeChanges.clear()
-
-      // Process any changes that accumulated during sync
-      if (this.pendingChanges.size > 0) {
-        this.log.info(
-          { pendingChangeCount: this.pendingChanges.size },
-          "Additional changes detected during sync, processing"
-        )
-
-        // Schedule processing of new changes
-        this.onChangeSyncDebounceTimer = setTimeout(() => {
-          this.onChangeSyncDebounceTimer = null
-          // eslint-disable-next-line n/handle-callback-err
-          this.processPendingChanges().catch((error: unknown) => {
-            // TODO: Need to handle this
-          })
-        }, PROCESS_CHANGES_DELAY)
-      }
-    }
+    )
   }
 
   /**
@@ -1990,7 +1704,12 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
     this.log.info({ changedPath }, `watchController watcher detected change`)
 
     if (this.syncManager.getState() !== SyncManagerState.RUNNING) {
-      return
+      return err(
+        AppError.fatal(
+          "Cannot perform sync when not in RUNNING state",
+          "WatchModeController.performSyncCycleNew"
+        )
+      )
     }
 
     // check if we are no longer watching files from the original and add warning messages to the UI
@@ -2016,7 +1735,28 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       this.onChangeSyncDebounceTimer = setTimeout(() => {
         this.onChangeSyncDebounceTimer = null
         // eslint-disable-next-line no-void
-        void this.processPendingChanges()
+        void this.processPendingChanges().match(
+          // Success case - nothing to do
+          () => {},
+
+          // Error case - handle appropriately
+          (error) => {
+            if (error.severity === ErrorSeverity.FATAL) {
+              this.log.fatal({ error }, "Fatal error in processPendingChanges")
+
+              // Attempt to stop the watcher
+              this.syncManager.stop().catch((stopErr: unknown) => {
+                this.log.error(
+                  { error: stopErr },
+                  "Error stopping after fatal error"
+                )
+              })
+            } else {
+              // Log non-fatal errors but continue
+              this.log.error({ error }, "Error in processPendingChanges")
+            }
+          }
+        )
       }, PROCESS_CHANGES_DELAY)
     }
   }
@@ -2110,7 +1850,8 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
       //   console.debug(ev, path)
       // })
 
-      // TODO: should this just swallow the errors here??
+      // TODO: should this just swallow the errors here?? Probably
+      // need to call syncManager.stop()
       this.watcher.on("error", (error) => {
         const watcherError = AppError.fatal(
           `File watcher error: ${getErrorMessage(error)}`,

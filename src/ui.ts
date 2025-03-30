@@ -1,18 +1,14 @@
 import { setInterval, clearInterval, setTimeout } from "node:timers"
 
 import logUpdate from "log-update"
-import {
-  SyncMode,
-  SyncStatus,
-  type ComputerSyncResult,
-  type SyncOperationResult,
-} from "./types"
+import { SyncMode } from "./types"
 import boxen from "boxen"
 import { pluralize } from "./utils"
 import stripAnsi from "strip-ansi"
 import { getLogger } from "./log"
 import { type Logger } from "pino"
 import { symbols, theme } from "./theme"
+import type { ComputerSyncSummary, SyncOperationSummary } from "./results"
 
 export enum UIStatus {
   /**
@@ -58,9 +54,9 @@ export interface OperationStats {
 interface UIState {
   mode: SyncMode | null
   status: UIStatus
-  operationResult: SyncOperationResult | null
+  operationResult: SyncOperationSummary | null
   operationsStats: OperationStats
-  computerResults: ComputerSyncResult[]
+  computerResults: ComputerSyncSummary[]
   lastUpdated: Date
   messages: UIMessage[]
   /**
@@ -283,7 +279,7 @@ export class UI {
   }
 
   // Complete an operation and log results
-  completeOperation(result: SyncOperationResult): void {
+  completeOperation(result: SyncOperationSummary): void {
     // First clear any dynamic content
     logUpdate.clear()
 
@@ -316,9 +312,9 @@ export class UI {
     // Write the new output with colors
     process.stdout.write(currentOutput)
 
-    this.log.debug(
-      `UI received a 'completedOperation: ${result.status.toUpperCase()}`
-    )
+    // this.log.debug(
+    //   `UI received a 'completedOperation: ${result..toUpperCase()}`
+    // )
 
     this.clearMessages()
 
@@ -367,7 +363,7 @@ export class UI {
     }
   }
 
-  updateComputerResults(computerResults: ComputerSyncResult[]): void {
+  updateComputerResults(computerResults: ComputerSyncSummary[]): void {
     this.updateState({
       computerResults,
       lastUpdated: new Date(),
@@ -410,11 +406,10 @@ export class UI {
 
     let result = ""
 
-    if (
-      this.state.operationResult?.status === SyncStatus.SUCCESS &&
-      this.state.messages.every((m) => m.type === UIMessageType.INFO)
-    ) {
-      result = theme.success("Success.")
+    if (this.state.operationResult?.allSucceeded) {
+      result = theme.success("Completed.")
+    } else if (this.state.operationResult?.anySucceeded) {
+      result = theme.warning("Completed with warnings.")
     }
 
     return theme.bold(
@@ -453,12 +448,12 @@ export class UI {
       if (!computer.exists) {
         statusIcon = symbols.cross
         statusColor = theme.error
-      } else if (computer.files.length === 0) {
+      } else if (computer.fileResults.length === 0) {
         statusIcon = symbols.warning
         statusColor = theme.warning
       } else {
-        const allSuccess = computer.files.every((f) => f.success)
-        const anySuccess = computer.files.some((f) => f.success)
+        const allSuccess = computer.allSucceeded
+        const anySuccess = computer.anySucceeded
 
         if (allSuccess) {
           statusIcon = symbols.check
@@ -476,20 +471,20 @@ export class UI {
       let computerOutput = `  ${statusColor(statusIcon)} Computer ${computer.computerId}: `
 
       // Summarize success/fail counts
-      const successCount = computer.files.filter((f) => f.success).length
-      const totalCount = computer.files.length
+      const successCount = computer.successCount
+      const totalCount = computer.successCount + computer.failureCount
       computerOutput += theme.dim(`(${successCount}/${totalCount}) `)
 
       if (!computer.exists) {
         return computerOutput + theme.warning("Missing computer")
       }
 
-      if (computer.files.length === 0) {
-        return computerOutput + theme.dim("No files synced")
+      if (computer.successCount === 0) {
+        return computerOutput + theme.dim("No files were synced")
       }
 
       // Format file targets on same line
-      const fileTargets = computer.files.map((file) => {
+      const fileTargets = computer.fileResults.map((file) => {
         const fileIcon = file.success ? symbols.check : symbols.cross
         const iconColor = file.success ? theme.success : theme.error
 

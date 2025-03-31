@@ -10,6 +10,7 @@ import {
   type ResolvedFileRule,
   SyncMode,
   type BaseControllerEvents,
+  SyncStatus,
 } from "./types"
 import {
   validateMinecraftSave,
@@ -52,6 +53,7 @@ import {
   createSyncOperationSummary,
   type ComputerSyncSummary,
   type SyncOperationSummary,
+  type SyncWarning,
 } from "./results"
 
 export enum SyncManagerState {
@@ -561,6 +563,13 @@ export class SyncManager {
     const computerResults: ComputerSyncSummary[] = []
     const errors: AppError[] = []
 
+    const warnings: SyncWarning[] = syncPlan.issues
+      .filter((issue) => issue.severity === SyncPlanIssueSeverity.WARNING)
+      .map((issue) => ({
+        message: issue.message,
+        suggestion: issue.suggestion,
+      }))
+
     try {
       // Process each available computer
       for (const computer of syncPlan.availableComputers) {
@@ -589,10 +598,35 @@ export class SyncManager {
         computerResults.push(createComputerSyncSummary(computerId, false))
       }
 
+      // Determine status based on results
+      let status: SyncStatus
+
+      // Check for warnings first - they take precedence over pure success
+      if (warnings.length > 0 || syncPlan.missingComputerIds.length > 0) {
+        status = SyncStatus.WARNING
+      }
+      // Then check if all files succeeded
+      else if (
+        computerResults.every((comp) => comp.failureCount === 0) &&
+        errors.length === 0
+      ) {
+        status = SyncStatus.SUCCESS
+      }
+      // Check for partial success
+      else if (computerResults.some((comp) => comp.successCount > 0)) {
+        status = SyncStatus.PARTIAL
+      }
+      // No success at all
+      else {
+        status = SyncStatus.ERROR
+      }
+
       // Create the final operation summary
       const operationSummary = createSyncOperationSummary(
+        status,
         computerResults,
-        errors
+        errors,
+        warnings
       )
 
       // Update UI with the results
@@ -880,6 +914,7 @@ abstract class BaseController<T extends BaseControllerEvents> {
   ): SyncOperationSummary {
     return {
       timestamp: Date.now(),
+      status: SyncStatus.ERROR,
       summary: {
         totalFiles: 0,
         succeededFiles: 0,
@@ -894,6 +929,7 @@ abstract class BaseController<T extends BaseControllerEvents> {
       allSucceeded: false,
       anySucceeded: false,
       errors,
+      warnings: [],
     }
   }
 

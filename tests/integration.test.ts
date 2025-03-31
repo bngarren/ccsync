@@ -40,7 +40,8 @@ import {
 import { getLogger } from "../src/log"
 import * as p from "@clack/prompts"
 import {
-  getSyncOperationStatus,
+  type ComputerSyncSummary,
+  type FileSyncResult,
   type SyncOperationSummary,
 } from "../src/results"
 import { testLog } from "./setup"
@@ -120,7 +121,7 @@ describe("Integration: SyncManager", () => {
         start
       )
 
-      expect(getSyncOperationStatus(syncResult)).toBe(SyncStatus.SUCCESS)
+      expect(syncResult.status).toBe(SyncStatus.SUCCESS)
 
       // Verify timestamp is recent
       expect(typeof syncResult.timestamp).toBe("number")
@@ -133,18 +134,30 @@ describe("Integration: SyncManager", () => {
         exists: true,
         successCount: 1,
         failureCount: 0,
-      })
+        allSucceeded: true,
+      } as ComputerSyncSummary)
+      expect(syncResult.computerResults[0].errors).toHaveLength(0)
 
       // Verify file level details
       const fileResult = syncResult.computerResults[0].fileResults[0]
       expect(fileResult).toMatchObject({
         targetPath: "/program.lua",
         success: true,
-      })
+        error: undefined,
+      } as FileSyncResult)
       expect(fileResult.sourcePath).toContain("program.lua")
 
-      expect(syncResult.summary.succeededFiles).toBe(1)
-      expect(syncResult.summary.fullySuccessfulComputers).toBe(1)
+      // Verify summary object
+      expect(syncResult.summary).toMatchObject({
+        totalFiles: 1,
+        succeededFiles: 1,
+        failedFiles: 0,
+        totalComputers: 1,
+        fullySuccessfulComputers: 1,
+        partiallySuccessfulComputers: 0,
+        failedComputers: 0,
+        missingComputers: 0,
+      } as SyncOperationSummary["summary"])
 
       // Verify actual files
       const targetFile = path.join(computersDir, "1", "program.lua")
@@ -194,7 +207,7 @@ describe("Integration: SyncManager", () => {
         )
 
       // Verify initial sync results
-      expect(getSyncOperationStatus(initialSyncResult)).toBe(SyncStatus.SUCCESS)
+      expect(initialSyncResult.status).toBe(SyncStatus.SUCCESS)
       expect(initialSyncResult.summary).toMatchObject({
         totalFiles: 2, // Number of rule matching files (1 file to 2 computers)
         succeededFiles: 2,
@@ -205,9 +218,6 @@ describe("Integration: SyncManager", () => {
         failedComputers: 0,
         missingComputers: 0,
       })
-      expect(initialSyncResult.summary.fullySuccessfulComputers).toBe(2)
-      expect(initialSyncResult.summary.failedComputers).toBe(0)
-      expect(initialSyncResult.summary.missingComputers).toBe(0)
 
       // Verify files were copied
       expect(await fs.exists(path.join(computersDir, "1", "program.lua"))).toBe(
@@ -217,21 +227,36 @@ describe("Integration: SyncManager", () => {
         true
       )
 
-      // Modify source file to trigger watch
-      await fs.writeFile(
-        path.join(sourceDir, "program.lua"),
-        "print('Updated')"
+      // Spy on processPendingChanges
+      const spyProcessPendingChanges = spyOn(
+        // Use 'any' to spy on private function
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        controller as any,
+        "processPendingChanges"
       )
+
+      // Modify source file to trigger watch
+      async function modifySourceFile() {
+        await fs.writeFile(
+          path.join(sourceDir, "program.lua"),
+          "print('Updated')"
+        )
+      }
+
+      // Modifying program.lua should cause this file to be re-copied to
+      // computer 1 and computer 2
 
       const triggeredSyncResult =
         await waitForEventWithTrigger<SyncOperationSummary>(
           controller,
-          SyncEvent.SYNC_COMPLETE
+          SyncEvent.SYNC_COMPLETE,
+          modifySourceFile
         )
 
-      expect(getSyncOperationStatus(triggeredSyncResult)).toBe(
-        SyncStatus.SUCCESS
-      )
+      expect(triggeredSyncResult.status).toBe(SyncStatus.SUCCESS)
+
+      // Verify that the watcher on change handler was only called 1 time
+      expect(spyProcessPendingChanges.mock.calls).toHaveLength(1)
 
       // Verify all computer results have appropriate success/failure counts
       for (const computerResult of triggeredSyncResult.computerResults) {
@@ -245,9 +270,17 @@ describe("Integration: SyncManager", () => {
         expect(fileResult.targetPath).toBe("/program.lua")
       }
 
-      expect(triggeredSyncResult.summary.fullySuccessfulComputers).toBe(2)
-      expect(triggeredSyncResult.summary.failedComputers).toBe(0)
-      expect(triggeredSyncResult.summary.missingComputers).toBe(0)
+      // Verify summary object
+      expect(triggeredSyncResult.summary).toMatchObject({
+        totalFiles: 2, // 1 file to 2 computers
+        succeededFiles: 2,
+        failedFiles: 0,
+        totalComputers: 2,
+        fullySuccessfulComputers: 2,
+        partiallySuccessfulComputers: 0,
+        failedComputers: 0,
+        missingComputers: 0,
+      } as SyncOperationSummary["summary"])
 
       // Verify updated content was copied
       const content1 = await fs.readFile(
@@ -292,16 +325,27 @@ describe("Integration: SyncManager", () => {
       minecraftSavePath: savePath,
       rules: [
         // Computer 1: Root files to root directory (flattened)
+        // 2 files
         { source: "*.lua", target: "/", computers: ["1"] },
+
         // Computer 1: Programs files to root directory (flattened)
+        // 1 file
         { source: "programs/*.lua", target: "/", computers: ["1"] },
+
         // Computer 1: Root files to backup directory (flattened)
+        // 2 files
         { source: "*.lua", target: "/backup/", computers: ["1"] },
+
         // Computer 1: Programs files to backup directory (flattened)
+        // 1 file
         { source: "programs/*.lua", target: "/backup/", computers: ["1"] },
+
         // Both computers: lib files to lib directory
+        // 2 files (1 file to each computer)
         { source: "lib/*.lua", target: "/lib/", computers: ["1", "2"] },
+
         // Computer 2: All files to /all/ preserving source directory structure
+        // 4 files
         {
           source: "**/*.lua", // Matches all .lua files recursively
           target: "/all/",
@@ -330,11 +374,19 @@ describe("Integration: SyncManager", () => {
         start
       )
 
-      expect(getSyncOperationStatus(syncResult)).toBe(SyncStatus.SUCCESS)
-      // Verify sync statistics
-      expect(syncResult.summary.fullySuccessfulComputers).toBe(2)
-      expect(syncResult.summary.failedComputers).toBe(0)
-      expect(syncResult.summary.missingComputers).toBe(0)
+      expect(syncResult.status).toBe(SyncStatus.SUCCESS)
+
+      // Verify summary object
+      expect(syncResult.summary).toMatchObject({
+        totalFiles: 12,
+        succeededFiles: 12,
+        failedFiles: 0,
+        totalComputers: 2,
+        fullySuccessfulComputers: 2,
+        partiallySuccessfulComputers: 0,
+        failedComputers: 0,
+        missingComputers: 0,
+      } as SyncOperationSummary["summary"])
 
       // Verify both computers' file states
       await Promise.all([
@@ -423,6 +475,7 @@ describe("Integration: SyncManager", () => {
       minecraftSavePath: savePath,
       rules: [
         {
+          // 3 files from above (source directory was cleared first)
           source: "*.lua", // Glob pattern matching multiple files
           target: "/lib/",
           computers: ["1"],
@@ -451,10 +504,20 @@ describe("Integration: SyncManager", () => {
           start
         )
 
-      // Verify initial sync
-      expect(initialSyncResult.summary.fullySuccessfulComputers).toBe(1)
-      expect(initialSyncResult.summary.failedComputers).toBe(0)
-      expect(initialSyncResult.summary.missingComputers).toBe(0)
+      // Verify initial sync status
+      expect(initialSyncResult.status).toBe(SyncStatus.SUCCESS)
+
+      // Verify summary object
+      expect(initialSyncResult.summary).toMatchObject({
+        totalFiles: 3,
+        succeededFiles: 3,
+        failedFiles: 0,
+        totalComputers: 1,
+        fullySuccessfulComputers: 1,
+        partiallySuccessfulComputers: 0,
+        failedComputers: 0,
+        missingComputers: 0,
+      } as SyncOperationSummary["summary"])
 
       // Find Computer 1 in results
       const computer1 = expectToBeDefined(
@@ -498,7 +561,7 @@ describe("Integration: SyncManager", () => {
 
       // Step 2: Modify one file to trigger watch
       // Step 3: Wait for the file change sync to complete
-      const fileChangeSyncResult =
+      const triggeredSyncResult =
         await waitForEventWithTrigger<SyncOperationSummary>(
           controller,
           SyncEvent.SYNC_COMPLETE,
@@ -511,13 +574,21 @@ describe("Integration: SyncManager", () => {
         )
 
       // Verify change-triggered sync
-      expect(fileChangeSyncResult.summary.fullySuccessfulComputers).toBe(1)
-      expect(fileChangeSyncResult.summary.failedComputers).toBe(0)
-      expect(fileChangeSyncResult.summary.missingComputers).toBe(0)
+      // Verify summary object
+      expect(triggeredSyncResult.summary).toMatchObject({
+        totalFiles: 1,
+        succeededFiles: 1,
+        failedFiles: 0,
+        totalComputers: 1,
+        fullySuccessfulComputers: 1,
+        partiallySuccessfulComputers: 0,
+        failedComputers: 0,
+        missingComputers: 0,
+      } as SyncOperationSummary["summary"])
 
       // Get computer result
       const computer1AfterChange = expectToBeDefined(
-        fileChangeSyncResult.computerResults.find((c) => c.computerId === "1")
+        triggeredSyncResult.computerResults.find((c) => c.computerId === "1")
       )
 
       // Verify only one file was synced (the changed one)
@@ -668,7 +739,7 @@ describe("Integration: SyncManager", () => {
       )
 
       // Verify overall success
-      expect(getSyncOperationStatus(syncResult)).toBe(SyncStatus.SUCCESS)
+      expect(syncResult.status).toBe(SyncStatus.SUCCESS)
       expect(syncResult.summary.fullySuccessfulComputers).toBe(2)
       expect(syncResult.summary.failedComputers).toBe(0)
       expect(syncResult.summary.missingComputers).toBe(0)
@@ -799,7 +870,7 @@ describe("Integration: SyncManager", () => {
         start
       )
 
-      expect(getSyncOperationStatus(syncResult)).toBe(SyncStatus.WARNING)
+      expect(syncResult.status).toBe(SyncStatus.WARNING)
       expect(syncResult.summary.missingComputers).toBe(1)
 
       // Missing computer 999
@@ -945,7 +1016,7 @@ describe("Integration: SyncManager", () => {
         )
 
       // Verify initial sync results
-      expect(getSyncOperationStatus(initialSyncResult)).toBe(SyncStatus.SUCCESS)
+      expect(initialSyncResult.status).toBe(SyncStatus.SUCCESS)
       expect(initialSyncResult.summary.totalFiles).toBe(3) // 3 files synced to 1 computer
 
       // Clear the UI output to start fresh for the batch sync test
@@ -979,7 +1050,7 @@ describe("Integration: SyncManager", () => {
         )
 
       // Check if all files were synced in a single operation
-      expect(getSyncOperationStatus(batchedSyncResult)).toBe(SyncStatus.SUCCESS)
+      expect(batchedSyncResult.status).toBe(SyncStatus.SUCCESS)
 
       const computer1 = expectToBeDefined(
         batchedSyncResult.computerResults.find((cr) => cr.computerId === "1"),
@@ -1070,7 +1141,7 @@ describe("Integration: SyncManager", () => {
           start
         )
 
-      expect(getSyncOperationStatus(initialSyncResult)).toBe(SyncStatus.SUCCESS)
+      expect(initialSyncResult.status).toBe(SyncStatus.SUCCESS)
 
       // Clear output to start fresh
       outputCapture.clear()
@@ -1283,7 +1354,7 @@ describe("Integration: SyncManager", () => {
     )
 
     // Verify initial sync was successful
-    expect(getSyncOperationStatus(syncResult1)).toBe(SyncStatus.SUCCESS)
+    expect(syncResult1.status).toBe(SyncStatus.SUCCESS)
     expect(syncResult1.computerResults.length).toBe(1)
     expect(syncResult1.computerResults[0].successCount).toBeGreaterThan(0)
     expect(syncResult1.computerResults[0].failureCount).toBe(0)
@@ -1304,7 +1375,7 @@ describe("Integration: SyncManager", () => {
       undefined
     )
 
-    expect(getSyncOperationStatus(syncResult2)).toBe(SyncStatus.ERROR)
+    expect(syncResult2.status).toBe(SyncStatus.ERROR)
     expect(callCount).toBe(3)
 
     // Despite errors, the manager should still be running
@@ -1325,7 +1396,7 @@ describe("Integration: SyncManager", () => {
     expect(callCount).toBe(4)
 
     // Verify the third sync was successful
-    expect(getSyncOperationStatus(syncResult3)).toBe(SyncStatus.SUCCESS)
+    expect(syncResult3.status).toBe(SyncStatus.SUCCESS)
     expect(syncResult3.computerResults.length).toBe(1)
     expect(syncResult3.computerResults[0].successCount).toBeGreaterThan(0)
     expect(syncResult3.computerResults[0].failureCount).toBe(0)
@@ -1898,9 +1969,7 @@ describe("Integration: UI", () => {
           }
         )
 
-      expect(getSyncOperationStatus(triggeredSyncResult)).toBe(
-        SyncStatus.SUCCESS
-      )
+      expect(triggeredSyncResult.status).toBe(SyncStatus.SUCCESS)
 
       const normalizedOutput2 = normalizeOutput(outputCapture.getOutput())
 
@@ -1944,7 +2013,7 @@ describe("Integration: UI", () => {
         start
       )
 
-      expect(getSyncOperationStatus(result)).toBe(SyncStatus.WARNING)
+      expect(result.status).toBe(SyncStatus.WARNING)
       expect(result.summary.fullySuccessfulComputers).toBe(1)
 
       // Get the captured output

@@ -30,9 +30,15 @@ export interface ComputerSyncSummary {
   anySucceeded: boolean
 }
 
+export interface SyncWarning {
+  message: string
+  suggestion?: string
+}
+
 // For the entire sync operation
 export interface SyncOperationSummary {
   timestamp: number
+  status: SyncStatus
   computerResults: ComputerSyncSummary[]
   summary: {
     totalFiles: number
@@ -44,6 +50,7 @@ export interface SyncOperationSummary {
     failedComputers: number
     missingComputers: number
   }
+  warnings: SyncWarning[]
   errors: AppError[]
   allSucceeded: boolean
   anySucceeded: boolean
@@ -112,8 +119,10 @@ export function createComputerSyncSummary(
 
 // Function to combine multiple computer results into a final operation summary
 export function createSyncOperationSummary(
+  status: SyncStatus,
   computerResults: ComputerSyncSummary[],
-  additionalErrors: AppError[] = []
+  additionalErrors: AppError[] = [],
+  additionalWarnings: SyncWarning[] = []
 ): SyncOperationSummary {
   const allFileResults = computerResults.flatMap((comp) => comp.fileResults)
   const succeededFiles = allFileResults.filter((file) => file.success)
@@ -142,8 +151,12 @@ export function createSyncOperationSummary(
     ...additionalErrors,
   ]
 
+  // Combine all warnings
+  const warnings = [...additionalWarnings]
+
   return {
     timestamp: Date.now(),
+    status,
     computerResults,
     summary: {
       totalFiles: allFileResults.length,
@@ -155,12 +168,16 @@ export function createSyncOperationSummary(
       failedComputers,
       missingComputers,
     },
+    warnings,
     errors,
     allSucceeded: failedFiles.length === 0 && errors.length === 0,
     anySucceeded: succeededFiles.length > 0,
   }
 }
 
+/**
+ * @deprecated
+ */
 export function getSyncOperationStatus(
   syncOperationSummary: SyncOperationSummary
 ) {

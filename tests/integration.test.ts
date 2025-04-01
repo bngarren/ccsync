@@ -43,8 +43,8 @@ import {
   type ComputerSyncSummary,
   type FileSyncResult,
   type SyncOperationSummary,
+  type SyncWarning,
 } from "../src/results"
-import { testLog } from "./setup"
 
 describe("Integration: SyncManager", () => {
   let tempDir: string
@@ -115,7 +115,7 @@ describe("Integration: SyncManager", () => {
       // Start manual mode and wait for first sync
       const { controller, start } = syncManager.initManualMode()
 
-      const syncResult = await waitForEventWithTrigger<SyncOperationSummary>(
+      const syncResult = await waitForEventWithTrigger(
         controller,
         SyncEvent.SYNC_COMPLETE,
         start
@@ -199,12 +199,11 @@ describe("Integration: SyncManager", () => {
 
     const { controller, start } = syncManager.initWatchMode()
     try {
-      const initialSyncResult =
-        await waitForEventWithTrigger<SyncOperationSummary>(
-          controller,
-          SyncEvent.INITIAL_SYNC_COMPLETE,
-          start
-        )
+      const initialSyncResult = await waitForEventWithTrigger(
+        controller,
+        SyncEvent.INITIAL_SYNC_COMPLETE,
+        start
+      )
 
       // Verify initial sync results
       expect(initialSyncResult.status).toBe(SyncStatus.SUCCESS)
@@ -246,16 +245,15 @@ describe("Integration: SyncManager", () => {
       // Modifying program.lua should cause this file to be re-copied to
       // computer 1 and computer 2
 
-      const triggeredSyncResult =
-        await waitForEventWithTrigger<SyncOperationSummary>(
-          controller,
-          SyncEvent.SYNC_COMPLETE,
-          modifySourceFile
-        )
+      const triggeredSyncResult = await waitForEventWithTrigger(
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        modifySourceFile
+      )
 
       expect(triggeredSyncResult.status).toBe(SyncStatus.SUCCESS)
 
-      // Verify that the watcher on change handler was only called 1 time
+      // Should have only run this once
       expect(spyProcessPendingChanges.mock.calls).toHaveLength(1)
 
       // Verify all computer results have appropriate success/failure counts
@@ -293,6 +291,8 @@ describe("Integration: SyncManager", () => {
       )
       expect(content1).toBe("print('Updated')")
       expect(content2).toBe("print('Updated')")
+
+      spyProcessPendingChanges.mockRestore()
     } finally {
       await syncManager.stop()
     }
@@ -368,7 +368,7 @@ describe("Integration: SyncManager", () => {
     const { controller, start } = syncManager.initManualMode()
 
     try {
-      const syncResult = await waitForEventWithTrigger<SyncOperationSummary>(
+      const syncResult = await waitForEventWithTrigger(
         controller,
         SyncEvent.SYNC_COMPLETE,
         start
@@ -497,12 +497,11 @@ describe("Integration: SyncManager", () => {
       const { controller, start } = syncManager.initWatchMode()
 
       // Step 1: Wait for initial sync to complete
-      const initialSyncResult =
-        await waitForEventWithTrigger<SyncOperationSummary>(
-          controller,
-          SyncEvent.INITIAL_SYNC_COMPLETE,
-          start
-        )
+      const initialSyncResult = await waitForEventWithTrigger(
+        controller,
+        SyncEvent.INITIAL_SYNC_COMPLETE,
+        start
+      )
 
       // Verify initial sync status
       expect(initialSyncResult.status).toBe(SyncStatus.SUCCESS)
@@ -561,17 +560,16 @@ describe("Integration: SyncManager", () => {
 
       // Step 2: Modify one file to trigger watch
       // Step 3: Wait for the file change sync to complete
-      const triggeredSyncResult =
-        await waitForEventWithTrigger<SyncOperationSummary>(
-          controller,
-          SyncEvent.SYNC_COMPLETE,
-          async () => {
-            await fs.writeFile(
-              path.join(sourceDir, "second.lua"),
-              "print('Updated Second')"
-            )
-          }
-        )
+      const triggeredSyncResult = await waitForEventWithTrigger(
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        async () => {
+          await fs.writeFile(
+            path.join(sourceDir, "second.lua"),
+            "print('Updated Second')"
+          )
+        }
+      )
 
       // Verify change-triggered sync
       // Verify summary object
@@ -732,7 +730,7 @@ describe("Integration: SyncManager", () => {
       const { controller, start } = syncManager.initManualMode()
 
       // Wait for sync completion with explicit timeout
-      const syncResult = await waitForEventWithTrigger<SyncOperationSummary>(
+      const syncResult = await waitForEventWithTrigger(
         controller,
         SyncEvent.SYNC_COMPLETE,
         start
@@ -745,12 +743,14 @@ describe("Integration: SyncManager", () => {
       expect(syncResult.summary.missingComputers).toBe(0)
 
       // Check Computer 1 detailed results
-      const computer1 = syncResult.computerResults.find(
-        (c) => c.computerId === "1"
+      const computer1 = expectToBeDefined(
+        syncResult.computerResults.find(
+          (computerSummary) => computerSummary.computerId === "1"
+        )
       )
-      expect(computer1).toBeDefined()
-      expect(computer1?.successCount).toBeGreaterThan(0)
-      expect(computer1?.failureCount).toBe(0)
+      expect(computer1.successCount).toBeGreaterThan(0)
+      expect(computer1.failureCount).toBe(0)
+      expect(computer1.errors.length).toBe(0)
 
       const computer1Dir = path.join(computersDir, "1")
 
@@ -864,22 +864,47 @@ describe("Integration: SyncManager", () => {
       // Start manual mode and wait for first sync
       const { controller, start } = syncManager.initManualMode()
 
-      const syncResult = await waitForEventWithTrigger<SyncOperationSummary>(
+      const syncResult = await waitForEventWithTrigger(
         controller,
         SyncEvent.SYNC_COMPLETE,
         start
       )
 
       expect(syncResult.status).toBe(SyncStatus.WARNING)
-      expect(syncResult.summary.missingComputers).toBe(1)
+      // Verify summary object
+      expect(syncResult.summary).toMatchObject({
+        totalFiles: 1, // 1 file copy attempt (the file copy from the missing computer is not counted)
+        succeededFiles: 1,
+        failedFiles: 0, // a skipped file is not a failed file
+        totalComputers: 2,
+        fullySuccessfulComputers: 1,
+        partiallySuccessfulComputers: 0,
+        failedComputers: 0,
+        missingComputers: 1,
+      } as SyncOperationSummary["summary"])
+
+      expect(syncResult.warnings).toEqual(
+        expect.arrayContaining<SyncWarning>([
+          expect.objectContaining({
+            message: expect.stringContaining("Missing") as string,
+          }),
+        ]) as SyncWarning[]
+      )
 
       // Missing computer 999
       const computer999 = expectToBeDefined(
         syncResult.computerResults.find((cr) => cr.computerId === "999")
       )
-      expect(computer999.exists).toBeFalse()
-      expect(computer999.successCount).toBe(0)
-      expect(computer999.failureCount).toBe(0)
+      // Computer summary for 999 is defined, but the computer is marked as "doesn't exist"
+      // and should have 0 success, 0 failure, and no errors.
+      // A missing computer is a warning, not a error with file copy operation
+      expect(computer999).toMatchObject({
+        exists: false,
+        successCount: 0,
+        failureCount: 0,
+        anySucceeded: false,
+      } as ComputerSyncSummary)
+      expect(computer999.errors.length).toBe(0)
 
       expect(await fs.exists(path.join(computersDir, "999"))).toBeFalse()
 
@@ -895,9 +920,6 @@ describe("Integration: SyncManager", () => {
         success: true,
       })
       expect(fileResult.sourcePath).toContain("program.lua")
-
-      expect(syncResult.summary.succeededFiles).toBe(1)
-      expect(syncResult.summary.fullySuccessfulComputers).toBe(1)
 
       // Verify actual files
       const targetFile = path.join(computersDir, "1", "program.lua")
@@ -945,7 +967,7 @@ describe("Integration: SyncManager", () => {
     // Start manual mode and wait for first sync
     const { controller, start } = syncManager.initManualMode()
 
-    const syncResult = await waitForEventWithTrigger<SyncOperationSummary>(
+    const syncResult = await waitForEventWithTrigger(
       controller,
       SyncEvent.SYNC_COMPLETE,
       start
@@ -953,6 +975,8 @@ describe("Integration: SyncManager", () => {
     // We should only have 1: the two rules that targeted computer 2 should have only
     // resulted in 1 total missing computer
     expect(syncResult.summary.missingComputers).toBe(1)
+    // 1 actual computer, 1 missing computer -- both should be in comptuerResults
+    expect(syncResult.computerResults).toHaveLength(2)
   })
 
   test("batches multiple file changes with debouncing in watch mode", async () => {
@@ -974,7 +998,6 @@ describe("Integration: SyncManager", () => {
     )
 
     // Create a config with rules targeting these files
-    const configPath = path.join(tempDir, ".ccsync.yaml")
     const configObject = withDefaultConfig({
       sourceRoot: sourceDir,
       minecraftSavePath: savePath,
@@ -987,20 +1010,14 @@ describe("Integration: SyncManager", () => {
       ],
     })
 
-    const configContent = stringify(configObject)
-    await fs.writeFile(configPath, configContent)
-
     // Create target computer
     await createTestComputer(computersDir, "1")
-
-    const { config } = await loadConfig(configPath)
-    if (!config) throw new Error("Failed to load config")
 
     // Setup UI output capture to verify sync operations
     const outputCapture = captureUIOutput()
 
     const syncManager = new SyncManager(
-      config,
+      configObject,
       new UI({ renderDynamicElements: false })
     )
 
@@ -1008,12 +1025,11 @@ describe("Integration: SyncManager", () => {
 
     try {
       // Wait for initial sync to complete
-      const initialSyncResult =
-        await waitForEventWithTrigger<SyncOperationSummary>(
-          controller,
-          SyncEvent.INITIAL_SYNC_COMPLETE,
-          start
-        )
+      const initialSyncResult = await waitForEventWithTrigger(
+        controller,
+        SyncEvent.INITIAL_SYNC_COMPLETE,
+        start
+      )
 
       // Verify initial sync results
       expect(initialSyncResult.status).toBe(SyncStatus.SUCCESS)
@@ -1022,35 +1038,66 @@ describe("Integration: SyncManager", () => {
       // Clear the UI output to start fresh for the batch sync test
       outputCapture.clear()
 
-      const batchedSyncResult =
-        await waitForEventWithTrigger<SyncOperationSummary>(
-          controller,
-          SyncEvent.SYNC_COMPLETE,
-          async () => {
-            // This runs after event listeners are registered but before waiting for the event
-            await Promise.all([
-              fs.writeFile(
-                path.join(sourceDir, "batch-test/file1.lua"),
-                "print('File 1 updated')"
-              ),
-              fs.writeFile(
-                path.join(sourceDir, "batch-test/file2.lua"),
-                "print('File 2 updated')"
-              ),
-              fs.writeFile(
-                path.join(sourceDir, "batch-test/file3.lua"),
-                "print('File 3 updated')"
-              ),
-            ])
+      let fileChangeCount = 0
+      controller.on(SyncEvent.FILE_CHANGED, () => {
+        ++fileChangeCount
+      })
 
-            // Add a short delay to ensure file system events are detected
-            await setTimeout(100)
-          },
-          5000 // Timeout
-        )
+      // Spy on processPendingChanges
+      const spyProcessPendingChanges = spyOn(
+        // Use 'any' to spy on private function
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        controller as any,
+        "processPendingChanges"
+      )
+
+      const batchedSyncResult = await waitForEventWithTrigger(
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        async () => {
+          // This runs after event listeners are registered but before waiting for the event
+          await Promise.all([
+            fs.writeFile(
+              path.join(sourceDir, "batch-test/file1.lua"),
+              "print('File 1 updated')"
+            ),
+            fs.writeFile(
+              path.join(sourceDir, "batch-test/file2.lua"),
+              "print('File 2 updated')"
+            ),
+            fs.writeFile(
+              path.join(sourceDir, "batch-test/file3.lua"),
+              "print('File 3 updated')"
+            ),
+          ])
+
+          // Add a short delay to ensure file system events are detected
+          await setTimeout(100)
+        },
+        5000 // Timeout
+      )
 
       // Check if all files were synced in a single operation
       expect(batchedSyncResult.status).toBe(SyncStatus.SUCCESS)
+
+      // Verify that we recognized 3 file change events
+      expect(fileChangeCount).toBe(3)
+
+      // Verify that the watcher's process pending was only called 1 time
+      // This represents correct batching
+      expect(spyProcessPendingChanges.mock.calls).toHaveLength(1)
+
+      // Verify summary object
+      expect(batchedSyncResult.summary).toMatchObject({
+        totalFiles: 3,
+        succeededFiles: 3,
+        failedFiles: 0,
+        totalComputers: 1,
+        fullySuccessfulComputers: 1,
+        partiallySuccessfulComputers: 0,
+        failedComputers: 0,
+        missingComputers: 0,
+      } as SyncOperationSummary["summary"])
 
       const computer1 = expectToBeDefined(
         batchedSyncResult.computerResults.find((cr) => cr.computerId === "1"),
@@ -1060,6 +1107,7 @@ describe("Integration: SyncManager", () => {
       // The computer should have 3 files in the result
       expect(computer1.fileResults.length).toBe(3)
       expect(computer1.successCount).toBe(3)
+      expect(computer1.failureCount).toBe(0)
 
       // Check if all files were updated correctly
       const updatedContentFile1 = await fs.readFile(
@@ -1090,14 +1138,17 @@ describe("Integration: SyncManager", () => {
 
       // Should indicate 3 files synced in a single operation
       expect(normalizedOutput).toContain("Attempted to sync 3 total files")
+
+      spyProcessPendingChanges.mockRestore()
     } finally {
       outputCapture.restore()
       await syncManager.stop()
     }
   })
 
+  // We want to test that when a file change occurs during a period in which a sync operation
+  // has already started, it will be queued and run immediately after the completion of the first
   test("handles file changes that occur during sync operations", async () => {
-    const configPath = path.join(tempDir, ".ccsync.yaml")
     const configObject = withDefaultConfig({
       sourceRoot: sourceDir,
       minecraftSavePath: savePath,
@@ -1110,9 +1161,6 @@ describe("Integration: SyncManager", () => {
       ],
     })
 
-    const configContent = stringify(configObject)
-    await fs.writeFile(configPath, configContent)
-
     // Create target computers
     await createTestComputer(computersDir, "1")
 
@@ -1120,13 +1168,10 @@ describe("Integration: SyncManager", () => {
     await fs.writeFile(path.join(sourceDir, "program.lua"), "print('Original')")
     await fs.writeFile(path.join(sourceDir, "startup.lua"), "print('Original')")
 
-    const { config } = await loadConfig(configPath)
-    if (!config) throw new Error("Failed to load config")
-
     // Create a custom output capture to track sync events
     const outputCapture = captureUIOutput()
     const syncManager = new SyncManager(
-      config,
+      configObject,
       new UI({ renderDynamicElements: false })
     )
 
@@ -1134,12 +1179,11 @@ describe("Integration: SyncManager", () => {
 
     try {
       // Wait for initial sync to complete
-      const initialSyncResult =
-        await waitForEventWithTrigger<SyncOperationSummary>(
-          controller,
-          SyncEvent.INITIAL_SYNC_COMPLETE,
-          start
-        )
+      const initialSyncResult = await waitForEventWithTrigger(
+        controller,
+        SyncEvent.INITIAL_SYNC_COMPLETE,
+        start
+      )
 
       expect(initialSyncResult.status).toBe(SyncStatus.SUCCESS)
 
@@ -1147,6 +1191,7 @@ describe("Integration: SyncManager", () => {
       outputCapture.clear()
 
       // Create a promise that will resolve after we've seen two SYNC_COMPLETE events
+      // This allows us to end the test (exit watch mode) when we have tested what we needed
       let syncCount = 0
       const twoSyncsCompleted = new Promise<void>((resolve) => {
         controller.on(SyncEvent.SYNC_COMPLETE, () => {
@@ -1157,24 +1202,41 @@ describe("Integration: SyncManager", () => {
         })
       })
 
-      // Use a deliberate sequence to test race condition handling:
-      // 1. Modify program.lua to trigger first sync
+      // Need to artificially delay the first file change sync so we can have another occur during its operation
+      const origPerformSync = syncManager.performSync.bind(syncManager)
+      const spyPerformSync = spyOn(syncManager, "performSync")
+      spyPerformSync.mockImplementationOnce(async (syncPlan) => {
+        await setTimeout(process.env.CI ? 3000 : 1500) // must have a sufficient delay
+        getLogger().debug(
+          "TEST: Delay complete, now calling original performSync"
+        )
+        return await origPerformSync(syncPlan)
+      })
+
+      // Prepare to trigger a second file change after the first file change sync is started
+      let secondFileWritten = false
+      controller.on(SyncEvent.SYNC_STARTED, () => {
+        if (secondFileWritten) return
+        getLogger().debug("TEST: SYNC_STARTED event fired, writing second file")
+        fs.writeFile(
+          path.join(sourceDir, "startup.lua"),
+          "print('Changed during sync')"
+        )
+          .then(() => {
+            secondFileWritten = true
+          })
+          .catch((err: unknown) => {
+            throw err
+          })
+      })
+
+      // Modify program.lua to trigger first sync
       await fs.writeFile(
         path.join(sourceDir, "program.lua"),
         "print('First change')"
       )
 
-      // 2. Wait the duration of the debounce delay to ensure that the next write file is not batched with the first
-      await setTimeout(
-        controller.getInternalState().debounceDelay +
-          (process.env.CI ? 1000 : 10)
-      )
-
-      // 3. Modify startup.lua while first sync is in progress
-      await fs.writeFile(
-        path.join(sourceDir, "startup.lua"),
-        "print('Changed during sync')"
-      )
+      // The second file change should then occur based on the above SYNC_STARTED listener
 
       // Wait for both syncs to complete (with timeout)
       await Promise.race([
@@ -1183,6 +1245,8 @@ describe("Integration: SyncManager", () => {
           throw new Error("Timeout waiting for two sync operations to complete")
         }),
       ])
+
+      expect(spyPerformSync.mock.calls).toHaveLength(2)
 
       // Verify both files were properly synced to disk with correct content
       const program1Content = await fs.readFile(
@@ -1201,6 +1265,8 @@ describe("Integration: SyncManager", () => {
       const normalizedOutput = normalizeOutput(outputCapture.getOutput())
       expect(normalizedOutput).toContain("program.lua")
       expect(normalizedOutput).toContain("startup.lua")
+
+      spyPerformSync.mockRestore()
     } finally {
       await syncManager.stop()
     }
@@ -1232,16 +1298,13 @@ describe("Integration: SyncManager", () => {
 
     const { controller, start } = syncManager.initManualMode()
 
-    const syncSummary = await waitForEventWithTrigger<SyncOperationSummary>(
+    await waitForEventWithTrigger(
       controller,
-      SyncEvent.SYNC_COMPLETE,
+      SyncEvent.CONTROLLER_STOPPED,
       start
     )
 
     expect(spy).toHaveBeenCalledTimes(1)
-
-    // Verify error handling
-    expect(syncSummary.errors.length).not.toBe(0)
 
     // Give some time for cleanup
     await setTimeout(100)
@@ -1249,6 +1312,11 @@ describe("Integration: SyncManager", () => {
     // Verify sync manager is stopped
     expect(syncManager.isRunning()).toBe(false)
     expect(syncManager.getState()).toBe(SyncManagerState.STOPPED)
+
+    // Verify error state of Sync manager
+    const error = syncManager.getError()
+    expect(error).not.toBeNull()
+    expect(error?.source).toMatch(/\bmanualmodecontroller\b/i)
 
     // Restore mock
     spy.mockRestore()
@@ -1274,33 +1342,38 @@ describe("Integration: SyncManager", () => {
     const syncManager = new SyncManager(configObject, ui)
 
     // Mock copyFilesToComputer to throw an error on first call only
-    const originalCopyFile = fs.copyFile
-    let callCount = 0
-    const copyFileSpy = spyOn(fs, "copyFile").mockImplementation(
-      (src: PathLike, dest: PathLike) => {
-        callCount++
-        if (callCount === 1) {
-          throw new Error("File system error during copy")
-        }
-        return originalCopyFile(src, dest)
-      }
-    )
+    const copyFileSpy = spyOn(fs, "copyFile").mockImplementationOnce(() => {
+      throw new Error("File system error during copy")
+    })
 
     const { controller, start } = syncManager.initManualMode()
 
     // 1 file should have failed, and 1 file should have succeeded
-    const syncSummary = await waitForEventWithTrigger<SyncOperationSummary>(
+    const syncSummary = await waitForEventWithTrigger(
       controller,
       SyncEvent.SYNC_COMPLETE,
       start
     )
-    testLog(syncSummary.errors)
+    // Expect a PARTIAL status
+    expect(syncSummary.status === SyncStatus.PARTIAL)
+    // Verify summary object
+    expect(syncSummary.summary).toMatchObject({
+      totalFiles: 2,
+      succeededFiles: 1,
+      failedFiles: 1,
+      totalComputers: 1,
+      fullySuccessfulComputers: 0,
+      partiallySuccessfulComputers: 1,
+      failedComputers: 0,
+      missingComputers: 0,
+    } as SyncOperationSummary["summary"])
     expect(syncSummary.errors).toHaveLength(1)
     expect(syncSummary.errors[0].message).toMatch(
       /File system error during copy/
     )
     expect(copyFileSpy).toHaveBeenCalledTimes(2) // 2 files x 1 attempt
     expect(syncManager.isRunning()).toBe(true)
+    expect(syncManager.getError()).toBeNil()
 
     // Cleanup
     await syncManager.stop()
@@ -1347,7 +1420,7 @@ describe("Integration: SyncManager", () => {
     const { controller, start } = syncManager.initWatchMode()
 
     // Wait for initial sync to complete
-    const syncResult1 = await waitForEventWithTrigger<SyncOperationSummary>(
+    const syncResult1 = await waitForEventWithTrigger(
       controller,
       SyncEvent.INITIAL_SYNC_COMPLETE,
       start
@@ -1363,7 +1436,7 @@ describe("Integration: SyncManager", () => {
     // Verify the sync manager is still running
     expect(syncManager.isRunning()).toBe(true)
 
-    const syncResult2 = await waitForEventWithTrigger<SyncOperationSummary>(
+    const syncResult2 = await waitForEventWithTrigger(
       controller,
       SyncEvent.SYNC_COMPLETE,
       async () => {
@@ -1371,18 +1444,19 @@ describe("Integration: SyncManager", () => {
           path.join(sourceDir, "program.lua"),
           "print('Program updated')"
         )
-      },
-      undefined
+      }
     )
 
+    // If a sync with 1 file failed to copy the 1 file, this is an ERROR
     expect(syncResult2.status).toBe(SyncStatus.ERROR)
+    expect(syncResult2.anySucceeded).toBe(false)
     expect(callCount).toBe(3)
 
     // Despite errors, the manager should still be running
     expect(syncManager.isRunning()).toBe(true)
 
     // Now trigger a third sync that should succeed again
-    const syncResult3 = await waitForEventWithTrigger<SyncOperationSummary>(
+    const syncResult3 = await waitForEventWithTrigger(
       controller,
       SyncEvent.SYNC_COMPLETE,
       async () => {
@@ -1457,7 +1531,6 @@ describe("Integration: UI", () => {
 
   test("displays successful sync operation", async () => {
     // Create a basic config
-    const configPath = path.join(tempDir, ".ccsync.yaml")
     const configObject = withDefaultConfig({
       sourceRoot: sourceDir,
       minecraftSavePath: savePath,
@@ -1466,16 +1539,10 @@ describe("Integration: UI", () => {
       ],
     })
 
-    await fs.writeFile(configPath, stringify(configObject))
-    await fs.mkdir(path.join(computersDir, "1"), { recursive: true })
-
-    const { config } = await loadConfig(configPath, {
-      skipPathValidation: true,
-    })
-    if (!config) throw new Error("Failed to load config")
+    await createTestComputer(computersDir, "1")
 
     const syncManager = new SyncManager(
-      config,
+      configObject,
       new UI({ renderDynamicElements: false })
     )
 
@@ -1484,7 +1551,7 @@ describe("Integration: UI", () => {
       const { controller, start } = syncManager.initManualMode()
 
       // Wait for the sync to complete
-      const syncResult = await waitForEventWithTrigger<SyncOperationSummary>(
+      const syncResult = await waitForEventWithTrigger(
         controller,
         SyncEvent.SYNC_COMPLETE,
         start
@@ -1538,7 +1605,7 @@ describe("Integration: UI", () => {
       const { controller, start } = syncManager.initWatchMode()
 
       // Wait for the sync to complete
-      const syncResult = await waitForEventWithTrigger<SyncOperationSummary>(
+      const syncResult = await waitForEventWithTrigger(
         controller,
         SyncEvent.INITIAL_SYNC_COMPLETE,
         start
@@ -1559,26 +1626,25 @@ describe("Integration: UI", () => {
 
       outputCapture.clear()
 
-      const triggeredSyncResult =
-        await waitForEventWithTrigger<SyncOperationSummary>(
-          controller,
-          SyncEvent.SYNC_COMPLETE,
-          async () => {
-            await Promise.all([
-              fs.writeFile(
-                path.join(sourceDir, "/program.lua"),
-                "print('Program updated')"
-              ),
-              fs.writeFile(
-                path.join(sourceDir, "/startup.lua"),
-                "print('Startup updated')"
-              ),
-            ])
+      const triggeredSyncResult = await waitForEventWithTrigger(
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        async () => {
+          await Promise.all([
+            fs.writeFile(
+              path.join(sourceDir, "/program.lua"),
+              "print('Program updated')"
+            ),
+            fs.writeFile(
+              path.join(sourceDir, "/startup.lua"),
+              "print('Startup updated')"
+            ),
+          ])
 
-            // Add a short delay to ensure file system events are detected
-            await setTimeout(100)
-          }
-        )
+          // Add a short delay to ensure file system events are detected
+          await setTimeout(100)
+        }
+      )
 
       expect(triggeredSyncResult.summary.fullySuccessfulComputers).toBe(1)
       expect(triggeredSyncResult.summary.failedComputers).toBe(0)
@@ -1597,7 +1663,6 @@ describe("Integration: UI", () => {
 
   test("displays warning when no matching files found in manual mode", async () => {
     // Create a config with a rule that won't match any files
-    const configPath = path.join(tempDir, ".ccsync.yaml")
     const configObject = withDefaultConfig({
       sourceRoot: sourceDir,
       minecraftSavePath: savePath,
@@ -1606,16 +1671,10 @@ describe("Integration: UI", () => {
       ],
     })
 
-    await fs.writeFile(configPath, stringify(configObject))
-    await fs.mkdir(path.join(computersDir, "1"), { recursive: true })
-
-    const { config } = await loadConfig(configPath, {
-      skipPathValidation: true,
-    })
-    if (!config) throw new Error("Failed to load config")
+    await createTestComputer(computersDir, "1")
 
     const syncManager = new SyncManager(
-      config,
+      configObject,
       new UI({ renderDynamicElements: false })
     )
 
@@ -1624,11 +1683,7 @@ describe("Integration: UI", () => {
       const { controller, start } = syncManager.initManualMode()
 
       // Wait for the sync to complete
-      await waitForEventWithTrigger<SyncOperationSummary>(
-        controller,
-        SyncEvent.SYNC_COMPLETE,
-        start
-      )
+      await waitForEventWithTrigger(controller, SyncEvent.SYNC_COMPLETE, start)
 
       // Get the captured output
       const normalizedOutput = normalizeOutput(outputCapture.getOutput())
@@ -1647,7 +1702,8 @@ describe("Integration: UI", () => {
     }
   })
 
-  test("displays warning when no matching files found in watch mode", async () => {
+  // The program should exit and display error if watch mode doesn't match any files
+  test("displays error when no matching files found in watch mode", async () => {
     // Create a config with a rule that won't match any files
     const configObject = withDefaultConfig({
       sourceRoot: sourceDir,
@@ -1667,13 +1723,14 @@ describe("Integration: UI", () => {
       const { controller, start } = syncManager.initWatchMode()
 
       // Wait for the sync to complete
-      await waitForEventWithTrigger<SyncOperationSummary>(
+      await waitForEventWithTrigger(
         controller,
-        SyncEvent.SYNC_ERROR,
+        SyncEvent.CONTROLLER_STOPPED,
         start,
         1000
       )
 
+      // Since we don't use the UI for this output, we must test whether the @clack/prompts log occurred
       // Get the @clack/prompts output
       clackPromptsSpy.messages.some((m) => {
         return m.match(/Watch mode cannot be started with 0 matched files/)
@@ -1683,9 +1740,8 @@ describe("Integration: UI", () => {
     }
   })
 
-  test("displays errors when missing computers", async () => {
+  test("displays warnings when missing computers", async () => {
     // Create a config that references a non-existent computer
-    const configPath = path.join(tempDir, ".ccsync.yaml")
     const configObject = withDefaultConfig({
       sourceRoot: sourceDir,
       minecraftSavePath: savePath,
@@ -1700,16 +1756,10 @@ describe("Integration: UI", () => {
 
     await createTestComputer(computersDir, "555")
 
-    await fs.writeFile(configPath, stringify(configObject))
     // Deliberately NOT creating computer 888 and 999
 
-    const { config } = await loadConfig(configPath, {
-      skipPathValidation: true,
-    })
-    if (!config) throw new Error("Failed to load config")
-
     const syncManager = new SyncManager(
-      config,
+      configObject,
       new UI({ renderDynamicElements: false })
     )
 
@@ -1718,11 +1768,13 @@ describe("Integration: UI", () => {
       const { controller, start } = syncManager.initManualMode()
 
       // Wait for the sync to complete
-      const syncResult = await waitForEventWithTrigger<SyncOperationSummary>(
+      const syncResult = await waitForEventWithTrigger(
         controller,
         SyncEvent.SYNC_COMPLETE,
         start
       )
+
+      expect(syncResult.status).toEqual(SyncStatus.WARNING)
 
       // Verify the actual sync result structure for missing computers
       expect(syncResult.summary.missingComputers).toBe(2) // 888 and 999
@@ -1801,11 +1853,7 @@ describe("Integration: UI", () => {
       const { controller, start } = syncManager.initManualMode()
 
       // Wait for the sync to complete
-      await waitForEventWithTrigger<SyncOperationSummary>(
-        controller,
-        SyncEvent.SYNC_COMPLETE,
-        start
-      )
+      await waitForEventWithTrigger(controller, SyncEvent.SYNC_COMPLETE, start)
 
       // Get the captured output
       const normalizedOutput = normalizeOutput(outputCapture.getOutput())
@@ -1860,17 +1908,13 @@ describe("Integration: UI", () => {
       const { controller, start } = syncManager.initManualMode()
 
       // First sync
-      await waitForEventWithTrigger<SyncOperationSummary>(
-        controller,
-        SyncEvent.SYNC_COMPLETE,
-        start
-      )
+      await waitForEventWithTrigger(controller, SyncEvent.SYNC_COMPLETE, start)
 
       // Clear current output to analyze the next round
       outputCapture.clear()
 
       // Wait for the second sync to complete
-      await waitForEventWithTrigger<SyncOperationSummary>(
+      await waitForEventWithTrigger(
         controller,
         SyncEvent.SYNC_COMPLETE,
         async () => {
@@ -1931,7 +1975,7 @@ describe("Integration: UI", () => {
       const { controller, start } = syncManager.initWatchMode()
 
       // Wait for initial sync to complete
-      await waitForEventWithTrigger<SyncOperationSummary>(
+      await waitForEventWithTrigger(
         controller,
         SyncEvent.INITIAL_SYNC_COMPLETE,
         start
@@ -1956,18 +2000,17 @@ describe("Integration: UI", () => {
 
       outputCapture.clear()
 
-      const triggeredSyncResult =
-        await waitForEventWithTrigger<SyncOperationSummary>(
-          controller,
-          SyncEvent.SYNC_COMPLETE,
-          async () => {
-            // Modify source file to trigger watch
-            await fs.writeFile(
-              path.join(sourceDir, "program.lua"),
-              "print('Updated')"
-            )
-          }
-        )
+      const triggeredSyncResult = await waitForEventWithTrigger(
+        controller,
+        SyncEvent.SYNC_COMPLETE,
+        async () => {
+          // Modify source file to trigger watch
+          await fs.writeFile(
+            path.join(sourceDir, "program.lua"),
+            "print('Updated')"
+          )
+        }
+      )
 
       expect(triggeredSyncResult.status).toBe(SyncStatus.SUCCESS)
 
@@ -2007,7 +2050,7 @@ describe("Integration: UI", () => {
       const { controller, start } = syncManager.initManualMode()
 
       // Wait for the sync to complete
-      const result = await waitForEventWithTrigger<SyncOperationSummary>(
+      const result = await waitForEventWithTrigger(
         controller,
         SyncEvent.SYNC_COMPLETE,
         start

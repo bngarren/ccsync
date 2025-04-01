@@ -41,6 +41,14 @@ export interface SyncOperationSummary {
   status: SyncStatus
   computerResults: ComputerSyncSummary[]
   summary: {
+    /**
+     * The total number of file-copies planned. If source file will be copied to 2 computers, this is 2 total files.
+     *
+     * Total files represents attempted copies.
+     *
+     * Files that are matched in the sync rule but removed in sync plan creation, e.g., due to a missing computer,
+     * do not count towards total files.
+     */
     totalFiles: number
     succeededFiles: number
     failedFiles: number

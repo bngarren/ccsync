@@ -2,7 +2,12 @@ import { mkdir, rm, writeFile } from "node:fs/promises"
 import path from "path"
 import os from "os"
 import crypto from "crypto"
-import { SyncEvent, type Computer, type ResolvedFileRule } from "../src/types"
+import {
+  SyncEvent,
+  type AllSyncEvents,
+  type Computer,
+  type ResolvedFileRule,
+} from "../src/types"
 import {
   getComputerShortPath,
   isRecursiveGlob,
@@ -316,18 +321,18 @@ export class TempCleaner {
  * @param timeoutMs Maximum time to wait for the event in milliseconds
  * @returns Promise that resolves with the event data
  */
-export function waitForEventWithTrigger<T>(
+export function waitForEventWithTrigger<E extends SyncEvent>(
   emitter: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     on: (event: any, callback: any) => void
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     off: (event: any, callback: any) => void
   },
-  awaitedEvent: SyncEvent,
+  awaitedEvent: E,
   triggerFn?: () => unknown, // Function that triggers the event
   timeoutMs = 5000
-): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
+): Promise<AllSyncEvents[E]> {
+  return new Promise<AllSyncEvents[E]>((resolve, reject) => {
     // Set timeout to avoid test hanging
     const timeout = setTimeout(() => {
       cleanup()
@@ -339,7 +344,7 @@ export function waitForEventWithTrigger<T>(
     }, timeoutMs)
 
     // Success handler
-    const handleSuccess = (data: T) => {
+    const handleSuccess = (data: AllSyncEvents[E]) => {
       cleanup()
       resolve(data)
     }

@@ -258,20 +258,21 @@ export interface SyncOperationResult {
 }
 
 export enum SyncEvent {
-  STARTED,
-  STOPPED,
+  RUN_STARTED,
+  CONTROLLER_STOPPED,
   SYNC_PLANNED,
+  SYNC_STARTED,
   SYNC_COMPLETE,
-  SYNC_ERROR,
   INITIAL_SYNC_COMPLETE,
+  FILE_CHANGED,
 }
 
 export type BaseControllerEvents = {
-  [SyncEvent.STOPPED]: undefined
-  [SyncEvent.STARTED]: undefined
+  [SyncEvent.CONTROLLER_STOPPED]: undefined
+  [SyncEvent.RUN_STARTED]: undefined
   [SyncEvent.SYNC_PLANNED]: SyncPlan
+  [SyncEvent.SYNC_STARTED]: SyncPlan
   [SyncEvent.SYNC_COMPLETE]: SyncOperationSummary
-  [SyncEvent.SYNC_ERROR]: IAppError
 }
 
 // Event maps for each mode type
@@ -279,7 +280,13 @@ export type ManualSyncEvents = BaseControllerEvents
 
 export type WatchSyncEvents = {
   [SyncEvent.INITIAL_SYNC_COMPLETE]: SyncOperationSummary
+  [SyncEvent.FILE_CHANGED]: string
 } & BaseControllerEvents
+
+// eslint-disable-next-line @typescript-eslint/no-duplicate-type-constituents
+export type AllSyncEvents = BaseControllerEvents &
+  ManualSyncEvents &
+  WatchSyncEvents
 
 // Type-safe event emitter factory
 export function createTypedEmitter<T extends Record<string, unknown>>() {

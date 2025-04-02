@@ -1,85 +1,10 @@
 import { EventEmitter } from "node:events"
-import { AppError, type IAppError } from "./errors"
 import type { SyncPlan } from "./syncplan"
 import type { SyncOperationSummary } from "./results"
 
 export enum SyncMode {
   MANUAL = "manual",
   WATCH = "watch",
-}
-
-export enum ResultStatus {
-  OK = "ok",
-  PARTIAL = "partial",
-  FAILURE = "failure",
-}
-
-export interface ResultBase {
-  status: ResultStatus
-}
-
-export interface OkResult<T> extends ResultBase {
-  status: ResultStatus.OK
-  value: T
-  errors?: never // No errors in OK case
-}
-
-export interface PartialResult<T, E = AppError[]> extends ResultBase {
-  status: ResultStatus.PARTIAL
-  value: T
-  errors: E
-}
-
-export interface FailureResult<E = AppError[]> extends ResultBase {
-  status: ResultStatus.FAILURE
-  value?: never // No value in failure case
-  errors: E
-}
-
-export type Result<T, E = AppError[]> =
-  | OkResult<T>
-  | PartialResult<T, E>
-  | FailureResult<E>
-
-// Type guard functions
-export function isOk<T, E>(result: Result<T, E>): result is OkResult<T> {
-  return result.status === ResultStatus.OK
-}
-
-export function isPartial<T, E>(
-  result: Result<T, E>
-): result is PartialResult<T, E> {
-  return result.status === ResultStatus.PARTIAL
-}
-
-export function isFailure<T, E>(
-  result: Result<T, E>
-): result is FailureResult<E> {
-  return result.status === ResultStatus.FAILURE
-}
-
-export function ok<T>(value: T): OkResult<T> {
-  return { status: ResultStatus.OK, value }
-}
-export function partial<T, E = AppError[]>(
-  value: T,
-  errors: E
-): PartialResult<T, E> {
-  return { status: ResultStatus.PARTIAL, value, errors }
-}
-export function failure<E = AppError[]>(errors: E): FailureResult<E> {
-  return { status: ResultStatus.FAILURE, errors }
-}
-
-// For void-returning functions, use undefined as the value
-export function okVoid(): OkResult<undefined> {
-  return ok(undefined)
-}
-
-export function partialVoid<E = AppError[]>(
-  errors: E
-): PartialResult<undefined, E> {
-  return partial(undefined, errors)
 }
 
 /**
@@ -145,6 +70,9 @@ export interface ValidationResult {
   errors: string[]
 }
 
+/**
+ * @deprecated
+ */
 export interface SyncToComputerResult {
   computerId: string
   copiedFiles: string[]
@@ -162,99 +90,6 @@ export enum SyncStatus {
   ERROR = "error",
   /** Some files synced successfully, some failed */
   PARTIAL = "partial",
-}
-
-/**
- * Result of syncing a single file to a computer.
- * Contains details about the source, target, and success status.
- */
-export interface FileSyncResult {
-  /** Full target path where the file should have been copied */
-  targetPath: string
-
-  /** Full source path where the file was copied from */
-  sourcePath: string
-
-  /** Whether the file was successfully copied */
-  success: boolean
-
-  /** Optional error message if the sync failed */
-  error?: string
-}
-
-/**
- * Results of syncing multiple files to a single computer.
- * Tracks both the detailed file results and summary counts.
- */
-export interface ComputerSyncResult {
-  /** ID of the computer */
-  computerId: string
-
-  /** Whether the computer exists in the save directory */
-  exists: boolean
-
-  /** Detailed results for each file synced to this computer */
-  files: FileSyncResult[]
-
-  /** Number of files successfully synced to this computer */
-  successCount: number
-
-  /** Number of files that failed to sync to this computer.
-   *
-   * If a computer does not exist, it will have a failureCount of 0, as no files would even be attempted to copy.
-   */
-  failureCount: number
-}
-
-/**
- * Comprehensive result of a complete sync operation.
- * Contains both summary statistics and detailed results per computer.
- */
-export interface SyncOperationResult {
-  /** Overall status of the operation */
-  status: SyncStatus
-
-  /** Timestamp when the operation completed */
-  timestamp: number
-
-  /** Summary statistics for the entire operation */
-  summary: {
-    /** Total number of file copies attempted.
-     *
-     * For example, 1 file → 2 computers = 2 totalFiles */
-    totalFiles: number
-
-    /** Number of files successfully synced */
-    successfulFiles: number
-
-    /** Number of files that failed to sync */
-    failedFiles: number
-
-    /** Number of computers attempted */
-    totalComputers: number
-
-    /** Number of computers where all files synced successfully */
-    fullySuccessfulComputers: number
-
-    /** Number of computers where some files succeeded and others failed */
-    partiallySuccessfulComputers: number
-
-    /** Number of computers where all file syncs failed */
-    failedComputers: number
-
-    /** Number of computers referenced but not found */
-    missingComputers: number
-  }
-
-  /** Detailed results for each computer.
-   *
-   * Note: A computer will only generate a {@link ComputerSyncResult} if it was targeted by a sync rule that actually matched files. In other words, if a sync rule source pattern does not match a file, the computers in the target will not show up in this array (unless they are part of another sync rule).  */
-  computerResults: ComputerSyncResult[]
-
-  /** Error messages that occurred during the operations
-   * @deprecated
-   * */
-  errors?: string[]
 }
 
 export enum SyncEvent {
@@ -283,8 +118,8 @@ export type WatchSyncEvents = {
   [SyncEvent.FILE_CHANGED]: string
 } & BaseControllerEvents
 
-// eslint-disable-next-line @typescript-eslint/no-duplicate-type-constituents
 export type AllSyncEvents = BaseControllerEvents &
+  // eslint-disable-next-line @typescript-eslint/no-duplicate-type-constituents
   ManualSyncEvents &
   WatchSyncEvents
 

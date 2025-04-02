@@ -887,7 +887,7 @@ export async function copyFilesToComputer(
             false,
             new AppError(
               `Security violation: target path outside computer directory`,
-              ErrorSeverity.WARNING,
+              ErrorSeverity.ERROR,
               "copyFilesToComputer"
             )
           )
@@ -993,7 +993,12 @@ export async function copyFilesToComputer(
           getErrorMessage(err),
           ErrorSeverity.ERROR,
           "copyFilesToComputer",
-          err
+          err,
+          undefined,
+          {
+            source: rule.sourceRelativePath,
+            target: rule.target.path,
+          }
         )
 
         fileResults.push(

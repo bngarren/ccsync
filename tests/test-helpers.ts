@@ -525,3 +525,28 @@ export const expectToBeDefined = <T>(
   expect(value, msg).toBeDefined() // Fail the test if value is undefined or null
   return value as T // Return the value, which TypeScript can now narrow
 }
+
+/**
+ * Asserts that an array contains at least one object matching each of the given partial matchers.
+ *
+ * @template T - The type of items in the array being tested.
+ * @param actualArray - The array of items to test.
+ * @param partialMatchers - An array of partial objects representing the expected shape(s)
+ *                          to be matched against elements of the array
+ *
+ * @example
+ * expectArrayToContainObjectsMatching(errors, [
+ *   { message: expect.stringContaining("not found") },
+ *   { code: "E_PERMISSION" },
+ * ]);
+ */
+export function expectArrayToContainObjectsMatching<T>(
+  actualArray: T[],
+  partialMatchers: Array<Partial<Record<keyof T, unknown>>>
+): void {
+  expect(actualArray).toEqual(
+    expect.arrayContaining(
+      partialMatchers.map((matcher) => expect.objectContaining(matcher) as T)
+    ) as T[]
+  )
+}

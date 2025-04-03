@@ -293,7 +293,7 @@ export const isRecursiveGlob = (pattern: string): boolean => {
 
 // - - - - - MINECRAFT - - - - -
 
-interface SaveValidationResult {
+export interface SaveValidationResult {
   isValid: boolean
   savePath: string
   errors: string[]

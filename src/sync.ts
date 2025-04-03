@@ -11,6 +11,7 @@ import {
   SyncMode,
   type BaseControllerEvents,
   SyncStatus,
+  type ValidationResult,
 } from "./types"
 import {
   validateMinecraftSave,
@@ -22,6 +23,7 @@ import {
   getRelativePath,
   checkDuplicateTargetPaths,
   copyFilesToComputer,
+  type SaveValidationResult,
 } from "./utils"
 import { KeyHandler } from "./keys"
 import { setTimeout as setTimeoutPromise } from "node:timers/promises"
@@ -47,7 +49,14 @@ import NodeCache from "node-cache"
 import crypto from "crypto"
 import { clearGlobCache } from "./cache"
 import { PROCESS_CHANGES_DELAY } from "./constants"
-import { err, ok, okAsync, ResultAsync, type Result } from "neverthrow"
+import {
+  err,
+  errAsync,
+  ok,
+  okAsync,
+  ResultAsync,
+  type Result,
+} from "neverthrow"
 import {
   createComputerSyncSummary,
   createSyncOperationSummary,
@@ -212,11 +221,323 @@ export class SyncManager {
     this.log.trace(`Glob cache cleared`)
   }
 
+  public createSyncPlan(options?: {
+    forceRefresh?: boolean
+    changedFiles?: Set<string>
+  }): ResultAsync<SyncPlan, AppError> {
+    const { forceRefresh = false, changedFiles } = options || {}
+
+    // Determine the cache key based on changed files
+    const cacheKey = this.createCacheKey(changedFiles)
+
+    // Check cache first (unless forced refresh)
+    if (!forceRefresh) {
+      const cachedPlan = this.syncPlanCache.get<SyncPlan>(cacheKey)
+      if (cachedPlan) {
+        this.log.trace({ cacheKey }, "createSyncPlan > Cache hit")
+        return ResultAsync.fromSafePromise(Promise.resolve(cachedPlan))
+      }
+    }
+
+    this.log.trace({ cacheKey }, "createSyncPlan > Cache miss")
+
+    /**
+     * TODO: Convert underlying function to ResultAsync
+     */
+    const safeValidateMinecraftSave = (
+      savePath: string
+    ): ResultAsync<SaveValidationResult, AppError> => {
+      return ResultAsync.fromPromise(validateMinecraftSave(savePath), (error) =>
+        AppError.fatal(
+          "Failed to validate Minecraft save",
+          "createSyncPlan",
+          error
+        )
+      )
+    }
+
+    /**
+     * TODO: Convert underlying function to ResultAsync
+     */
+    const safeFindMinecraftComputers = (
+      savePath: string
+    ): ResultAsync<Computer[], AppError> => {
+      return ResultAsync.fromPromise(
+        findMinecraftComputers(savePath),
+        (error) =>
+          AppError.fatal(
+            "Failed to find Minecraft computers",
+            "createSyncPlan",
+            error
+          )
+      )
+    }
+
+    /**
+     * TODO: Convert underlying function to ResultAsync
+     */
+    const safeResolveSyncRules = (
+      config: Config,
+      computers: Computer[],
+      changedFiles?: Set<string>
+    ): ResultAsync<ValidationResult, AppError> =>
+      ResultAsync.fromPromise(
+        resolveSyncRules(config, computers, changedFiles),
+        (err) =>
+          AppError.from(err, {
+            source: "resolveSyncRules",
+            severity: ErrorSeverity.ERROR,
+          })
+      )
+
+    // Performance tracking
+    const createSyncPlanStartTime = process.hrtime.bigint()
+
+    return (
+      okAsync(createEmptySyncPlan())
+        // STEP 1: Validate the Minecraft save path
+        .andThen((plan) => {
+          return safeValidateMinecraftSave(
+            this.config.minecraftSavePath
+          ).andThen((saveDirValidation) => {
+            if (!saveDirValidation.isValid) {
+              // Add save directory issues to the plan
+              saveDirValidation.errors.forEach((error) => {
+                plan.issues.push(
+                  createSyncPlanIssue(
+                    error,
+                    SyncPlanIssueCategory.SAVE_DIRECTORY,
+                    SyncPlanIssueSeverity.ERROR,
+                    {
+                      source: "validateMinecraftSave",
+                      suggestion: `Ensure this is a valid Minecraft save at '${saveDirValidation.savePath}' and that a 'computercraft/computer' directory exists`,
+                    }
+                  )
+                )
+              })
+
+              if (saveDirValidation.missingFiles.length > 0) {
+                plan.issues.push(
+                  createSyncPlanIssue(
+                    `Missing files in save directory: ${saveDirValidation.missingFiles.join(", ")}`,
+                    SyncPlanIssueCategory.SAVE_DIRECTORY,
+                    SyncPlanIssueSeverity.WARNING,
+                    {
+                      source: "validateMinecraftSave",
+                      suggestion: `Ensure this is a valid Minecraft at '${saveDirValidation.savePath}'`,
+                    }
+                  )
+                )
+              }
+
+              plan.isValid = false
+              this.invalidateCache("Minecraft save directory is invalid")
+              return errAsync(
+                AppError.fatal(
+                  "Invalid Minecraft save directory: " +
+                    getSyncPlanErrorMessage(plan),
+                  "createSyncPlan"
+                )
+              )
+            }
+            return okAsync(plan)
+          })
+        })
+        .andThen((plan) => {
+          return (
+            safeFindMinecraftComputers(this.config.minecraftSavePath)
+              .map((computers) => ({
+                plan,
+                computers,
+              }))
+              .andThen(({ plan, computers }) => {
+                this.log.info(
+                  {
+                    computers: computers.map((c) => ({ [c.id]: c.shortPath })),
+                    saveDir: this.config.minecraftSavePath,
+                  },
+                  `Found ${computers.length} Minecraft ${pluralize("computer")(computers.length)} in save directory`
+                )
+
+                if (computers.length === 0) {
+                  plan.issues.push(
+                    createSyncPlanIssue(
+                      "No computers found in the save directory",
+                      SyncPlanIssueCategory.COMPUTER,
+                      SyncPlanIssueSeverity.WARNING,
+                      {
+                        source: "findMinecraftComputers",
+                        suggestion:
+                          "Ensure CC: Tweaked computers are present in the world. Sometimes adding a dummy file to the in-game computer helps.",
+                      }
+                    )
+                  )
+                  this.invalidateCache(
+                    "No computers found in the Minecraft save directory"
+                  )
+                }
+                return okAsync({ plan, computers })
+              })
+              // Perform side effect on findMinecraftComputers failure
+              .orTee((error) => {
+                this.invalidateCache(error.message)
+              })
+          )
+        })
+        .andThen(({ plan, computers }) => {
+          const changedFilesForRules =
+            this.activeModeController instanceof WatchModeController
+              ? this.activeModeController.getChangedFiles()
+              : undefined
+
+          return safeResolveSyncRules(
+            this.config,
+            computers,
+            changedFilesForRules
+          )
+            .andThen((resolved) => {
+              if (resolved.missingComputerIds.length > 0) {
+                this.log.warn(
+                  `Missing computers: ${resolved.missingComputerIds.join(" , ")}`
+                )
+              }
+
+              // Apply resolved data to the plan
+              plan.resolvedFileRules = resolved.resolvedFileRules
+              plan.availableComputers = resolved.availableComputers
+              plan.missingComputerIds = resolved.missingComputerIds
+
+              // Step 4b: Log rule resolution errors
+              if (resolved.errors.length > 0) {
+                resolved.errors.forEach((error) => {
+                  const isFatal =
+                    error.includes("cannot be accessed") ||
+                    error.includes("Invalid pattern") ||
+                    error.includes("Permission denied")
+
+                  plan.issues.push(
+                    createSyncPlanIssue(
+                      error,
+                      SyncPlanIssueCategory.RULE,
+                      isFatal
+                        ? SyncPlanIssueSeverity.ERROR
+                        : SyncPlanIssueSeverity.WARNING,
+                      { source: "resolveSyncRules" }
+                    )
+                  )
+                })
+
+                this.invalidateCache(
+                  "There were errors with resolved file rules"
+                )
+              }
+
+              // Step 4c: Add warnings for missing computers
+              if (resolved.missingComputerIds.length > 0) {
+                plan.issues.push(
+                  createSyncPlanIssue(
+                    `Missing computers: ${resolved.missingComputerIds.join(", ")}`,
+                    SyncPlanIssueCategory.COMPUTER,
+                    SyncPlanIssueSeverity.WARNING,
+                    {
+                      source: "resolveSyncRules",
+                      suggestion: `${resolved.missingComputerIds.length > 1 ? "These" : "This"} ${pluralize("computer")(resolved.missingComputerIds.length)} ${resolved.missingComputerIds.length > 1 ? "were" : "was"} referenced in rules but not found in the save directory`,
+                    }
+                  )
+                )
+              }
+
+              // Step 5: Check for duplicate target paths
+              const duplicateTargets = checkDuplicateTargetPaths(
+                plan.resolvedFileRules
+              )
+
+              if (duplicateTargets.size > 0) {
+                for (const [targetKey, rules] of duplicateTargets.entries()) {
+                  const [computerId, targetPath] = targetKey.split(":", 2)
+                  const sourceFiles = rules
+                    .map((r) =>
+                      getRelativePath(
+                        r.sourceAbsolutePath,
+                        this.config.sourceRoot,
+                        {
+                          includeRootName: true,
+                        }
+                      )
+                    )
+                    .join(", ")
+
+                  plan.issues.push(
+                    createSyncPlanIssue(
+                      `Multiple source files (${sourceFiles}) target the same path "${targetPath}" on computer ${computerId}`,
+                      SyncPlanIssueCategory.RULE,
+                      SyncPlanIssueSeverity.WARNING,
+                      {
+                        source: "checkDuplicateTargets",
+                        suggestion:
+                          "Review your sync rules to avoid conflicts. Only the last synced file will be kept when multiple files target the same destination.",
+                      }
+                    )
+                  )
+                }
+              }
+
+              return okAsync(plan)
+            })
+            .orTee((error) => {
+              this.invalidateCache(error.message)
+            })
+        })
+        .andThen((plan) => {
+          // Step 6: Determine plan validity
+          plan.isValid = !plan.issues.some(
+            (issue) => issue.severity === SyncPlanIssueSeverity.ERROR
+          )
+
+          if (!plan.isValid) {
+            return errAsync(
+              AppError.error(
+                "Invalid sync plan: " + getSyncPlanErrorMessage(plan),
+                "createSyncPlan"
+              )
+            )
+          }
+
+          // Step 7: Cache + timing
+          plan.timestamp = Date.now()
+          this.syncPlanCache.set(cacheKey, plan)
+
+          const endTime = process.hrtime.bigint()
+          const duration = Number(endTime - createSyncPlanStartTime) / 1_000_000 // ms
+
+          this.log.debug(
+            {
+              planCreationTime: duration,
+              filesCount: plan.resolvedFileRules.length,
+              computersCount: plan.availableComputers.length,
+              valid: plan.isValid,
+            },
+            `SyncPlan created (${duration} ms)`
+          )
+
+          return okAsync(plan)
+        })
+        .mapErr((error) => {
+          return AppError.fatal(
+            "Unexpected error during sync plan creation",
+            "createSyncPlan",
+            error
+          )
+        })
+    )
+  }
+
   /**
    * Creates a sync plan that maps source files to target computers
    * This replaces the old runValidation method with a more structured approach
+   * @deprecated
    */
-  public async createSyncPlan(options?: {
+  public async createSyncPlanOld(options?: {
     forceRefresh?: boolean
     changedFiles?: Set<string>
   }): Promise<SyncPlan> {
@@ -548,11 +869,11 @@ export class SyncManager {
     }
   }
 
-  public async performSync(
+  public performSync(
     syncPlan: SyncPlan
-  ): Promise<Result<SyncOperationSummary, AppError>> {
+  ): ResultAsync<SyncOperationSummary, AppError> {
     if (this.state !== SyncManagerState.RUNNING) {
-      return err(
+      return errAsync(
         AppError.fatal(
           "Cannot perform sync when not in RUNNING state",
           "SyncManager.performSyncNew"
@@ -570,81 +891,81 @@ export class SyncManager {
         suggestion: issue.suggestion,
       }))
 
-    try {
-      // Process each available computer
-      for (const computer of syncPlan.availableComputers) {
-        const syncResult = await this.syncToComputer(
-          computer,
-          syncPlan.resolvedFileRules
+    return ResultAsync.fromPromise(
+      (async () => {
+        // Process each available computer
+        for (const computer of syncPlan.availableComputers) {
+          const syncResult = await this.syncToComputer(
+            computer,
+            syncPlan.resolvedFileRules
+          )
+
+          syncResult.match(
+            (computerSyncSummary) => {
+              computerResults.push(computerSyncSummary)
+            },
+            (error) => {
+              // Log the error but continue with other computers
+              errors.push(error)
+              this.log.error(
+                { computer: computer.id, error },
+                `Failed to sync computer ${computer.id}`
+              )
+            }
+          )
+        }
+
+        // Add entries for missing computers
+        for (const computerId of syncPlan.missingComputerIds) {
+          computerResults.push(createComputerSyncSummary(computerId, false))
+        }
+
+        // Determine status based on results
+        let status: SyncStatus
+
+        // Check for warnings first - they take precedence over pure success
+        if (warnings.length > 0 || syncPlan.missingComputerIds.length > 0) {
+          status = SyncStatus.WARNING
+        }
+        // Then check if all files succeeded
+        else if (
+          computerResults.every((comp) => comp.failureCount === 0) &&
+          errors.length === 0
+        ) {
+          status = SyncStatus.SUCCESS
+        }
+        // Check for partial success
+        else if (computerResults.some((comp) => comp.successCount > 0)) {
+          status = SyncStatus.PARTIAL
+        }
+        // No success at all
+        else {
+          status = SyncStatus.ERROR
+        }
+
+        // Create the final operation summary
+        const operationSummary = createSyncOperationSummary(
+          status,
+          computerResults,
+          errors,
+          warnings
         )
 
-        syncResult.match(
-          (computerSyncSummary) => {
-            computerResults.push(computerSyncSummary)
-          },
-          (error) => {
-            // Log the error but continue with other computers
-            errors.push(error)
-            this.log.error(
-              { computer: computer.id, error },
-              `Failed to sync computer ${computer.id}`
-            )
-          }
-        )
+        // Update UI with the results
+        this.updateUIWithResults(operationSummary)
+
+        this.log.info(`sync finished with status: ${status.toUpperCase()}`)
+
+        return operationSummary
+      })(),
+      (error) => {
+        // Convert any unexpected errors to AppError
+        return AppError.from(error, {
+          severity: ErrorSeverity.ERROR,
+          source: "createSyncPlan",
+        })
       }
-
-      // Add entries for missing computers
-      for (const computerId of syncPlan.missingComputerIds) {
-        computerResults.push(createComputerSyncSummary(computerId, false))
-      }
-
-      // Determine status based on results
-      let status: SyncStatus
-
-      // Check for warnings first - they take precedence over pure success
-      if (warnings.length > 0 || syncPlan.missingComputerIds.length > 0) {
-        status = SyncStatus.WARNING
-      }
-      // Then check if all files succeeded
-      else if (
-        computerResults.every((comp) => comp.failureCount === 0) &&
-        errors.length === 0
-      ) {
-        status = SyncStatus.SUCCESS
-      }
-      // Check for partial success
-      else if (computerResults.some((comp) => comp.successCount > 0)) {
-        status = SyncStatus.PARTIAL
-      }
-      // No success at all
-      else {
-        status = SyncStatus.ERROR
-      }
-
-      // Create the final operation summary
-      const operationSummary = createSyncOperationSummary(
-        status,
-        computerResults,
-        errors,
-        warnings
-      )
-
-      // Update UI with the results
-      this.updateUIWithResults(operationSummary)
-
-      this.log.info(`sync finished with status: ${status.toUpperCase()}`)
-
-      return ok(operationSummary)
-    } catch (error) {
-      // Only catastrophic errors that prevent the entire operation return Err
-      return err(
-        AppError.fatal(
-          `Fatal error during sync operation: ${getErrorMessage(error)}`,
-          "SyncManager.performSyncNew",
-          error
-        )
-      )
-    }
+    )
   }
 
   private updateUIWithResults(summary: SyncOperationSummary): void {
@@ -977,31 +1298,19 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
       this.ui?.clear()
 
       while (this.syncManager.getState() === SyncManagerState.RUNNING) {
-        const syncResult = await this.performSyncCycle()
-
-        // Use match() for more elegant error handling
-        await syncResult.match(
-          // Success case
-          () => {
+        await this.performSyncCycle()
+          .map(async () => {
             this.ui?.setReady()
-            return this.waitForUserInput()
-          },
-
-          // Error case
-          (error) => {
-            // Stop on fatal errors
+            await this.waitForUserInput()
+          })
+          .mapErr(async (error) => {
             if (error.severity === ErrorSeverity.FATAL) {
-              throw AppError.fatal(
-                "Fatal error caused run to stop",
-                "ManualModeController.run",
-                error
-              )
+              // Throw error here to allow caller to catch and terminate app
+              throw error
             }
-            // For non-fatal errors, continue
             this.ui?.setReady()
-            return this.waitForUserInput()
-          }
-        )
+            await this.waitForUserInput()
+          })
       }
     } catch (error) {
       const fatalAppError = AppError.from(error, {
@@ -1039,11 +1348,10 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
   /**
    * ManualModeController's performSyncCycle
    */
-  public async performSyncCycle(): Promise<Result<void, AppError>> {
+  public performSyncCycle(): ResultAsync<void, AppError> {
     if (this.syncManager.getState() !== SyncManagerState.RUNNING) {
-      // throw this, a programming error
-      return err(
-        AppError.error(
+      return errAsync(
+        AppError.fatal(
           "Cannot perform sync when not in RUNNING state",
           "ManualModeController.performSyncCycleNew"
         )
@@ -1058,71 +1366,78 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
     // Performance tracking
     const syncCycleStartTime = process.hrtime.bigint()
 
-    try {
-      // Step 1: Create a sync plan
-      const syncPlan = await this.syncManager.createSyncPlan()
-      this.emit(SyncEvent.SYNC_PLANNED, syncPlan)
+    return this.syncManager
+      .createSyncPlan()
+      .andThen((syncPlan) => {
+        this.emit(SyncEvent.SYNC_PLANNED, syncPlan)
 
-      // Display issues to UI
-      displaySyncPlanIssues(syncPlan, this.ui, this.log)
+        // Display issues to UI
+        displaySyncPlanIssues(syncPlan, this.ui, this.log)
 
-      // Check if the plan has critical issues
-      if (!syncPlan.isValid) {
-        // Handle invalid sync plan
-        return err(
-          AppError.error(
-            "Sync plan creation failed: " + getSyncPlanErrorMessage(syncPlan),
-            "ManualModeController.createSyncPlan"
+        // Check if the plan has critical issues
+        if (!syncPlan.isValid) {
+          // Handle invalid sync plan
+          return errAsync(
+            AppError.fatal(
+              "Sync plan creation failed: " + getSyncPlanErrorMessage(syncPlan),
+              "ManualModeController.createSyncPlan"
+            )
           )
-        )
-      }
-
-      this.emit(SyncEvent.SYNC_STARTED, syncPlan)
-
-      // Step 2: Perform the actual sync
-      const performSyncResult = await this.syncManager.performSync(syncPlan)
-
-      return performSyncResult.match(
-        (operationSummary) => {
-          // Success case - emit event with the result
-          this.emit(SyncEvent.SYNC_COMPLETE, operationSummary)
-          return ok(undefined)
-        },
-        (error) => {
-          // Fatal error case
-          this.log.fatal({ error }, "Fatal error during sync operation")
-
-          // Create an error result for UI
-          const errorResult = this.createErrorOperationResult([error], [])
-
-          this.emit(SyncEvent.SYNC_COMPLETE, errorResult)
-          return err(error)
         }
-      )
-    } catch (error) {
-      // Handle unexpected errors
-      const fatalError = AppError.from(error, {
-        severity: ErrorSeverity.FATAL,
-        source: "ManualModeController.performSyncCycle",
-      })
 
-      this.log.fatal(
-        { error: fatalError },
-        "Unexpected fatal error during sync cycle"
-      )
-      return err(fatalError)
-    } finally {
-      // Performance tracking
-      const endTime = process.hrtime.bigint()
-      const duration = Number(endTime - syncCycleStartTime) / 1_000_000 // Convert to ms
-      this.log.debug(
-        {
-          mode: SyncMode.MANUAL,
-          syncCycleDuration: duration,
-        },
-        `performSyncCycle complete (${duration} ms)`
-      )
-    }
+        this.emit(SyncEvent.SYNC_STARTED, syncPlan)
+        return this.syncManager.performSync(syncPlan)
+      })
+      .andTee((operationSummary) => {
+        // Log operation completion time - this happens for both success and error paths
+        const endTime = process.hrtime.bigint()
+        const duration = Number(endTime - syncCycleStartTime) / 1_000_000
+        const status = operationSummary.status
+
+        this.log.debug(
+          {
+            mode: SyncMode.MANUAL,
+            syncCycleDuration: duration,
+            status,
+          },
+          `performSyncCycle ${status} (${duration} ms)`
+        )
+
+        // We event the event once here to ensure it is only emitted once in the happy path
+        this.emit(SyncEvent.SYNC_COMPLETE, operationSummary)
+      })
+      .map(() => {
+        return undefined // Return void
+      })
+      .orElse((error) => {
+        const performSyncCycleError = new AppError(
+          "Error during perform sync cycle: " + getErrorMessage(error),
+          error.severity,
+          "ManualModeController.performSyncCycle",
+          error,
+          "An unexpected error occurred during the sync."
+        )
+        // Log the error appropriately
+        if (error.severity === ErrorSeverity.FATAL) {
+          this.log.fatal(
+            { performSyncCycleError },
+            "Fatal error during sync operation"
+          )
+          // For fatal errors, propagate the error
+          return errAsync(performSyncCycleError)
+        }
+
+        // For non-fatal errors, log and update the UI
+        this.log.error({ performSyncCycleError }, "Error during sync operation")
+        // Create an error result for UI
+        const errorResult = this.createErrorOperationResult(
+          [performSyncCycleError],
+          []
+        )
+        this.emit(SyncEvent.SYNC_COMPLETE, errorResult)
+
+        return okAsync(undefined)
+      })
   }
 
   private waitForUserInput(): Promise<void> {
@@ -1373,7 +1688,7 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
 
     try {
       // Step 1: Create a sync plan
-      const syncPlan = await this.syncManager.createSyncPlan({
+      const syncPlan = await this.syncManager.createSyncPlanOld({
         changedFiles: this.isInitialSync ? undefined : this.activeChanges,
       })
 

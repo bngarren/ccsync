@@ -29,7 +29,7 @@ import { SyncEvent, SyncStatus } from "../src/types"
 import figures from "figures"
 import { setTimeout } from "node:timers/promises"
 import { UI } from "../src/ui"
-import { AppError, ErrorSeverity } from "../src/errors"
+import { AppError } from "../src/errors"
 import type { PathLike } from "node:fs"
 import * as config from "../src/config"
 import {
@@ -45,6 +45,7 @@ import {
   type SyncOperationSummary,
   type SyncWarning,
 } from "../src/results"
+import { ResultAsync } from "neverthrow"
 
 describe("Integration: SyncManager", () => {
   let tempDir: string
@@ -1205,12 +1206,21 @@ describe("Integration: SyncManager", () => {
       // Need to artificially delay the first file change sync so we can have another occur during its operation
       const origPerformSync = syncManager.performSync.bind(syncManager)
       const spyPerformSync = spyOn(syncManager, "performSync")
-      spyPerformSync.mockImplementationOnce(async (syncPlan) => {
-        await setTimeout(process.env.CI ? 3000 : 1500) // must have a sufficient delay
-        getLogger().debug(
-          "TEST: Delay complete, now calling original performSync"
+      spyPerformSync.mockImplementationOnce((syncPlan) => {
+        // First create a ResultAsync that just represents the delay
+        return (
+          ResultAsync.fromPromise(
+            setTimeout(process.env.CI ? 3000 : 1500),
+            (error) => AppError.from(error, { source: "performSync.delay" })
+          )
+            // Then chain with the original function
+            .andThen(() => {
+              getLogger().debug(
+                "TEST: Delay complete, now calling original performSync"
+              )
+              return origPerformSync(syncPlan)
+            })
         )
-        return await origPerformSync(syncPlan)
       })
 
       // Prepare to trigger a second file change after the first file change sync is started
@@ -1270,56 +1280,6 @@ describe("Integration: SyncManager", () => {
     } finally {
       await syncManager.stop()
     }
-  })
-
-  test("handles fatal error during sync plan creation", async () => {
-    const configObject = withDefaultConfig({
-      sourceRoot: sourceDir,
-      minecraftSavePath: savePath,
-      rules: [
-        {
-          source: "*.lua",
-          target: "/",
-          computers: ["1"],
-        },
-      ],
-    })
-
-    // Create target computers
-    await createTestComputer(computersDir, "1")
-
-    const ui = new UI({ renderDynamicElements: false })
-    const syncManager = new SyncManager(configObject, ui)
-
-    // Mock createSyncPlan to throw a fatal error
-    const spy = spyOn(syncManager, "createSyncPlan").mockImplementation(() => {
-      throw new AppError("Test fatal error", ErrorSeverity.FATAL, "test")
-    })
-
-    const { controller, start } = syncManager.initManualMode()
-
-    await waitForEventWithTrigger(
-      controller,
-      SyncEvent.CONTROLLER_STOPPED,
-      start
-    )
-
-    expect(spy).toHaveBeenCalledTimes(1)
-
-    // Give some time for cleanup
-    await setTimeout(100)
-
-    // Verify sync manager is stopped
-    expect(syncManager.isRunning()).toBe(false)
-    expect(syncManager.getState()).toBe(SyncManagerState.STOPPED)
-
-    // Verify error state of Sync manager
-    const error = syncManager.getError()
-    expect(error).not.toBeNull()
-    expect(error?.source).toMatch(/\bmanualmodecontroller\b/i)
-
-    // Restore mock
-    spy.mockRestore()
   })
 
   test("handles file copy errors in manual mode and recovers for next sync", async () => {

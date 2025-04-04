@@ -49,14 +49,7 @@ import NodeCache from "node-cache"
 import crypto from "crypto"
 import { clearGlobCache } from "./cache"
 import { PROCESS_CHANGES_DELAY } from "./constants"
-import {
-  err,
-  errAsync,
-  ok,
-  okAsync,
-  ResultAsync,
-  type Result,
-} from "neverthrow"
+import { errAsync, okAsync, ResultAsync } from "neverthrow"
 import {
   createComputerSyncSummary,
   createSyncOperationSummary,
@@ -154,7 +147,18 @@ export class SyncManager {
     } else {
       this.error = AppError.from(error, { severity: ErrorSeverity.FATAL })
     }
-    this.setState(SyncManagerState.ERROR)
+    // Only transition to ERROR state if not already stopping or stopped
+    if (
+      this.state !== SyncManagerState.STOPPING &&
+      this.state !== SyncManagerState.STOPPED
+    ) {
+      this.setState(SyncManagerState.ERROR)
+    } else {
+      this.log.error(
+        { error: this.error, currentState: SyncManagerState[this.state] },
+        "Error occurred during shutdown, maintaining current state"
+      )
+    }
   }
 
   constructor(
@@ -522,13 +526,6 @@ export class SyncManager {
 
           return okAsync(plan)
         })
-        .mapErr((error) => {
-          return AppError.fatal(
-            "Unexpected error during sync plan creation",
-            "createSyncPlan",
-            error
-          )
-        })
     )
   }
 
@@ -819,54 +816,61 @@ export class SyncManager {
     }
   }
 
-  private async syncToComputer(
+  /**
+   * Handles copying specific files (selecting from resolved file rules that match the given computer) to a computer
+   *
+   * Calls {@link copyFilesToComputer} to handle the actual file system copy operation
+   *
+   * Returned Error results should be considered program FATAL, as all other errors should
+   * be included in the returned ComputerSyncSummary
+   */
+  private syncToComputer(
     computer: Computer,
     fileRules: ResolvedFileRule[]
-  ): Promise<Result<ComputerSyncSummary, AppError>> {
+  ): ResultAsync<ComputerSyncSummary, AppError> {
     // Filter rules applicable to this computer
     const filesToCopy = fileRules.filter((file) =>
       file.computers.includes(computer.id)
     )
 
     if (filesToCopy.length === 0) {
-      return ok(createComputerSyncSummary(computer.id, true))
+      return okAsync(createComputerSyncSummary(computer.id, true))
     }
 
-    try {
-      const copyResult = await copyFilesToComputer(filesToCopy, computer.path)
-
-      return copyResult.match(
-        (fileSyncSummary) => {
+    // Execute the file(s) copy operation for a specific computer
+    return copyFilesToComputer(filesToCopy, computer.path)
+      .map(
+        // The "happy" path will still include errors, attached to the CopyFilesSummary, so that
+        // these can be logged and/or otherwise handled
+        (copyFilesSummary) => {
           // Log any per-file sync errors
-          for (const fileSyncError of fileSyncSummary.errors) {
+          for (const fileSyncError of copyFilesSummary.errors) {
             this.log.warn(
               { error: fileSyncError },
-              `File copy encounted an error`
+              `File copy encountered an error: ${fileSyncError.message}`
             )
           }
-          // Convert FileSyncSummary to ComputerSyncSummary
-          return ok(
-            createComputerSyncSummary(computer.id, true, [
-              ...fileSyncSummary.succeededFiles,
-              ...fileSyncSummary.failedFiles,
-            ])
-          )
-        },
-        (error) => {
-          // Only catastrophic errors propagate as Err
-          return err(error)
+
+          // The file copy errors are still passed in each 'fileResult' (FileSyncResult)
+
+          // Convert CopyFilesSummary to ComputerSyncSummary
+          return createComputerSyncSummary(computer.id, true, [
+            ...copyFilesSummary.succeededFiles,
+            ...copyFilesSummary.failedFiles,
+          ])
         }
       )
-    } catch (error) {
-      // Handle unexpected errors
-      return err(
-        AppError.fatal(
-          `Unexpected error in syncToComputer: ${getErrorMessage(error)}`,
-          "syncToComputerNew",
-          error
-        )
-      )
-    }
+      .mapErr((error) => {
+        // Ensure that any error result here is always propagated as FATAL
+        if (error.severity !== ErrorSeverity.FATAL) {
+          return AppError.fatal(
+            `Unexpected error in syncToComputer: ${error.message}`,
+            "syncToComputer",
+            error
+          )
+        }
+        return error
+      })
   }
 
   public performSync(
@@ -881,9 +885,6 @@ export class SyncManager {
       )
     }
 
-    const computerResults: ComputerSyncSummary[] = []
-    const errors: AppError[] = []
-
     const warnings: SyncWarning[] = syncPlan.issues
       .filter((issue) => issue.severity === SyncPlanIssueSeverity.WARNING)
       .map((issue) => ({
@@ -891,34 +892,24 @@ export class SyncManager {
         suggestion: issue.suggestion,
       }))
 
-    return ResultAsync.fromPromise(
-      (async () => {
-        // Process each available computer
-        for (const computer of syncPlan.availableComputers) {
-          const syncResult = await this.syncToComputer(
-            computer,
-            syncPlan.resolvedFileRules
-          )
+    // Aggregate all the syncToComputer operations which will be ran subsequently
+    const computerSyncOperations = syncPlan.availableComputers.map((computer) =>
+      this.syncToComputer(computer, syncPlan.resolvedFileRules)
+    )
 
-          syncResult.match(
-            (computerSyncSummary) => {
-              computerResults.push(computerSyncSummary)
-            },
-            (error) => {
-              // Log the error but continue with other computers
-              errors.push(error)
-              this.log.error(
-                { computer: computer.id, error },
-                `Failed to sync computer ${computer.id}`
-              )
-            }
-          )
-        }
+    // Process all computer operations
+    return ResultAsync.combine(computerSyncOperations)
+      .map((availableComputerResults) => {
+        // Create summary entries for missing computers
+        const missingComputerResults = syncPlan.missingComputerIds.map(
+          (computerId) => createComputerSyncSummary(computerId, false)
+        )
 
-        // Add entries for missing computers
-        for (const computerId of syncPlan.missingComputerIds) {
-          computerResults.push(createComputerSyncSummary(computerId, false))
-        }
+        // Combine available and missing computer results
+        const allComputerResults = [
+          ...availableComputerResults,
+          ...missingComputerResults,
+        ]
 
         // Determine status based on results
         let status: SyncStatus
@@ -928,14 +919,11 @@ export class SyncManager {
           status = SyncStatus.WARNING
         }
         // Then check if all files succeeded
-        else if (
-          computerResults.every((comp) => comp.failureCount === 0) &&
-          errors.length === 0
-        ) {
+        else if (allComputerResults.every((comp) => comp.failureCount === 0)) {
           status = SyncStatus.SUCCESS
         }
         // Check for partial success
-        else if (computerResults.some((comp) => comp.successCount > 0)) {
+        else if (allComputerResults.some((comp) => comp.successCount > 0)) {
           status = SyncStatus.PARTIAL
         }
         // No success at all
@@ -946,26 +934,28 @@ export class SyncManager {
         // Create the final operation summary
         const operationSummary = createSyncOperationSummary(
           status,
-          computerResults,
-          errors,
+          allComputerResults,
+          [], // No errors in the happy path, they're all in computer results
           warnings
         )
 
         // Update UI with the results
         this.updateUIWithResults(operationSummary)
-
         this.log.info(`sync finished with status: ${status.toUpperCase()}`)
 
         return operationSummary
-      })(),
-      (error) => {
-        // Convert any unexpected errors to AppError
-        return AppError.from(error, {
-          severity: ErrorSeverity.ERROR,
-          source: "createSyncPlan",
-        })
-      }
-    )
+      })
+      .mapErr((error) => {
+        // Ensure error is properly classified as fatal
+        if (error.severity !== ErrorSeverity.FATAL) {
+          return AppError.fatal(
+            `Fatal error during sync operation: ${error.message}`,
+            "SyncManager.performSync",
+            error
+          )
+        }
+        return error
+      })
   }
 
   private updateUIWithResults(summary: SyncOperationSummary): void {
@@ -1156,9 +1146,18 @@ export class SyncManager {
         // Continue to try to stop the controller even if UI stop fails
       }
 
-      if (this.activeModeController) {
-        await this.activeModeController.stop()
-        this.activeModeController = null
+      // Then stop the controller
+      try {
+        if (this.activeModeController) {
+          await this.activeModeController.stop()
+          this.activeModeController = null
+        }
+      } catch (controllerError) {
+        // Log controller stop error but continue to set state to STOPPED
+        this.log.error(
+          { error: controllerError },
+          `Error stopping controller: ${getErrorMessage(controllerError)}`
+        )
       }
       this.setState(SyncManagerState.STOPPED)
     } catch (error) {
@@ -1407,33 +1406,23 @@ class ManualModeController extends BaseController<ManualSyncEvents> {
         return undefined // Return void
       })
       .orElse((error) => {
-        const performSyncCycleError = new AppError(
-          "Error during perform sync cycle: " + getErrorMessage(error),
-          error.severity,
-          "ManualModeController.performSyncCycle",
-          error,
-          "An unexpected error occurred during the sync."
-        )
         // Log the error appropriately
         if (error.severity === ErrorSeverity.FATAL) {
           this.log.fatal(
-            { performSyncCycleError },
-            "Fatal error during sync operation"
+            { error },
+            `Fatal error during sync operation: ${error.message}`
           )
           // For fatal errors, propagate the error
-          return errAsync(performSyncCycleError)
+          return errAsync(error)
         }
 
         // For non-fatal errors, log and update the UI
-        this.log.error({ performSyncCycleError }, "Error during sync operation")
+        this.log.error({ error }, "Error during sync operation")
         // Create an error result for UI
-        const errorResult = this.createErrorOperationResult(
-          [performSyncCycleError],
-          []
-        )
+        const errorResult = this.createErrorOperationResult([error], [])
         this.emit(SyncEvent.SYNC_COMPLETE, errorResult)
 
-        return okAsync(undefined)
+        return errAsync(error)
       })
   }
 
@@ -1978,25 +1967,13 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
                       { error },
                       "Fatal error in subsequent file change processing (runPostProcessing)"
                     )
-                    reject(
-                      AppError.fatal(
-                        `Fatal error in subsequent file change processing (runPostProcessing): ${error.message}`,
-                        "runPostProcessing",
-                        error
-                      )
-                    )
+                    reject(error)
                   } else {
                     this.log.error(
                       { error },
                       "Error in subsequent file change processing (runPostProcessing)"
                     )
-                    reject(
-                      AppError.error(
-                        `Error in subsequent file change processing (runPostProcessing): ${error.message}`,
-                        "runPostProcessing",
-                        error
-                      )
-                    )
+                    reject(error)
                   }
                 }
               )
@@ -2029,8 +2006,10 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
             `Fatal error during processPendingChanges in watch mode sync: ${error.message}`
           )
 
-          // For a fatal error in performSyncCyle, we don't attempt to runPostProcessing as we expect
-          // shutdown
+          // Even for fatal errors, we should reset our state to avoid inconsistencies
+          // *this is instead of running runPostProcessing
+          this.onChangeSyncInProgress = false
+          this.activeChanges.clear()
 
           // Just propagate the fatal error
           return errAsync(error)
@@ -2100,6 +2079,11 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
             if (error.severity === ErrorSeverity.FATAL) {
               this.syncManager.setErrorState(error)
             }
+            // Update UI with error message
+            this.ui?.addMessage(
+              UIMessageType.ERROR,
+              `Error processing file changes: ${error.message}`
+            )
           }
         )
       }, PROCESS_CHANGES_DELAY)
@@ -2241,7 +2225,12 @@ class WatchModeController extends BaseController<WatchSyncEvents> {
 
         this.watcher?.on("error", (err) => {
           clearTimeout(timeout)
-          reject(AppError.from(err))
+          reject(
+            AppError.from(err, {
+              severity: ErrorSeverity.FATAL,
+              source: "WatchModeController.setupWatcher.watcher",
+            })
+          )
         })
       })
     } catch (error) {

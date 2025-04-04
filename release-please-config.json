@@ -8,7 +8,7 @@
       "bump-minor-pre-major": true,
       "bump-patch-for-minor-pre-major": true,
       "draft": false,
-      "prerelease": true,
+      "prerelease": false,
       "extra-files": ["src/version.ts"]
     }
   },

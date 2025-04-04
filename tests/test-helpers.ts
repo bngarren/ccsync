@@ -2,7 +2,12 @@ import { mkdir, rm, writeFile } from "node:fs/promises"
 import path from "path"
 import os from "os"
 import crypto from "crypto"
-import { SyncEvent, type Computer, type ResolvedFileRule } from "../src/types"
+import {
+  SyncEvent,
+  type AllSyncEvents,
+  type Computer,
+  type ResolvedFileRule,
+} from "../src/types"
 import {
   getComputerShortPath,
   isRecursiveGlob,
@@ -12,7 +17,7 @@ import * as p from "@clack/prompts"
 import { expect, mock } from "bun:test"
 import { DEFAULT_CONFIG, type Config, type SyncRule } from "../src/config"
 import * as yaml from "yaml"
-import { getErrorMessage, type IAppError } from "../src/errors"
+import { getErrorMessage } from "../src/errors"
 import stripAnsi from "strip-ansi"
 import { rmSync } from "node:fs"
 
@@ -316,19 +321,18 @@ export class TempCleaner {
  * @param timeoutMs Maximum time to wait for the event in milliseconds
  * @returns Promise that resolves with the event data
  */
-export function waitForEventWithTrigger<T>(
+export function waitForEventWithTrigger<E extends SyncEvent>(
   emitter: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     on: (event: any, callback: any) => void
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     off: (event: any, callback: any) => void
   },
-  awaitedEvent: SyncEvent,
-  triggerFn?: () => void | Promise<void>, // Function that triggers the event
-  timeoutMs = 5000,
-  ignoreError = false
-): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
+  awaitedEvent: E,
+  triggerFn?: () => unknown, // Function that triggers the event
+  timeoutMs = 5000
+): Promise<AllSyncEvents[E]> {
+  return new Promise<AllSyncEvents[E]>((resolve, reject) => {
     // Set timeout to avoid test hanging
     const timeout = setTimeout(() => {
       cleanup()
@@ -340,29 +344,19 @@ export function waitForEventWithTrigger<T>(
     }, timeoutMs)
 
     // Success handler
-    const handleSuccess = (data: T) => {
+    const handleSuccess = (data: AllSyncEvents[E]) => {
       cleanup()
       resolve(data)
-    }
-
-    // Error handler
-    const handleError = (error: IAppError) => {
-      if (ignoreError) return
-
-      cleanup()
-      reject(new Error(`Operation failed: ${error.message}`))
     }
 
     // Clean up listeners
     const cleanup = () => {
       clearTimeout(timeout)
       emitter.off(awaitedEvent, handleSuccess)
-      emitter.off(SyncEvent.SYNC_ERROR, handleError)
     }
 
     // Register listeners FIRST
     emitter.on(awaitedEvent, handleSuccess)
-    emitter.on(SyncEvent.SYNC_ERROR, handleError)
 
     // THEN execute the trigger function
     if (triggerFn) {
@@ -530,4 +524,29 @@ export const expectToBeDefined = <T>(
   const msg = name && `'${name}' should not be undefined!`
   expect(value, msg).toBeDefined() // Fail the test if value is undefined or null
   return value as T // Return the value, which TypeScript can now narrow
+}
+
+/**
+ * Asserts that an array contains at least one object matching each of the given partial matchers.
+ *
+ * @template T - The type of items in the array being tested.
+ * @param actualArray - The array of items to test.
+ * @param partialMatchers - An array of partial objects representing the expected shape(s)
+ *                          to be matched against elements of the array
+ *
+ * @example
+ * expectArrayToContainObjectsMatching(errors, [
+ *   { message: expect.stringContaining("not found") },
+ *   { code: "E_PERMISSION" },
+ * ]);
+ */
+export function expectArrayToContainObjectsMatching<T>(
+  actualArray: T[],
+  partialMatchers: Array<Partial<Record<keyof T, unknown>>>
+): void {
+  expect(actualArray).toEqual(
+    expect.arrayContaining(
+      partialMatchers.map((matcher) => expect.objectContaining(matcher) as T)
+    ) as T[]
+  )
 }

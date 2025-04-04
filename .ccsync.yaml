@@ -9,7 +9,7 @@
 version: "2.1"
 
 # Where your source files are located (relative to this config file)
-sourceRoot: "."
+sourceRoot: "~/tmp/src/"
 
 # Path to your Minecraft world save
 # Use ~ for your home directory

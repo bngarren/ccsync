@@ -82,6 +82,7 @@
     "figures": "^6.1.0",
     "glob": "10.3.10",
     "log-update": "^6.1.0",
+    "neverthrow": "^8.2.0",
     "node-cache": "^5.1.2",
     "pino": "^9.6.0",
     "pino-roll": "^3.0.0",

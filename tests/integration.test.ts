@@ -29,8 +29,7 @@ import { SyncEvent, SyncStatus } from "../src/types"
 import figures from "figures"
 import { setTimeout } from "node:timers/promises"
 import { UI } from "../src/ui"
-import { AppError } from "../src/errors"
-import type { PathLike } from "node:fs"
+import { AppError, ErrorSeverity } from "../src/errors"
 import * as config from "../src/config"
 import {
   handleComputersClear,
@@ -45,7 +44,7 @@ import {
   type SyncOperationSummary,
   type SyncWarning,
 } from "../src/results"
-import { ResultAsync } from "neverthrow"
+import { errAsync, ResultAsync } from "neverthrow"
 
 describe("Integration: SyncManager", () => {
   let tempDir: string
@@ -1340,7 +1339,9 @@ describe("Integration: SyncManager", () => {
     copyFileSpy.mockRestore()
   })
 
-  test("handle file sync errors in watch mode but continue watching", async () => {
+  // Fatal errors should result in shutdown
+  // Non-fatal errors should maintain watch mode operation with appropriate logging
+  test("handle fatal and non-fatal sync errors in watch mode", async () => {
     const configObject = withDefaultConfig({
       sourceRoot: sourceDir,
       minecraftSavePath: savePath,
@@ -1358,24 +1359,42 @@ describe("Integration: SyncManager", () => {
     const ui = new UI({ renderDynamicElements: false })
     const syncManager = new SyncManager(configObject, ui)
 
-    // Mock copyFilesToComputer to throw an error on specific calls
-    const originalCopyFile = fs.copyFile
+    // Create a spy on performSync that simulates different error types
+    const originalPerformSync = syncManager.performSync.bind(syncManager)
+    const spyPerformSync = spyOn(syncManager, "performSync")
+
     let callCount = 0
-    const copyFileSpy = spyOn(fs, "copyFile").mockImplementation(
-      (src: PathLike, dest: PathLike) => {
-        callCount++
-        // First sync (2 files = 2 calls) is success
-        if (callCount <= 2) {
-          return originalCopyFile(src, dest)
-        }
-        // Second sync (1 file = call 3) fails
-        if (callCount === 3) {
-          throw new Error("File system error during copy")
-        }
-        // Third sync (1 file = call 4) succeeds agains
-        return originalCopyFile(src, dest)
+
+    // Set up the mock to return different types of errors
+    spyPerformSync.mockImplementation((syncPlan) => {
+      callCount++
+
+      if (callCount === 1) {
+        // First sync attempt - success
+        return originalPerformSync(syncPlan)
+      } else if (callCount === 2) {
+        // Second sync attempt - non-fatal error
+        return errAsync(
+          new AppError(
+            "TEST non-fatal error during sync",
+            ErrorSeverity.ERROR,
+            "performSync.test"
+          )
+        )
+      } else if (callCount === 3) {
+        // Third sync attempt - fatal error
+        return errAsync(
+          new AppError(
+            "TEST fatal error during sync",
+            ErrorSeverity.FATAL,
+            "performSync.test"
+          )
+        )
       }
-    )
+
+      // Default - success
+      return originalPerformSync(syncPlan)
+    })
 
     const { controller, start } = syncManager.initWatchMode()
 
@@ -1391,12 +1410,12 @@ describe("Integration: SyncManager", () => {
     expect(syncResult1.computerResults.length).toBe(1)
     expect(syncResult1.computerResults[0].successCount).toBeGreaterThan(0)
     expect(syncResult1.computerResults[0].failureCount).toBe(0)
-    expect(callCount).toBe(2)
+    expect(callCount).toBe(1)
 
     // Verify the sync manager is still running
     expect(syncManager.isRunning()).toBe(true)
 
-    const syncResult2 = await waitForEventWithTrigger(
+    const nonFatalSyncResult = await waitForEventWithTrigger(
       controller,
       SyncEvent.SYNC_COMPLETE,
       async () => {
@@ -1407,18 +1426,20 @@ describe("Integration: SyncManager", () => {
       }
     )
 
-    // If a sync with 1 file failed to copy the 1 file, this is an ERROR
-    expect(syncResult2.status).toBe(SyncStatus.ERROR)
-    expect(syncResult2.anySucceeded).toBe(false)
-    expect(callCount).toBe(3)
-
-    // Despite errors, the manager should still be running
+    // Expect error status but continue running
+    expect(nonFatalSyncResult.status).toBe(SyncStatus.ERROR)
+    expect(nonFatalSyncResult.anySucceeded).toBe(false)
+    expect(callCount).toBe(2)
     expect(syncManager.isRunning()).toBe(true)
 
-    // Now trigger a third sync that should succeed again
-    const syncResult3 = await waitForEventWithTrigger(
+    // spy on sync manager's stop to ensure it is called once
+    const spySyncManagerStop = spyOn(syncManager, "stop")
+    // spy on controller's stop to ensure it is called once
+    const spyControllerStop = spyOn(controller, "stop")
+
+    await waitForEventWithTrigger(
       controller,
-      SyncEvent.SYNC_COMPLETE,
+      SyncEvent.CONTROLLER_STOPPED,
       async () => {
         await fs.writeFile(
           path.join(sourceDir, "startup.lua"),
@@ -1427,18 +1448,15 @@ describe("Integration: SyncManager", () => {
       }
     )
 
-    expect(callCount).toBe(4)
-
-    // Verify the third sync was successful
-    expect(syncResult3.status).toBe(SyncStatus.SUCCESS)
-    expect(syncResult3.computerResults.length).toBe(1)
-    expect(syncResult3.computerResults[0].successCount).toBeGreaterThan(0)
-    expect(syncResult3.computerResults[0].failureCount).toBe(0)
+    expect(callCount).toBe(3)
+    expect(syncManager.isStopped()).toBe(true)
+    expect(syncManager.getState()).toBe(SyncManagerState.STOPPED)
+    expect(spySyncManagerStop.mock.calls).toHaveLength(1)
+    expect(spyControllerStop.mock.calls).toHaveLength(1)
 
     await syncManager.stop()
-    expect(syncManager.getState()).toBe(SyncManagerState.STOPPED)
 
-    copyFileSpy.mockRestore()
+    spyPerformSync.mockRestore()
   })
 })
 

@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.0.0](https://github.com/bngarren/ccsync/compare/v1.0.0-beta.5...v1.0.0) (2025-04-04)
+
+
+### Features
+
+* **cli:** Added new commands to CLI. 'computers find' and 'computers clear' ([9c92488](https://github.com/bngarren/ccsync/commit/9c924889855c7c743cfd8f726522e7ba95cea095))
+* **config:** improved default config file with better organization, examples, comments ([#55](https://github.com/bngarren/ccsync/issues/55)) ([768e4e0](https://github.com/bngarren/ccsync/commit/768e4e0f654a8aa954a2a4d8d2d7dfdd19430fe1))
+* **sync:** improved user-facing language, errors, and suggestions ([#59](https://github.com/bngarren/ccsync/issues/59)) ([6f20dc7](https://github.com/bngarren/ccsync/commit/6f20dc7de6580474526f7617c0e48117614d32cd))
+
+
+### Bug Fixes
+
+* **sync:** fixed bug in sync manager lifecycle. Main (index.ts) should run until manager is STOPPED ([089eb70](https://github.com/bngarren/ccsync/commit/089eb7021f9539afd74487a65fc6b0e723e60379))
+* **sync:** fixed bug where missing computer IDs were not being deduplicated in sync result ([#56](https://github.com/bngarren/ccsync/issues/56)) ([7576e4e](https://github.com/bngarren/ccsync/commit/7576e4ec39374998cf83fa209cde65e6ddb1f7a4))
+* **sync:** fixes [#58](https://github.com/bngarren/ccsync/issues/58), watch mode exits immediately when no source files are matched ([#61](https://github.com/bngarren/ccsync/issues/61)) ([089eb70](https://github.com/bngarren/ccsync/commit/089eb7021f9539afd74487a65fc6b0e723e60379))
+
+
+### Miscellaneous Chores
+
+* release as 1.0.0 ([2f75eda](https://github.com/bngarren/ccsync/commit/2f75edabd7ed73f450bc39a4994a31bc3bf27596))
+
 ## [1.0.0-beta.5](https://github.com/bngarren/ccsync/compare/v1.0.0-beta.4...v1.0.0-beta.5) (2025-03-14)
 
 
